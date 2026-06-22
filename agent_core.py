@@ -224,23 +224,31 @@ class SecurityAgentTools:
         from paddleocr import PaddleOCR
         print("[Tool Log] 🤖 图像清洗完毕。正在拉起本地 PaddleOCR 提取手写体及 [✓/✗] 勾选符号...")
 
-        ocr = PaddleOCR(use_angle_cls=True, lang="ch")
-        result = ocr.ocr(cleaned_path)
+        ocr = PaddleOCR(lang="ch", engine="onnxruntime")
+        result = ocr.predict(cleaned_path)
 
-        # 按行从上到下排序（以行的中心 y 坐标排序），同行内从左到右
+        # PaddleOCR 3.7.0 新 API：result[0].json['res'] 包含 rec_texts, rec_scores, rec_polys
         lines = []
-        if result and result[0]:
-            # 提取所有行的 box 和 text，按 y 中心排序
-            entries = []
-            for line in result[0]:
-                box, (text, _conf) = line[0], line[1]
-                y_center = (box[0][1] + box[2][1]) / 2
-                x_left = box[0][0]
-                entries.append((y_center, x_left, text))
+        if result and hasattr(result[0], 'json'):
+            res = result[0].json.get('res', {})
+            texts = res.get('rec_texts', [])
+            scores = res.get('rec_scores', [])
+            polys = res.get('rec_polys', [])
 
-            # 按 y 排序，同行（y 差距小于阈值）内按 x 排序
-            entries.sort(key=lambda e: (e[0] // 30, e[1]))  # ponytail: 30px 行高阈值，适合手制单
-            lines = [e[2] for e in entries]
+            if texts:
+                # 按行中心 y 坐标排序，同行内按 x 排序
+                entries = []
+                for i, text in enumerate(texts):
+                    box = polys[i] if i < len(polys) else []
+                    if len(box) >= 3:
+                        y_center = (box[0][1] + box[2][1]) / 2
+                        x_left = box[0][0]
+                    else:
+                        y_center, x_left = 0, 0
+                    entries.append((y_center, x_left, text))
+
+                entries.sort(key=lambda e: (e[0] // 30, e[1]))
+                lines = [e[2] for e in entries]
 
         full_text = "\n".join(lines)
         print(f"[Tool Log] 🤖 OCR 提取完成，共识别 {len(lines)} 行文本。")

@@ -1,4 +1,6 @@
 @echo off
+chcp 65001 >nul
+set PYTHONIOENCODING=utf-8
 echo Checking dependencies...
 python -c "import pydantic" 2>nul || pip install pydantic
 python -c "import cv2" 2>nul || pip install opencv-python
