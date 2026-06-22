@@ -351,11 +351,21 @@ class SecurityAgent:
 # 入口
 # ==========================================
 
+def load_config() -> dict:
+    """从 config.json 加载配置"""
+    cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
+    if os.path.exists(cfg_path):
+        with open(cfg_path, encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
 if __name__ == "__main__":
+    cfg = load_config()
     brain = LLMBrain(
-        api_key=os.environ.get("ONLINE_API_KEY", "your_api_key"),
-        base_url=os.environ.get("ONLINE_BASE_URL", "https://api.siliconflow.cn/v1"),
-        model_name=os.environ.get("ONLINE_MODEL", "Qwen/Qwen2.5-7B-Instruct"),
+        api_key=cfg.get("api_key", os.environ.get("ONLINE_API_KEY", "")),
+        base_url=cfg.get("base_url", os.environ.get("ONLINE_BASE_URL", "")),
+        model_name=cfg.get("model_name", os.environ.get("ONLINE_MODEL", "")),
     )
     agent = SecurityAgent(brain=brain)
     ocr_text, result = agent.run("workspace/phone_captured_sheet.jpg")

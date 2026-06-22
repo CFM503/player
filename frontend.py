@@ -3,10 +3,14 @@
 启动: streamlit run frontend.py
 """
 
-import io, sys, os, re, time, tempfile
+import io, sys, os, re, time, tempfile, json
 from dataclasses import dataclass, field
 from typing import List
 import streamlit as st
+
+# 加载 config.json
+_cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
+_cfg = json.load(open(_cfg_path, encoding="utf-8")) if os.path.exists(_cfg_path) else {}
 
 st.set_page_config(page_title="安全哨兵", page_icon="🛡️", layout="wide")
 
@@ -135,9 +139,9 @@ with st.sidebar:
     st.caption("牡丹江中燃 HSE · AI Agent")
     st.divider()
 
-    api_key = st.text_input("🔑 API Key", os.environ.get("ONLINE_API_KEY", ""), type="password")
-    base_url = st.text_input("🌐 Base URL", os.environ.get("ONLINE_BASE_URL", "https://api.siliconflow.cn/v1"))
-    model_name = st.text_input("🤖 Model", os.environ.get("ONLINE_MODEL", "Qwen/Qwen2.5-7B-Instruct"))
+    api_key = st.text_input("🔑 API Key", _cfg.get("api_key", ""), type="password")
+    base_url = st.text_input("🌐 Base URL", _cfg.get("base_url", ""))
+    model_name = st.text_input("🤖 Model", _cfg.get("model_name", ""))
 
     st.divider()
     with st.expander("ℹ️ 架构说明", expanded=False):
