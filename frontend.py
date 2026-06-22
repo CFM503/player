@@ -157,8 +157,9 @@ def parse_log_to_steps(lines: List[str]) -> List[AgentStep]:
 
 # ---- 侧边栏 ----
 with st.sidebar:
+    _version = open(os.path.join(os.path.dirname(__file__), "VERSION"), encoding="utf-8").read().strip()
     st.title("🛡️ 安全哨兵")
-    st.caption("牡丹江中燃 HSE · AI Agent 自主智能体")
+    st.caption(f"牡丹江中燃 HSE · AI Agent 自主智能体 v{_version}")
     st.divider()
 
     use_online = st.toggle("☁️ 线上 API 模式", value=os.environ.get("USE_ONLINE_API", "false").lower() == "true")

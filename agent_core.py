@@ -283,7 +283,11 @@ class SecurityAgentTools:
 
     @staticmethod
     def playwright_auto_fill_tool(data: SecuritySheetData) -> bool:
-        from playwright.sync_api import sync_playwright
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            print(f"[Tool Log] ⚠️ playwright 未安装，跳过自动填报。安装命令: pip install playwright && playwright install chromium")
+            return False
         print(f"[Tool Log] 🌐 [决策触发]：启动 Playwright 自动填报作业票【{data.ticket_id}】...")
 
         form_path = os.path.join(os.path.dirname(__file__), "mock_oa_form.html")
