@@ -114,6 +114,9 @@ details summary {{ color: var(--text); font-size: 13px; }}
 # ---- Session State ----
 if "results" not in st.session_state: st.session_state.results = []
 if "delete_id" not in st.session_state: st.session_state.delete_id = None
+if "pending_files" not in st.session_state: st.session_state.pending_files = None
+if "show_uploader" not in st.session_state: st.session_state.show_uploader = False
+if "show_camera" not in st.session_state: st.session_state.show_camera = False
 
 
 def kpi(label, value, color="var(--blue)"):
@@ -145,21 +148,38 @@ with tab1:
     camera_photo = None
     c1, c2, c3 = st.columns(3)
     with c1:
-        uploaded_files = st.file_uploader("📤 上传", type=["jpg","jpeg","png","bmp"], accept_multiple_files=True, label_visibility="collapsed")
+        show_upload = st.button("📤 上传", use_container_width=True)
     with c2:
         show_cam = st.button("📷 拍照", use_container_width=True)
     with c3:
-        has_files = bool(uploaded_files) or camera_photo is not None
+        has_files = bool(st.session_state.get("pending_files")) or camera_photo is not None
         run_clicked = st.button("⚙️ 处理", type="primary", use_container_width=True, disabled=not has_files)
 
-    # 点击拍照后显示摄像头
+    # 点击上传后显示文件选择
+    if show_upload:
+        st.session_state.show_uploader = True
+        st.session_state.show_camera = False
     if show_cam:
-        camera_photo = st.camera_input("拍照上传", label_visibility="collapsed")
-    if camera_photo is not None:
-        uploaded_files = [camera_photo]
+        st.session_state.show_camera = True
+        st.session_state.show_uploader = False
+
+    uploaded_files = st.session_state.get("pending_files")
+    if st.session_state.get("show_uploader"):
+        picked = st.file_uploader("选择图片", type=["jpg","jpeg","png","bmp"], accept_multiple_files=True, label_visibility="collapsed", key="fu_main")
+        if picked:
+            st.session_state.pending_files = picked
+            uploaded_files = picked
+    if st.session_state.get("show_camera"):
+        camera_photo = st.camera_input("拍照上传", label_visibility="collapsed", key="cam_main")
+        if camera_photo:
+            st.session_state.pending_files = [camera_photo]
+            uploaded_files = [camera_photo]
 
     # 无文件 + 有历史结果：显示上次结果
-    if not uploaded_files and not run_clicked:
+    # 合并最终文件
+    final_files = st.session_state.get("pending_files") or []
+
+    if not final_files and not run_clicked:
         if st.session_state.results:
             st.markdown("**上次处理结果**")
             for item in st.session_state.results:
@@ -180,19 +200,19 @@ with tab1:
             st.caption("📷 拍照或选择作业票图片，Agent 自动完成识别 → 结构化 → 审批建议 → 预警")
 
     # 有文件：预览缩略图
-    if uploaded_files and not run_clicked and not st.session_state.get("run_processing"):
-        thumbs = st.columns(min(len(uploaded_files) + 1, 6))
-        for i, f in enumerate(uploaded_files[:5]):
+    if final_files and not run_clicked and not st.session_state.get("run_processing"):
+        thumbs = st.columns(min(len(final_files) + 1, 6))
+        for i, f in enumerate(final_files[:5]):
             with thumbs[i]: st.image(f, width=100)
-        with thumbs[min(len(uploaded_files), 5)]:
-            st.markdown(f"<div style='text-align:center;padding-top:35px;color:var(--dim);font-size:12px'>{len(uploaded_files)}张</div>", unsafe_allow_html=True)
+        with thumbs[min(len(final_files), 5)]:
+            st.markdown(f"<div style='text-align:center;padding-top:35px;color:var(--dim);font-size:12px'>{len(final_files)}张</div>", unsafe_allow_html=True)
 
     # 开始处理
-    if run_clicked and uploaded_files:
+    if run_clicked and final_files:
         st.session_state.run_processing = True
         st.rerun()
 
-    if st.session_state.get("run_processing") and uploaded_files:
+    if st.session_state.get("run_processing") and final_files:
         st.session_state.run_processing = False
 
         from agent_core import SecurityAgent, LLMBrain
@@ -200,7 +220,7 @@ with tab1:
         agent = SecurityAgent(brain=brain)
         st.session_state.results = []
 
-        for idx, uploaded in enumerate(uploaded_files):
+        for idx, uploaded in enumerate(final_files):
             # 先保存文件
             suffix = os.path.splitext(uploaded.name)[1] or ".jpg"
             upload_dir = os.path.join(os.path.dirname(__file__), "uploads")
@@ -215,7 +235,7 @@ with tab1:
             with col_r:
                 status_text = st.empty()
                 progress = st.progress(0)
-                status_text.caption(f"[{idx+1}/{len(uploaded_files)}] {uploaded.name} — 准备中...")
+                status_text.caption(f"[{idx+1}/{len(final_files)}] {uploaded.name} — 准备中...")
                 st.image(save_path, caption=uploaded.name, use_container_width=True)
 
             # 右栏：日志面板
@@ -257,7 +277,7 @@ with tab1:
                         for k, p in _sp.items():
                             if f"Agent {k}" in s:
                                 progress.progress(p)
-                                status_text.caption(f"[{idx+1}/{len(uploaded_files)}] {_sc[k]}...")
+                                status_text.caption(f"[{idx+1}/{len(final_files)}] {_sc[k]}...")
                     return len(s) if s else 0
                 def flush(self): pass
 
@@ -271,7 +291,7 @@ with tab1:
                 sys.stdout = _orig
 
             progress.progress(100)
-            status_text.caption(f"[{idx+1}/{len(uploaded_files)}] ✅ 完成")
+            status_text.caption(f"[{idx+1}/{len(final_files)}] ✅ 完成")
 
             # 左栏：结果展示
             with col_r:
