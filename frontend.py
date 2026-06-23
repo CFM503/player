@@ -772,9 +772,23 @@ with tab1:
                                 st.dataframe(pd.DataFrame(ocr_rows), use_container_width=True, height=min(len(ocr_rows)*28+30, 350))
 
                     if d.issues:
-                        with st.expander(f"⚠️ 隐患 ({len(d.issues)})"):
+                        with st.expander(f"⚠️ 隐患明细 ({len(d.issues)})", expanded=True):
+                            # 未落实的安全措施
+                            unimpl = [m for m in d.safety_measures if not m.implemented]
+                            if unimpl:
+                                st.markdown("**安全措施未落实：**")
+                                for m in unimpl:
+                                    st.markdown(f"  🔴 第{m.measure_id}项 `{m.description}` — 标记为**未落实×**")
+                            # 浓度异常
+                            conc_high = [(i, v) for i, v in enumerate(d.gas_concentration) if v > 0]
+                            if conc_high:
+                                st.markdown("**浓度异常：**")
+                                for i, v in conc_high:
+                                    st.markdown(f"  🟡 第{i+1}次检测 `{v}%` — 超过0%阈值")
+                            # 其他隐患
                             for issue in d.issues:
-                                st.caption(f"• {issue.item_name} — {issue.status}" + (f" ({issue.raw_text})" if issue.raw_text else ""))
+                                reason = issue.raw_text or "OCR识别为异常标记"
+                                st.markdown(f"  ⚠️ **{issue.item_name}** — {reason}")
 
         # 批量汇总
         if len(st.session_state.results) > 1:
