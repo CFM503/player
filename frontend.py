@@ -168,7 +168,7 @@ with st.sidebar:
 
 
 # ---- 主面板：Tab 切换 ----
-tab_process, tab_history = st.tabs(["📷 处理作业票", "📋 历史记录"])
+tab_process, tab_history = st.tabs(["📷 处理作业票", "🤖 AI 看板"])
 
 # ==================== Tab 1: 处理作业票 ====================
 with tab_process:
@@ -360,13 +360,14 @@ with tab_process:
             })
         st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
-# ==================== Tab 2: 历史记录 ====================
+# ==================== Tab 2: AI 看板 ====================
 with tab_history:
     import sqlite3
     db_path = os.path.join(os.path.dirname(__file__), "security_data.db")
+    _del_pwd = _cfg.get("delete_password", "123")
 
     if not os.path.exists(db_path):
-        st.info("📭 暂无历史记录，处理作业票后自动保存。")
+        st.info("📭 暂无数据，处理作业票后自动保存。")
         st.stop()
 
     conn = sqlite3.connect(db_path)
@@ -385,8 +386,7 @@ with tab_history:
 
     # 统计数据
     total = len(df)
-    abnormal_rows = [r for r in df if r[5]]
-    abnormal_count = len(abnormal_rows)
+    abnormal_count = sum(1 for r in df if r[5])
     normal_count = total - abnormal_count
     abnormal_rate = f"{abnormal_count/total*100:.0f}%" if total > 0 else "0%"
 
@@ -405,24 +405,14 @@ with tab_history:
     # 高频隐患 Top 5
     import json as _json
     issue_counter = {}
-    for row in df:
-        if row[5]:  # has_abnormal
-            try:
-                issues = _json.loads(row[7]) if isinstance(row[7], str) else []
-            except Exception:
-                # try issues_json from a different approach
-                issues = []
-            # We need issues_json, but it's not in the SELECT. Let's fetch it separately.
-    # Re-fetch with issues_json for statistics
     try:
-        issues_rows = conn.execute("""
-            SELECT issues_json FROM hse_fire_work_tickets WHERE has_abnormal = 1
-        """).fetchall()
+        issues_rows = conn.execute(
+            "SELECT issues_json FROM hse_fire_work_tickets WHERE has_abnormal = 1"
+        ).fetchall()
         for (issues_json,) in issues_rows:
             if issues_json:
                 try:
-                    issues_list = _json.loads(issues_json)
-                    for item in issues_list:
+                    for item in _json.loads(issues_json):
                         name = item.get("item_name", "未知")
                         issue_counter[name] = issue_counter.get(name, 0) + 1
                 except Exception:
@@ -432,33 +422,63 @@ with tab_history:
 
     if issue_counter:
         st.markdown("**高频隐患 Top 5：**")
-        sorted_issues = sorted(issue_counter.items(), key=lambda x: -x[1])[:5]
-        for name, count in sorted_issues:
+        for name, count in sorted(issue_counter.items(), key=lambda x: -x[1])[:5]:
             bar_len = min(count * 20, 200)
             st.markdown(f"<div style='margin:2px 0'>{name} <span style='background:#ff4444;display:inline-block;width:{bar_len}px;height:14px;border-radius:3px;vertical-align:middle'></span> {count}次</div>", unsafe_allow_html=True)
 
     conn.close()
 
+    # 删除密码弹窗
+    if "delete_id" not in st.session_state:
+        st.session_state.delete_id = None
+
+    if st.session_state.delete_id:
+        st.divider()
+        st.warning(f"⚠️ 确认删除记录 #{st.session_state.delete_id}？此操作不可撤销。")
+        pwd_input = st.text_input("🔑 输入删除密码确认", type="password", key="del_pwd_input")
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            if st.button("✅ 确认删除", type="primary", use_container_width=True):
+                if pwd_input == _del_pwd:
+                    conn2 = sqlite3.connect(db_path)
+                    conn2.execute("DELETE FROM hse_fire_work_tickets WHERE id = ?", (st.session_state.delete_id,))
+                    conn2.commit()
+                    conn2.close()
+                    st.session_state.delete_id = None
+                    st.rerun()
+                else:
+                    st.error("密码错误")
+        with cc2:
+            if st.button("❌ 取消", use_container_width=True):
+                st.session_state.delete_id = None
+                st.rerun()
+
+    # 记录列表
     st.divider()
     st.markdown(f"**共 {total} 条记录**")
-
     for row in df:
         rid, ticket, station, worker, date, abnormal, opinion, risk, created = row
         icon = "🚨" if abnormal else "✅"
         risk_badge = f" [{risk}]" if risk else ""
 
-        with st.expander(f"{icon} #{rid} | {ticket} | {station} | {date}{risk_badge}", expanded=False):
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown(f"**票号:** {ticket}")
-                st.markdown(f"**场站:** {station}")
-                st.markdown(f"**动火人:** {worker}")
-                st.markdown(f"**日期:** {date}")
-            with c2:
-                color = "red" if abnormal else "green"
-                st.markdown(f"**状态:** :{color}[{'有隐患' if abnormal else '正常'}]")
-                if risk:
-                    st.markdown(f"**风险等级:** {risk}")
-                st.markdown(f"**处理时间:** {created}")
-                if opinion:
-                    st.markdown(f"**审批建议:** {opinion}")
+        col_main, col_del = st.columns([9, 1])
+        with col_main:
+            with st.expander(f"{icon} #{rid} | {ticket} | {station} | {date}{risk_badge}", expanded=False):
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown(f"**票号:** {ticket}")
+                    st.markdown(f"**场站:** {station}")
+                    st.markdown(f"**动火人:** {worker}")
+                    st.markdown(f"**日期:** {date}")
+                with c2:
+                    st.markdown(f"**状态:** :{'red' if abnormal else 'green'}[{'有隐患' if abnormal else '正常'}]")
+                    if risk:
+                        st.markdown(f"**风险等级:** {risk}")
+                    st.markdown(f"**处理时间:** {created}")
+                    if opinion:
+                        st.markdown(f"**审批建议:** {opinion}")
+        with col_del:
+            st.markdown("<div style='padding-top:28px'></div>", unsafe_allow_html=True)
+            if st.button("🗑️", key=f"del_{rid}", help=f"删除 #{rid}"):
+                st.session_state.delete_id = rid
+                st.rerun()
