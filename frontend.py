@@ -142,15 +142,19 @@ tab1, tab2 = st.tabs(["📷 处理作业票", "📊 AI 看板"])
 # ==================== Tab 1 ====================
 with tab1:
     # ---- 三个按钮：上传 / 拍照 / 处理 ----
+    camera_photo = None
     c1, c2, c3 = st.columns(3)
     with c1:
         uploaded_files = st.file_uploader("📤 上传", type=["jpg","jpeg","png","bmp"], accept_multiple_files=True, label_visibility="collapsed")
     with c2:
-        camera_photo = st.camera_input("📷 拍照", label_visibility="collapsed")
+        show_cam = st.button("📷 拍照", use_container_width=True)
     with c3:
         has_files = bool(uploaded_files) or camera_photo is not None
         run_clicked = st.button("⚙️ 处理", type="primary", use_container_width=True, disabled=not has_files)
 
+    # 点击拍照后显示摄像头
+    if show_cam:
+        camera_photo = st.camera_input("拍照上传", label_visibility="collapsed")
     if camera_photo is not None:
         uploaded_files = [camera_photo]
 
