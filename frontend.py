@@ -1,5 +1,5 @@
 """
-安全数字监督员 - Agent 可视化决策链面板
+安全数字监督员 - AI Agent 安全监控面板
 启动: streamlit run frontend.py
 """
 
@@ -7,215 +7,282 @@ import io, sys, os, re, time, json
 import streamlit as st
 import pandas as pd
 
+# ---- 配置 ----
 _cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
 _cfg = json.load(open(_cfg_path, encoding="utf-8")) if os.path.exists(_cfg_path) else {}
+_ver = open(os.path.join(os.path.dirname(__file__), "VERSION"), encoding="utf-8").read().strip()
 
-st.set_page_config(page_title="安全数字监督员", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="安全数字监督员", page_icon="🛡️", layout="wide", initial_sidebar_state="collapsed")
 
-st.markdown("""
+# ---- 全局暗色主题 CSS ----
+st.markdown(f"""
 <style>
-/* 全局紧凑 */
-.block-container { padding: 0.5rem 1rem 0.3rem 1rem; }
-section[data-testid="stSidebar"] .block-container { padding-top: 0.5rem; }
-/* 隐藏 Streamlit 默认元素 */
-#MainMenu, footer, header { display: none !important; }
-/* 上传区域压缩 */
-[data-testid="stFileUploader"] { padding: 0 !important; }
-[data-testid="stFileUploader"] section { padding: 4px 8px !important; min-height: 0 !important; }
-[data-testid="stCameraInput"] { padding: 0 !important; }
-[data-testid="stCameraInput"] section { padding: 4px 8px !important; min-height: 0 !important; }
-/* 按钮紧凑 */
-.stButton > button { padding: 4px 12px !important; min-height: 0 !important; font-size: 13px !important; }
-/* Tab 紧凑 */
-.stTabs [data-baseweb="tab-list"] { gap: 4px; }
-.stTabs [data-baseweb="tab"] { padding: 4px 12px; font-size: 13px; }
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+
+:root {{
+    --bg: #0d1117; --card: #161b22; --border: #30363d;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922; --blue: #58a6ff; --cyan: #39d353;
+    --text: #c9d1d9; --dim: #8b949e;
+}}
+
+/* 全局 */
+.stApp {{ background: var(--bg); }}
+.block-container {{ padding: 0.4rem 1rem 0.2rem 1rem; max-width: 100%; }}
+#MainMenu, footer, header {{ display: none !important; }}
+
+/* 侧边栏 */
+section[data-testid="stSidebar"] {{ background: var(--card); border-right: 1px solid var(--border); }}
+section[data-testid="stSidebar"] .block-container {{ padding-top: 0.5rem; }}
+
+/* Tabs */
+.stTabs [data-baseweb="tab-list"] {{ gap: 0; background: var(--card); border-radius: 6px; padding: 2px; border: 1px solid var(--border); }}
+.stTabs [data-baseweb="tab"] {{ color: var(--dim); font-size: 13px; padding: 6px 16px; border-radius: 4px; }}
+.stTabs [aria-selected="true"] {{ color: var(--text) !important; background: var(--bg) !important; }}
+
+/* 上传区 */
+[data-testid="stFileUploader"], [data-testid="stCameraInput"] {{ padding: 0 !important; }}
+[data-testid="stFileUploader"] section, [data-testid="stCameraInput"] section {{
+    background: var(--card) !important; border: 1px dashed var(--border) !important;
+    border-radius: 6px !important; padding: 6px 10px !important; min-height: 0 !important;
+}}
+
+/* 按钮 */
+.stButton > button {{
+    background: var(--card) !important; color: var(--text) !important;
+    border: 1px solid var(--border) !important; border-radius: 6px !important;
+    padding: 4px 14px !important; font-size: 13px !important; min-height: 0 !important;
+    transition: all 0.15s;
+}}
+.stButton > button:hover {{ border-color: var(--blue) !important; color: var(--blue) !important; }}
+.stButton > button[kind="primary"] {{
+    background: #238636 !important; border-color: #2ea043 !important; color: #fff !important;
+}}
+.stButton > button[kind="primary"]:hover {{ background: #2ea043 !important; }}
+
 /* 指标卡 */
-.mcard { background: #1a1a2e; border: 1px solid #333; border-radius: 6px; padding: 6px 10px; text-align: center; }
-.mval { font-size: 18px; font-weight: 700; color: #00d4ff; line-height: 1.2; }
-.mlbl { font-size: 10px; color: #888; }
-/* 黑客日志 */
-.hlog { background: #0a0a0a; border: 1px solid #00ff41; border-radius: 6px; padding: 8px 10px; font-family: 'Courier New', monospace; font-size: 12px; color: #00ff41; line-height: 1.4; overflow-y: auto; box-shadow: 0 0 15px rgba(0,255,65,0.08); }
-.hlog .lt { color: #00ff41; font-weight: bold; font-size: 12px; border-bottom: 1px solid #00ff4133; padding-bottom: 3px; margin-bottom: 4px; }
-.hlog .lo { color: #00ccaa; } .hlog .le { color: #ff4444; } .hlog .lk { color: #00ff41; } .hlog .lw { color: #ffb800; }
-/* 进度条紧凑 */
-.stProgress > div { margin: 0 !important; }
+.kpi {{ background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; text-align: center; }}
+.kpi-val {{ font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 700; color: var(--blue); line-height: 1.3; }}
+.kpi-lbl {{ font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; }}
+
+/* 状态徽章 */
+.badge {{ display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }}
+.badge-ok {{ background: #0d1117; color: var(--green); border: 1px solid var(--green); }}
+.badge-warn {{ background: #1c1b00; color: var(--yellow); border: 1px solid var(--yellow); }}
+.badge-err {{ background: #1c0d0d; color: var(--red); border: 1px solid var(--red); }}
+
+/* 黑客日志面板 */
+.hlog {{
+    background: #0a0e14; border: 1px solid #1a3a1a; border-radius: 6px;
+    padding: 10px 12px; font-family: 'JetBrains Mono', 'Courier New', monospace;
+    font-size: 12px; color: var(--green); line-height: 1.5;
+    overflow-y: auto; box-shadow: inset 0 0 30px rgba(0,255,65,0.03);
+}}
+.hlog .lt {{ color: var(--green); font-weight: bold; border-bottom: 1px solid #1a3a1a; padding-bottom: 3px; margin-bottom: 6px; font-size: 13px; }}
+.hlog .lo {{ color: #39d353; }} .hlog .le {{ color: #f85149; }} .hlog .lk {{ color: #58a6ff; }} .hlog .lw {{ color: #d29922; }}
+
+/* 进度条 */
+.stProgress > div {{ margin: 0 !important; height: 4px !important; }}
+.stProgress > div > div {{ background: var(--green) !important; }}
+
+/* 表格 */
+.stDataFrame {{ border: 1px solid var(--border); border-radius: 6px; }}
+
+/* Expander */
+details {{ background: var(--card); border: 1px solid var(--border); border-radius: 6px; }}
+details summary {{ color: var(--text); font-size: 13px; }}
 </style>
 """, unsafe_allow_html=True)
 
+# ---- Session State ----
 if "results" not in st.session_state: st.session_state.results = []
 if "delete_id" not in st.session_state: st.session_state.delete_id = None
 
 
-def metric_card(label, value, color="#00d4ff"):
-    return f'<div class="mcard"><div class="mval" style="color:{color}">{value}</div><div class="mlbl">{label}</div></div>'
+def kpi(label, value, color="var(--blue)"):
+    return f'<div class="kpi"><div class="kpi-val" style="color:{color}">{value}</div><div class="kpi-lbl">{label}</div></div>'
+
+def badge(text, level="ok"):
+    return f'<span class="badge badge-{level}">{text}</span>'
 
 
 # ---- 侧边栏 ----
 with st.sidebar:
-    _ver = open(os.path.join(os.path.dirname(__file__), "VERSION"), encoding="utf-8").read().strip()
-    st.markdown(f"### 🛡️ 安全数字监督员 v{_ver}")
+    st.markdown(f"**🛡️ 安全数字监督员** `v{_ver}`")
     st.caption("牡丹江中燃 HSE · AI Agent")
-    api_key = st.text_input("🔑 API Key", _cfg.get("api_key", ""), type="password")
-    base_url = st.text_input("🌐 URL", _cfg.get("base_url", ""))
-    model_name = st.text_input("🤖 Model", _cfg.get("model_name", ""))
+    st.markdown("---")
+    api_key = st.text_input("API Key", _cfg.get("api_key", ""), type="password")
+    base_url = st.text_input("API URL", _cfg.get("base_url", ""))
+    model_name = st.text_input("模型", _cfg.get("model_name", ""))
+    st.markdown("---")
+    st.caption("📋 Plan → 👁️ Perceive → 🤔 Reason → 🔍 Reflect → ⚡ Act → 📊 Report")
+
 
 # ---- 主面板 ----
-tab1, tab2 = st.tabs(["📷 处理作业票", "🤖 AI 看板"])
+tab1, tab2 = st.tabs(["📷 处理作业票", "📊 AI 看板"])
 
 
 # ==================== Tab 1 ====================
 with tab1:
-    # 上传区：一行搞定
-    c_up, c_cam = st.columns([3, 1])
-    with c_up:
-        uploaded_files = st.file_uploader("📁 选择图片", type=["jpg","jpeg","png","bmp"], accept_multiple_files=True, label_visibility="collapsed")
-    with c_cam:
-        camera_photo = st.camera_input("📷", label_visibility="collapsed", help="拍照上传")
+    # 上传条：一行紧凑
+    c1, c2, c3 = st.columns([5, 2, 1])
+    with c1:
+        uploaded_files = st.file_uploader("选择图片", type=["jpg","jpeg","png","bmp"], accept_multiple_files=True, label_visibility="collapsed")
+    with c2:
+        camera_photo = st.camera_input("拍照", label_visibility="collapsed", help="手机拍照")
+    with c3:
+        has_files = bool(uploaded_files) or camera_photo is not None
+        run_clicked = st.button("🚀 处理", type="primary", use_container_width=True, disabled=not has_files)
 
     if camera_photo is not None:
         uploaded_files = [camera_photo]
 
-    if not uploaded_files:
+    # 无文件 + 有历史结果：显示上次结果
+    if not uploaded_files and not run_clicked:
         if st.session_state.results:
-            st.markdown("**📋 上次结果：**", help="上传新图片覆盖")
+            st.markdown("**上次处理结果**")
             for item in st.session_state.results:
                 d = item["data"]
-                ic1, ic2, ic3, ic4, ic5 = st.columns(5)
-                with ic1: st.markdown(metric_card("票号", d.ticket_id), unsafe_allow_html=True)
-                with ic2: st.markdown(metric_card("状态", f"{len(d.issues)}项隐患" if d.has_abnormal else "正常", "#ff4444" if d.has_abnormal else "#00ff41"), unsafe_allow_html=True)
-                with ic3: st.markdown(metric_card("措施", f"{len(d.safety_measures)}项"), unsafe_allow_html=True)
-                with ic4: st.markdown(metric_card("风险", d.risk_level or "-", "#ff4444" if d.has_abnormal else "#00ff41"), unsafe_allow_html=True)
-                with ic5: st.markdown(metric_card("浓度", ", ".join(f"{v}%" for v in d.gas_concentration) if d.gas_concentration else "无"), unsafe_allow_html=True)
+                c1, c2, c3, c4, c5 = st.columns(5)
+                with c1: st.markdown(kpi("票号", d.ticket_id), unsafe_allow_html=True)
+                with c2: st.markdown(kpi("状态", f"{len(d.issues)}项" if d.has_abnormal else "正常", "var(--red)" if d.has_abnormal else "var(--green)"), unsafe_allow_html=True)
+                with c3: st.markdown(kpi("措施", f"{len(d.safety_measures)}"), unsafe_allow_html=True)
+                with c4:
+                    rl = d.risk_level or "-"
+                    rc = {"重大":"var(--red)","较大":"var(--yellow)","一般":"var(--yellow)","低风险":"var(--green)"}.get(rl, "var(--blue)")
+                    st.markdown(kpi("风险", rl, rc), unsafe_allow_html=True)
+                with c5: st.markdown(kpi("浓度", ", ".join(f"{v}%" for v in d.gas_concentration) or "无"), unsafe_allow_html=True)
                 if d.approval_opinion:
-                    icon = {"重大":"🔴","较大":"🟡","一般":"🟡","低风险":"🟢"}.get(d.risk_level or "", "")
-                    (st.warning if d.has_abnormal else st.success)(f"{icon} {d.approval_opinion}")
+                    ic = {"重大":"🔴","较大":"🟡","一般":"🟡","低风险":"🟢"}.get(d.risk_level or "", "")
+                    (st.warning if d.has_abnormal else st.success)(f"{ic} {d.approval_opinion}")
         else:
-            st.caption("👆 拍照或选择作业票图片，Agent 自动完成全部流程")
+            st.caption("📷 拍照或选择作业票图片，Agent 自动完成识别 → 结构化 → 审批建议 → 预警")
 
-    else:
-        # 有文件：预览 + 开始按钮（一行）
-        pc1, pc2 = st.columns([5, 1])
-        with pc1:
-            thumbs = st.columns(min(len(uploaded_files), 4))
-            for i, f in enumerate(uploaded_files[:4]):
-                with thumbs[i]: st.image(f, width=120)
-        with pc2:
-            st.markdown(f"<div style='text-align:center;padding-top:30px;font-size:12px;color:#888'>{len(uploaded_files)} 张</div>", unsafe_allow_html=True)
-            if st.button("🚀 开始处理", type="primary", use_container_width=True):
-                st.session_state.run_processing = True
-                st.rerun()
+    # 有文件：预览缩略图
+    if uploaded_files and not run_clicked and not st.session_state.get("run_processing"):
+        thumbs = st.columns(min(len(uploaded_files) + 1, 6))
+        for i, f in enumerate(uploaded_files[:5]):
+            with thumbs[i]: st.image(f, width=100)
+        with thumbs[min(len(uploaded_files), 5)]:
+            st.markdown(f"<div style='text-align:center;padding-top:35px;color:var(--dim);font-size:12px'>{len(uploaded_files)}张</div>", unsafe_allow_html=True)
 
-        if st.session_state.get("run_processing"):
-            st.session_state.run_processing = False
+    # 开始处理
+    if run_clicked and uploaded_files:
+        st.session_state.run_processing = True
+        st.rerun()
 
-            from agent_core import SecurityAgent, LLMBrain
-            brain = LLMBrain(api_key=api_key, base_url=base_url, model_name=model_name)
-            agent = SecurityAgent(brain=brain)
-            st.session_state.results = []
+    if st.session_state.get("run_processing") and uploaded_files:
+        st.session_state.run_processing = False
 
-            for idx, uploaded in enumerate(uploaded_files):
-                progress = st.progress(0, text=f"[{idx+1}/{len(uploaded_files)}] {uploaded.name}")
-                col_r, col_l = st.columns([3, 2])
-                log_ph = col_l.empty()
-                log_buf = []
+        from agent_core import SecurityAgent, LLMBrain
+        brain = LLMBrain(api_key=api_key, base_url=base_url, model_name=model_name)
+        agent = SecurityAgent(brain=brain)
+        st.session_state.results = []
 
-                def hlog(line):
-                    log_buf.append(line)
-                    import html as _h
-                    parts = []
-                    for l in log_buf[-35:]:
-                        c = ""
-                        if "Tool" in l: c = "lo"
-                        elif "FAIL" in l or "出错" in l: c = "le"
-                        elif "OK" in l or "通过" in l or "完成" in l: c = "lk"
-                        elif "重试" in l or "未通过" in l: c = "lw"
-                        parts.append(f'<div class="{c}">{_h.escape(l)}</div>')
-                    log_ph.markdown(f'<div class="hlog"><div class="lt">🤖 AGENT THINKING...</div>{"".join(parts)}</div>', unsafe_allow_html=True)
+        for idx, uploaded in enumerate(uploaded_files):
+            progress = st.progress(0, text=f"[{idx+1}/{len(uploaded_files)}] {uploaded.name}")
+            col_r, col_l = st.columns([3, 2])
+            log_ph = col_l.empty()
+            log_buf = []
 
-                suffix = os.path.splitext(uploaded.name)[1] or ".jpg"
-                upload_dir = os.path.join(os.path.dirname(__file__), "uploads")
-                os.makedirs(upload_dir, exist_ok=True)
-                save_path = os.path.join(upload_dir, f"{int(time.time())}_{idx}{suffix}")
-                with open(save_path, "wb") as f: f.write(uploaded.getvalue())
+            def hlog(line):
+                log_buf.append(line)
+                import html as _h
+                parts = []
+                for l in log_buf[-35:]:
+                    c = ""
+                    if "Tool" in l: c = "lo"
+                    elif "FAIL" in l or "出错" in l: c = "le"
+                    elif "OK" in l or "通过" in l or "完成" in l: c = "lk"
+                    elif "重试" in l or "未通过" in l: c = "lw"
+                    parts.append(f'<div class="{c}">{_h.escape(l)}</div>')
+                log_ph.markdown(f'<div class="hlog"><div class="lt">🤖 AGENT THINKING...</div>{"".join(parts)}</div>', unsafe_allow_html=True)
 
-                with col_r:
-                    st.image(save_path, caption=uploaded.name, width=280)
+            suffix = os.path.splitext(uploaded.name)[1] or ".jpg"
+            upload_dir = os.path.join(os.path.dirname(__file__), "uploads")
+            os.makedirs(upload_dir, exist_ok=True)
+            save_path = os.path.join(upload_dir, f"{int(time.time())}_{idx}{suffix}")
+            with open(save_path, "wb") as f: f.write(uploaded.getvalue())
 
-                hlog(f">>> {uploaded.name}")
-                progress.progress(5, text=f"[{idx+1}/{len(uploaded_files)}] OCR...")
+            with col_r: st.image(save_path, caption=uploaded.name, width=280)
 
-                _orig = sys.stdout
-                result = {"ocr": None, "data": None}
-                _sp = {"Plan":10,"Perceive":25,"Reason":50,"Reflect":70,"Act":85,"Report":98}
-                _sc = {"Plan":"规划","Perceive":"感知","Reason":"推理","Reflect":"反思","Act":"执行","Report":"总结"}
+            hlog(f">>> {uploaded.name}")
+            progress.progress(5, text=f"[{idx+1}/{len(uploaded_files)}] OCR...")
 
-                class Cap(io.TextIOBase):
-                    def write(self, s):
-                        s = s.strip()
-                        if s:
-                            hlog(s)
-                            for k, p in _sp.items():
-                                if f"Agent {k}" in s:
-                                    progress.progress(p, text=f"[{idx+1}/{len(uploaded_files)}] {_sc[k]}...")
-                        return len(s) if s else 0
-                    def flush(self): pass
+            _orig = sys.stdout
+            result = {"ocr": None, "data": None}
+            _sp = {"Plan":10,"Perceive":25,"Reason":50,"Reflect":70,"Act":85,"Report":98}
+            _sc = {"Plan":"规划","Perceive":"感知","Reason":"推理","Reflect":"反思","Act":"执行","Report":"总结"}
 
-                sys.stdout = Cap()
-                try:
-                    ocr_text, structured = agent.run(save_path)
-                    result["ocr"], result["data"] = ocr_text, structured
-                except Exception as e:
-                    hlog(f"❌ {e}")
-                finally:
-                    sys.stdout = _orig
+            class Cap(io.TextIOBase):
+                def write(self, s):
+                    s = s.strip()
+                    if s:
+                        hlog(s)
+                        for k, p in _sp.items():
+                            if f"Agent {k}" in s:
+                                progress.progress(p, text=f"[{idx+1}/{len(uploaded_files)}] {_sc[k]}...")
+                    return len(s) if s else 0
+                def flush(self): pass
 
-                progress.progress(100, text=f"[{idx+1}/{len(uploaded_files)}] ✅")
+            sys.stdout = Cap()
+            try:
+                ocr_text, structured = agent.run(save_path)
+                result["ocr"], result["data"] = ocr_text, structured
+            except Exception as e:
+                hlog(f"❌ {e}")
+            finally:
+                sys.stdout = _orig
 
-                with col_r:
-                    if result["data"]:
-                        d = result["data"]
-                        st.session_state.results.append(result)
+            progress.progress(100, text=f"[{idx+1}/{len(uploaded_files)}] ✅ 完成")
 
-                        # 紧凑指标行
-                        ic1, ic2, ic3, ic4, ic5 = st.columns(5)
-                        with ic1: st.markdown(metric_card("票号", d.ticket_id), unsafe_allow_html=True)
-                        with ic2: st.markdown(metric_card("状态", f"{len(d.issues)}项隐患" if d.has_abnormal else "正常", "#ff4444" if d.has_abnormal else "#00ff41"), unsafe_allow_html=True)
-                        with ic3: st.markdown(metric_card("措施", f"{len(d.safety_measures)}项"), unsafe_allow_html=True)
-                        with ic4: st.markdown(metric_card("风险", d.risk_level or "-", "#ff4444" if d.has_abnormal else "#00ff41"), unsafe_allow_html=True)
-                        with ic5: st.markdown(metric_card("浓度", ", ".join(f"{v}%" for v in d.gas_concentration) if d.gas_concentration else "无"), unsafe_allow_html=True)
+            with col_r:
+                if result["data"]:
+                    d = result["data"]
+                    st.session_state.results.append(result)
 
-                        # 审批建议
-                        if d.approval_opinion:
-                            ic = {"重大":"🔴","较大":"🟡","一般":"🟡","低风险":"🟢"}.get(d.risk_level or "", "")
-                            (st.warning if d.has_abnormal else st.success)(f"{ic} {d.approval_opinion}")
+                    # KPI 行
+                    c1, c2, c3, c4, c5 = st.columns(5)
+                    with c1: st.markdown(kpi("票号", d.ticket_id), unsafe_allow_html=True)
+                    with c2: st.markdown(kpi("状态", f"{len(d.issues)}项" if d.has_abnormal else "正常", "var(--red)" if d.has_abnormal else "var(--green)"), unsafe_allow_html=True)
+                    with c3: st.markdown(kpi("措施", f"{len(d.safety_measures)}"), unsafe_allow_html=True)
+                    with c4:
+                        rl = d.risk_level or "-"
+                        rc = {"重大":"var(--red)","较大":"var(--yellow)","一般":"var(--yellow)","低风险":"var(--green)"}.get(rl, "var(--blue)")
+                        st.markdown(kpi("风险", rl, rc), unsafe_allow_html=True)
+                    with c5: st.markdown(kpi("浓度", ", ".join(f"{v}%" for v in d.gas_concentration) or "无"), unsafe_allow_html=True)
 
-                        # OCR + 隐患（折叠）
-                        if result["ocr"]:
-                            with st.expander("📝 OCR 原文", expanded=False):
-                                ocr_rows = []
-                                for line in result["ocr"].strip().split("\n"):
-                                    line = line.strip()
-                                    if not line: continue
-                                    if "：" in line:
-                                        p = line.split("：", 1); ocr_rows.append({"字段": p[0].strip(), "值": p[1].strip()})
-                                    elif ":" in line and line.index(":") > 0:
-                                        p = line.split(":", 1); ocr_rows.append({"字段": p[0].strip(), "值": p[1].strip()})
-                                    else:
-                                        ocr_rows.append({"字段": "", "值": line})
-                                if ocr_rows:
-                                    st.dataframe(pd.DataFrame(ocr_rows), use_container_width=True, height=min(len(ocr_rows)*30+30, 400))
+                    # 审批建议
+                    if d.approval_opinion:
+                        ic = {"重大":"🔴","较大":"🟡","一般":"🟡","低风险":"🟢"}.get(d.risk_level or "", "")
+                        (st.warning if d.has_abnormal else st.success)(f"{ic} {d.approval_opinion}")
 
-                        if d.issues:
-                            with st.expander(f"⚠️ 隐患明细 ({len(d.issues)})", expanded=False):
-                                for issue in d.issues:
-                                    st.caption(f"• **{issue.item_name}** — {issue.status}" + (f" ({issue.raw_text})" if issue.raw_text else ""))
+                    # OCR + 隐患（折叠）
+                    if result["ocr"]:
+                        with st.expander("📝 OCR 识别原文"):
+                            ocr_rows = []
+                            for line in result["ocr"].strip().split("\n"):
+                                line = line.strip()
+                                if not line: continue
+                                if "：" in line:
+                                    p = line.split("：", 1); ocr_rows.append({"字段": p[0].strip(), "值": p[1].strip()})
+                                elif ":" in line and line.index(":") > 0:
+                                    p = line.split(":", 1); ocr_rows.append({"字段": p[0].strip(), "值": p[1].strip()})
+                                else:
+                                    ocr_rows.append({"字段": "", "值": line})
+                            if ocr_rows:
+                                st.dataframe(pd.DataFrame(ocr_rows), use_container_width=True, height=min(len(ocr_rows)*28+30, 350))
 
-            # 批量汇总
-            if len(st.session_state.results) > 1:
-                abn = sum(1 for r in st.session_state.results if r["data"].has_abnormal)
-                st.caption(f"📊 汇总: {len(st.session_state.results)}张 | 有隐患{abn} | 正常{len(st.session_state.results)-abn}")
-                rows = [{"票号": r["data"].ticket_id, "场站": r["data"].station_name, "状态": "有隐患" if r["data"].has_abnormal else "正常", "风险": r["data"].risk_level or "-"} for r in st.session_state.results]
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, height=min(len(rows)*30+30, 200))
+                    if d.issues:
+                        with st.expander(f"⚠️ 隐患 ({len(d.issues)})"):
+                            for issue in d.issues:
+                                st.caption(f"• {issue.item_name} — {issue.status}" + (f" ({issue.raw_text})" if issue.raw_text else ""))
+
+        # 批量汇总
+        if len(st.session_state.results) > 1:
+            abn = sum(1 for r in st.session_state.results if r["data"].has_abnormal)
+            st.markdown(f"**📊 汇总** {len(st.session_state.results)}张 {badge('正常'+str(len(st.session_state.results)-abn), 'ok')} {badge('隐患'+str(abn), 'err' if abn else 'ok')}", unsafe_allow_html=True)
+            rows = [{"票号": r["data"].ticket_id, "场站": r["data"].station_name, "状态": "有隐患" if r["data"].has_abnormal else "正常", "风险": r["data"].risk_level or "-"} for r in st.session_state.results]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, height=min(len(rows)*28+30, 200))
 
 
 # ==================== Tab 2: AI 看板 ====================
@@ -225,12 +292,7 @@ with tab2:
     _del_pwd = _cfg.get("delete_password", "123")
 
     if not os.path.exists(db_path):
-        sc1, sc2, sc3, sc4 = st.columns(4)
-        with sc1: st.metric("总票数", 0)
-        with sc2: st.metric("隐患", 0)
-        with sc3: st.metric("正常", 0)
-        with sc4: st.metric("隐患率", "0%")
-        st.caption("📭 暂无数据")
+        st.caption("📭 暂无数据，处理作业票后自动保存。")
     else:
         conn = sqlite3.connect(db_path)
         try:
@@ -241,11 +303,12 @@ with tab2:
         total = len(rows_db)
         abn_cnt = sum(1 for r in rows_db if r[5])
 
-        sc1, sc2, sc3, sc4 = st.columns(4)
-        with sc1: st.metric("总票数", total)
-        with sc2: st.metric("隐患", abn_cnt)
-        with sc3: st.metric("正常", total - abn_cnt)
-        with sc4: st.metric("隐患率", f"{abn_cnt/total*100:.0f}%" if total else "0%")
+        # KPI 行
+        k1, k2, k3, k4 = st.columns(4)
+        with k1: st.markdown(kpi("总票数", total), unsafe_allow_html=True)
+        with k2: st.markdown(kpi("有隐患", abn_cnt, "var(--red)" if abn_cnt else "var(--green)"), unsafe_allow_html=True)
+        with k3: st.markdown(kpi("正常", total - abn_cnt, "var(--green)"), unsafe_allow_html=True)
+        with k4: st.markdown(kpi("隐患率", f"{abn_cnt/total*100:.0f}%" if total else "0%"), unsafe_allow_html=True)
 
         # 高频隐患
         issue_counter = {}
@@ -261,8 +324,7 @@ with tab2:
             top5 = sorted(issue_counter.items(), key=lambda x: -x[1])[:5]
             cols = st.columns(len(top5))
             for i, (name, count) in enumerate(top5):
-                with cols[i]:
-                    st.markdown(metric_card(name, f"{count}次", "#ff4444"), unsafe_allow_html=True)
+                with cols[i]: st.markdown(kpi(name, f"{count}次", "var(--red)"), unsafe_allow_html=True)
 
         # 删除弹窗
         if st.session_state.delete_id:
@@ -288,18 +350,19 @@ with tab2:
         for row in rows_db:
             rid, ticket, station, worker, date, abnormal, opinion, risk, created = row
             icon = "🚨" if abnormal else "✅"
-            badge = f" [{risk}]" if risk else ""
+            badge_html = f' {badge(risk, "err" if risk=="重大" else ("warn" if risk in ["较大","一般"] else "ok"))}' if risk else ""
+
             cm, cd = st.columns([9, 1])
             with cm:
-                with st.expander(f"{icon} #{rid} | {ticket} | {station} | {date}{badge}", expanded=False):
+                with st.expander(f"{icon} #{rid} | {ticket} | {station} | {date}{badge_html}", expanded=False):
                     ca, cb = st.columns(2)
-                    with ca: st.markdown(f"**票号:** {ticket}  \n**场站:** {station}  \n**动火人:** {worker}  \n**日期:** {date}")
+                    with ca: st.markdown(f"**票号** {ticket}  \n**场站** {station}  \n**动火人** {worker}  \n**日期** {date}")
                     with cb:
-                        st.markdown(f"**状态:** :{'red' if abnormal else 'green'}[{'有隐患' if abnormal else '正常'}]")
-                        if risk: st.markdown(f"**风险:** {risk}")
-                        st.caption(f"处理时间: {created}")
+                        st.markdown(f"**状态** {'🔴 有隐患' if abnormal else '🟢 正常'}")
+                        if risk: st.markdown(f"**风险** {risk}")
+                        st.caption(f"处理: {created}")
                         if opinion: st.caption(f"审批: {opinion}")
             with cd:
-                st.markdown("<div style='padding-top:20px'></div>", unsafe_allow_html=True)
+                st.markdown("<div style='padding-top:18px'></div>", unsafe_allow_html=True)
                 if st.button("🗑️", key=f"del_{rid}", help=f"删除 #{rid}"):
                     st.session_state.delete_id = rid; st.rerun()
