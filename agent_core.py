@@ -123,34 +123,42 @@ class AgentTools:
 
     @staticmethod
     def ocr_tool(image_path: str) -> str:
-        """PaddleOCR 文字识别"""
-        cleaned_path = AgentTools.preprocess_image(image_path)
-
+        """PaddleOCR 文字识别：先试原图，识别不足时再预处理重试"""
         from paddleocr import PaddleOCR
-        print("[Tool] PaddleOCR 提取文字...")
         ocr = PaddleOCR(lang="ch", engine="onnxruntime")
-        result = ocr.predict(cleaned_path)
 
-        lines = []
-        if result and hasattr(result[0], 'json'):
-            res = result[0].json.get('res', {})
-            texts = res.get('rec_texts', [])
-            polys = res.get('rec_polys', [])
-            if texts:
-                entries = []
-                for i, text in enumerate(texts):
-                    box = polys[i] if i < len(polys) else []
-                    y = (box[0][1] + box[2][1]) / 2 if len(box) >= 3 else 0
-                    x = box[0][0] if box else 0
-                    entries.append((y, x, text))
-                entries.sort(key=lambda e: (e[0] // 30, e[1]))
-                lines = [e[2] for e in entries]
+        def _do_ocr(path):
+            result = ocr.predict(path)
+            lines = []
+            if result and hasattr(result[0], 'json'):
+                res = result[0].json.get('res', {})
+                texts = res.get('rec_texts', [])
+                polys = res.get('rec_polys', [])
+                if texts:
+                    entries = []
+                    for i, text in enumerate(texts):
+                        box = polys[i] if i < len(polys) else []
+                        y = (box[0][1] + box[2][1]) / 2 if len(box) >= 3 else 0
+                        x = box[0][0] if box else 0
+                        entries.append((y, x, text))
+                    entries.sort(key=lambda e: (e[0] // 30, e[1]))
+                    lines = [e[2] for e in entries]
+            return lines
+
+        # 先试原图
+        print("[Tool] PaddleOCR 识别原图...")
+        lines = _do_ocr(image_path)
+
+        # 原图识别不足 5 行，预处理后重试
+        if len(lines) < 5:
+            print("[Tool] 原图识别不足，预处理后重试...")
+            cleaned = AgentTools.preprocess_image(image_path)
+            lines = _do_ocr(cleaned)
+            if os.path.exists(cleaned):
+                os.remove(cleaned)
 
         full_text = "\n".join(lines)
         print(f"[Tool] OCR 完成，识别 {len(lines)} 行。")
-
-        if cleaned_path != image_path and os.path.exists(cleaned_path):
-            os.remove(cleaned_path)
 
         if not full_text:
             raise RuntimeError(f"OCR 未能识别任何文字: {image_path}")
