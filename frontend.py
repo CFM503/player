@@ -135,9 +135,6 @@ with st.sidebar:
     api_key = st.text_input("API Key", _cfg.get("api_key", ""), type="password")
     base_url = st.text_input("API URL", _cfg.get("base_url", ""))
     model_name = st.text_input("模型", _cfg.get("model_name", ""))
-    st.markdown("---")
-    st.caption("📋 Plan → 👁️ Perceive → 🤔 Reason → 🔍 Reflect → ⚡ Act → 📊 Report")
-
 
 # ---- 主面板 ----
 tab1, tab2 = st.tabs(["📷 处理作业票", "📊 AI 看板"])
@@ -145,6 +142,31 @@ tab1, tab2 = st.tabs(["📷 处理作业票", "📊 AI 看板"])
 
 # ==================== Tab 1 ====================
 with tab1:
+    # ---- API 配置检查 ----
+    if not api_key:
+        st.warning("⚠️ 请先在左侧边栏填写 API Key，否则无法处理。点击左上角 **>** 展开边栏。")
+
+    # ---- 操作引导（根据当前状态动态显示）----
+    step = 1
+    if st.session_state.get("upload_done") and st.session_state.get("pending_files"):
+        step = 2
+    if st.session_state.get("run_processing"):
+        step = 3
+
+    guide = st.empty()
+    if step == 1:
+        guide.markdown("""
+        <div style="background:#e8f4fd;border-left:4px solid #007BFF;border-radius:0 8px 8px 0;padding:10px 14px;margin-bottom:8px;">
+            <b>第 1 步</b>：点击下方 <b>📤 上传</b> 选择作业票照片，或点击 <b>📷 拍照</b> 直接拍摄
+        </div>
+        """, unsafe_allow_html=True)
+    elif step == 2:
+        guide.markdown("""
+        <div style="background:#e8f4fd;border-left:4px solid #007BFF;border-radius:0 8px 8px 0;padding:10px 14px;margin-bottom:8px;">
+            <b>第 2 步</b>：照片已就绪，点击 <b>⚙️ 处理</b> 开始 AI 分析
+        </div>
+        """, unsafe_allow_html=True)
+
     # ---- 三个按钮：上传 / 拍照 / 处理 ----
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -152,7 +174,6 @@ with tab1:
     with c2:
         show_cam = st.button("📷 拍照", use_container_width=True)
     with c3:
-        # 上传完成才能点处理
         can_process = st.session_state.get("upload_done") and st.session_state.get("pending_files")
         run_clicked = st.button("⚙️ 处理", type="primary", use_container_width=True, disabled=not can_process)
 
@@ -227,7 +248,14 @@ with tab1:
                     ic = {"重大":"🔴","较大":"🟡","一般":"🟡","低风险":"🟢"}.get(d.risk_level or "", "")
                     (st.warning if d.has_abnormal else st.success)(f"{ic} {d.approval_opinion}")
         else:
-            st.caption("📷 拍照或选择作业票图片，Agent 自动完成识别 → 结构化 → 审批建议 → 预警")
+            st.markdown("""
+            <div style="text-align:center;padding:24px 0;color:#8b949e;">
+                <div style="font-size:40px;margin-bottom:10px;">🛡️</div>
+                <div style="font-size:16px;color:#c9d1d9;margin-bottom:6px;">上传作业票照片，AI 自动完成全部分析</div>
+                <div style="font-size:13px;">支持：动火作业票 · 带气作业票 · 临时用电作业票</div>
+                <div style="font-size:12px;margin-top:8px;color:#6e7681;">点击上方 <b>📤 上传</b> 选择照片，或 <b>📷 拍照</b> 直接拍摄</div>
+            </div>
+            """, unsafe_allow_html=True)
 
     # 有文件：预览缩略图
     if final_files and not run_clicked and not st.session_state.get("run_processing"):
