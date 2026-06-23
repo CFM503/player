@@ -165,16 +165,11 @@ with tab1:
 
     uploaded_files = st.session_state.get("pending_files")
     if st.session_state.get("show_uploader"):
-        picked = st.file_uploader("选择图片", type=["jpg","jpeg","png","bmp"], accept_multiple_files=True, label_visibility="collapsed", key="fu_main")
+        picked = st.file_uploader("选择图片", type=["jpg","jpeg","png","bmp"], accept_multiple_files=False, label_visibility="collapsed", key="fu_main")
         if picked:
-            st.session_state.pending_files = picked
-            uploaded_files = picked
-            # 上传反馈：显示文件列表
-            total_kb = sum(f.size for f in picked) / 1024
-            info_lines = [f"✅ 已选择 **{len(picked)}** 张图片（共 {total_kb:.0f} KB）"]
-            for f in picked:
-                info_lines.append(f"  📄 {f.name} — {f.size/1024:.0f} KB")
-            st.markdown("  \n".join(info_lines))
+            st.session_state.pending_files = [picked]
+            uploaded_files = [picked]
+            st.success(f"✅ {picked.name}（{picked.size/1024:.0f} KB）")
     if st.session_state.get("show_camera"):
         camera_photo = st.camera_input("拍照上传", label_visibility="collapsed", key="cam_main")
         if camera_photo:
