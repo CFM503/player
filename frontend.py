@@ -39,12 +39,20 @@ section[data-testid="stSidebar"] .block-container {{ padding-top: 0.5rem; }}
 .stTabs [data-baseweb="tab"] {{ color: var(--dim); font-size: 13px; padding: 6px 16px; border-radius: 4px; }}
 .stTabs [aria-selected="true"] {{ color: var(--text) !important; background: var(--bg) !important; }}
 
-/* 上传区 */
-[data-testid="stFileUploader"], [data-testid="stCameraInput"] {{ padding: 0 !important; }}
+/* 上传区 - 自适应宽度 */
+[data-testid="stFileUploader"], [data-testid="stCameraInput"] {{ padding: 0 !important; margin: 0 !important; }}
 [data-testid="stFileUploader"] section, [data-testid="stCameraInput"] section {{
     background: var(--card) !important; border: 1px dashed var(--border) !important;
-    border-radius: 6px !important; padding: 6px 10px !important; min-height: 0 !important;
+    border-radius: 6px !important; padding: 4px 8px !important; min-height: 0 !important;
 }}
+/* file_uploader 自适应内容宽度 */
+[data-testid="stFileUploader"] {{ max-width: 320px !important; }}
+/* camera_input 压成小按钮 */
+[data-testid="stCameraInput"] {{ max-width: 50px !important; }}
+[data-testid="stCameraInput"] section {{ padding: 2px !important; min-height: 0 !important; }}
+[data-testid="stCameraInput"] [data-testid="stImage"] {{ display: none !important; }}
+/* 列间距清零 */
+[data-testid="stHorizontalBlock"] {{ gap: 4px !important; }}
 
 /* 按钮 */
 .stButton > button {{
@@ -80,11 +88,15 @@ section[data-testid="stSidebar"] .block-container {{ padding-top: 0.5rem; }}
 .hlog .lt {{ color: var(--green); font-weight: bold; border-bottom: 1px solid #1a3a1a; padding-bottom: 3px; margin-bottom: 6px; font-size: 13px; }}
 .hlog .lo {{ color: #39d353; }} .hlog .le {{ color: #f85149; }} .hlog .lk {{ color: #58a6ff; }} .hlog .lw {{ color: #d29922; }}
 
-/* 进度条 */
-.stProgress {{ margin: 0 !important; padding: 0 !important; height: auto !important; }}
-.stProgress > div {{ margin: 0 !important; height: 3px !important; }}
+/* 进度条 - 细线，不重叠 */
+.stProgress {{ margin: 0 !important; padding: 0 !important; }}
+.stProgress > div {{ margin: 0 !important; height: 3px !important; border-radius: 2px !important; }}
 .stProgress > div > div {{ background: var(--green) !important; }}
-.stProgress + div {{ margin-top: 2px !important; }}
+/* 隐藏 Streamlit 自带的蓝色 spinner 进度条 */
+.stSpinner {{ display: none !important; }}
+/* 图片自适应，hover 放大提示 */
+[data-testid="stImage"] img {{ border-radius: 4px; cursor: zoom-in; }}
+[data-testid="stImage"] img:hover {{ opacity: 0.85; }}
 
 /* 表格 */
 .stDataFrame {{ border: 1px solid var(--border); border-radius: 6px; }}
@@ -126,14 +138,13 @@ tab1, tab2 = st.tabs(["📷 处理作业票", "📊 AI 看板"])
 # ==================== Tab 1 ====================
 with tab1:
     # 上传条：三个控件紧挨一行
-    c1, c2, c3, c4 = st.columns([6, 1, 3, 1])
-    with c1:
+    c_upload, c_cam, c_btn = st.columns([5, 1, 1])
+    with c_upload:
         uploaded_files = st.file_uploader("上传照片", type=["jpg","jpeg","png","bmp"], accept_multiple_files=True, label_visibility="collapsed")
-    with c2:
-        camera_photo = st.camera_input("📷", label_visibility="collapsed", help="拍照")
-    with c3:
-        pass  # 留空，上传区自然占位
-    with c4:
+    with c_cam:
+        camera_photo = st.camera_input("📷", label_visibility="collapsed", help="拍照上传")
+    with c_btn:
+        st.markdown("<div style='padding-top:2px'></div>", unsafe_allow_html=True)
         has_files = bool(uploaded_files) or camera_photo is not None
         run_clicked = st.button("🚀 处理", type="primary", use_container_width=True, disabled=not has_files)
 
@@ -190,21 +201,19 @@ with tab1:
             save_path = os.path.join(upload_dir, f"{int(time.time())}_{idx}{suffix}")
             with open(save_path, "wb") as f: f.write(uploaded.getvalue())
 
-            # 分栏：左边结果+进度条，右边日志
+            # 分栏：左边结果，右边日志
             col_r, col_l = st.columns([3, 2])
 
-            # 进度条放在左栏顶部（不重叠）
+            # 左栏：进度条 + 预览图（点击放大可看原图）
             with col_r:
-                progress = st.progress(0, text=f"[{idx+1}/{len(uploaded_files)}] {uploaded.name}")
-                st.image(save_path, caption=uploaded.name, width=280)
+                status_text = st.empty()
+                progress = st.progress(0)
+                status_text.caption(f"[{idx+1}/{len(uploaded_files)}] {uploaded.name} — 准备中...")
+                st.image(save_path, caption=uploaded.name, use_container_width=True)
 
-            # 右栏：查看原图按钮 + 日志面板
+            # 右栏：日志面板
             with col_l:
-                if st.button("🖼️ 查看原图", key=f"img_{idx}", use_container_width=True):
-                    @st.dialog("原图", width="large")
-                    def show_img():
-                        st.image(save_path, caption=uploaded.name)
-                    show_img()
+                pass  # 日志由 log_ph 占位渲染
 
             log_ph = col_l.empty()
             log_buf = []
@@ -240,7 +249,8 @@ with tab1:
                         hlog(s)
                         for k, p in _sp.items():
                             if f"Agent {k}" in s:
-                                progress.progress(p, text=f"[{idx+1}/{len(uploaded_files)}] {_sc[k]}...")
+                                progress.progress(p)
+                                status_text.caption(f"[{idx+1}/{len(uploaded_files)}] {_sc[k]}...")
                     return len(s) if s else 0
                 def flush(self): pass
 
@@ -253,7 +263,8 @@ with tab1:
             finally:
                 sys.stdout = _orig
 
-            progress.progress(100, text=f"[{idx+1}/{len(uploaded_files)}] ✅ 完成")
+            progress.progress(100)
+            status_text.caption(f"[{idx+1}/{len(uploaded_files)}] ✅ 完成")
 
             # 左栏：结果展示
             with col_r:
