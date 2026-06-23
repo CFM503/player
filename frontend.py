@@ -81,8 +81,10 @@ section[data-testid="stSidebar"] .block-container {{ padding-top: 0.5rem; }}
 .hlog .lo {{ color: #39d353; }} .hlog .le {{ color: #f85149; }} .hlog .lk {{ color: #58a6ff; }} .hlog .lw {{ color: #d29922; }}
 
 /* 进度条 */
-.stProgress > div {{ margin: 0 !important; height: 4px !important; }}
+.stProgress {{ margin: 0 !important; padding: 0 !important; height: auto !important; }}
+.stProgress > div {{ margin: 0 !important; height: 3px !important; }}
 .stProgress > div > div {{ background: var(--green) !important; }}
+.stProgress + div {{ margin-top: 2px !important; }}
 
 /* 表格 */
 .stDataFrame {{ border: 1px solid var(--border); border-radius: 6px; }}
@@ -123,13 +125,15 @@ tab1, tab2 = st.tabs(["📷 处理作业票", "📊 AI 看板"])
 
 # ==================== Tab 1 ====================
 with tab1:
-    # 上传条：一行紧凑
-    c1, c2, c3 = st.columns([5, 2, 1])
+    # 上传条：三个控件紧挨一行
+    c1, c2, c3, c4 = st.columns([6, 1, 3, 1])
     with c1:
-        uploaded_files = st.file_uploader("选择图片", type=["jpg","jpeg","png","bmp"], accept_multiple_files=True, label_visibility="collapsed")
+        uploaded_files = st.file_uploader("上传照片", type=["jpg","jpeg","png","bmp"], accept_multiple_files=True, label_visibility="collapsed")
     with c2:
-        camera_photo = st.camera_input("拍照", label_visibility="collapsed", help="手机拍照")
+        camera_photo = st.camera_input("📷", label_visibility="collapsed", help="拍照")
     with c3:
+        pass  # 留空，上传区自然占位
+    with c4:
         has_files = bool(uploaded_files) or camera_photo is not None
         run_clicked = st.button("🚀 处理", type="primary", use_container_width=True, disabled=not has_files)
 
@@ -179,34 +183,50 @@ with tab1:
         st.session_state.results = []
 
         for idx, uploaded in enumerate(uploaded_files):
-            progress = st.progress(0, text=f"[{idx+1}/{len(uploaded_files)}] {uploaded.name}")
-            col_r, col_l = st.columns([3, 2])
-            log_ph = col_l.empty()
-            log_buf = []
-
-            def hlog(line):
-                log_buf.append(line)
-                import html as _h
-                parts = []
-                for l in log_buf[-35:]:
-                    c = ""
-                    if "Tool" in l: c = "lo"
-                    elif "FAIL" in l or "出错" in l: c = "le"
-                    elif "OK" in l or "通过" in l or "完成" in l: c = "lk"
-                    elif "重试" in l or "未通过" in l: c = "lw"
-                    parts.append(f'<div class="{c}">{_h.escape(l)}</div>')
-                log_ph.markdown(f'<div class="hlog"><div class="lt">🤖 AGENT THINKING...</div>{"".join(parts)}</div>', unsafe_allow_html=True)
-
+            # 先保存文件
             suffix = os.path.splitext(uploaded.name)[1] or ".jpg"
             upload_dir = os.path.join(os.path.dirname(__file__), "uploads")
             os.makedirs(upload_dir, exist_ok=True)
             save_path = os.path.join(upload_dir, f"{int(time.time())}_{idx}{suffix}")
             with open(save_path, "wb") as f: f.write(uploaded.getvalue())
 
-            with col_r: st.image(save_path, caption=uploaded.name, width=280)
+            # 分栏：左边结果+进度条，右边日志
+            col_r, col_l = st.columns([3, 2])
 
-            hlog(f">>> {uploaded.name}")
-            progress.progress(5, text=f"[{idx+1}/{len(uploaded_files)}] OCR...")
+            # 进度条放在左栏顶部（不重叠）
+            with col_r:
+                progress = st.progress(0, text=f"[{idx+1}/{len(uploaded_files)}] {uploaded.name}")
+                st.image(save_path, caption=uploaded.name, width=280)
+
+            # 右栏：查看原图按钮 + 日志面板
+            with col_l:
+                if st.button("🖼️ 查看原图", key=f"img_{idx}", use_container_width=True):
+                    @st.dialog("原图", width="large")
+                    def show_img():
+                        st.image(save_path, caption=uploaded.name)
+                    show_img()
+
+            log_ph = col_l.empty()
+            log_buf = []
+
+            def hlog(line, _save_path=save_path, _name=uploaded.name):
+                log_buf.append(line)
+                import html as _h
+                parts = []
+                for l in log_buf[-30:]:
+                    c = ""
+                    if "Tool" in l: c = "lo"
+                    elif "FAIL" in l or "出错" in l: c = "le"
+                    elif "OK" in l or "通过" in l or "完成" in l: c = "lk"
+                    elif "重试" in l or "未通过" in l: c = "lw"
+                    parts.append(f'<div class="{c}">{_h.escape(l)}</div>')
+                log_ph.markdown(
+                    f'<div class="hlog">'
+                    f'<div class="lt">📄 {_h.escape(_name)} | 🤖 AGENT THINKING...</div>'
+                    f'{"".join(parts)}</div>',
+                    unsafe_allow_html=True)
+
+            hlog(f">>> 收到任务: {uploaded.name}")
 
             _orig = sys.stdout
             result = {"ocr": None, "data": None}
@@ -235,6 +255,7 @@ with tab1:
 
             progress.progress(100, text=f"[{idx+1}/{len(uploaded_files)}] ✅ 完成")
 
+            # 左栏：结果展示
             with col_r:
                 if result["data"]:
                     d = result["data"]
