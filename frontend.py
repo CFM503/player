@@ -250,38 +250,43 @@ div[data-baseweb="notification"] {
     font-size: 12px !important;
 }
 .hlog {
-    background: #0f172a !important; /* 护眼深色蓝 */
-    border: 1px solid #1e293b !important;
+    background: #090d16 !important; /* 更深的黑蓝背景，大幅提高对比度 */
+    border: 1px solid #10b981 !important; /* 绿色边框 */
     border-radius: 10px !important;
     padding: 14px !important;
-    color: #38bdf8 !important; /* 柔和青色 */
+    color: #34d399 !important; /* 主文本：高亮经典绿 */
     line-height: 1.6 !important;
     overflow-y: auto !important;
-    box-shadow: inset 0 2px 8px rgba(0,0,0,0.2) !important;
+    box-shadow: inset 0 2px 8px rgba(0,0,0,0.4), 0 4px 12px rgba(16, 185, 129, 0.08) !important;
     position: relative !important;
+    margin-top: 28px !important; /* 往下移动，防止与上面的按钮或进度条重叠 */
+    margin-bottom: 16px !important;
 }
 .hlog::after {
     content: " " !important;
     display: block !important;
     position: absolute !important;
     top: 0; left: 0; bottom: 0; right: 0 !important;
-    background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.15) 50%) !important;
+    background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%) !important;
     z-index: 2 !important;
     background-size: 100% 2px !important;
     pointer-events: none !important;
 }
-.hlog .lt {
-    color: #f8fafc !important;
+.stMarkdown .hlog div {
+    color: #34d399 !important; /* 默认未分类日志行：高亮经典绿 */
+}
+.stMarkdown .hlog div.lt {
+    color: #10b981 !important; /* 头部标题：亮绿 */
     font-weight: 700 !important;
-    border-bottom: 1px solid #334155 !important;
+    border-bottom: 1px solid #1f2937 !important;
     padding-bottom: 6px !important;
     margin-bottom: 10px !important;
     font-size: 13px !important;
 }
-.hlog .lo { color: #38bdf8 !important; }
-.hlog .le { color: #f87171 !important; font-weight: bold !important; }
-.hlog .lk { color: #34d399 !important; font-weight: bold !important; }
-.hlog .lw { color: #fbbf24 !important; font-weight: bold !important; }
+.stMarkdown .hlog div.lo { color: #a7f3d0 !important; } /* 工具输出：淡绿 */
+.stMarkdown .hlog div.le { color: #f87171 !important; font-weight: bold !important; } /* 错误：红色高亮 */
+.stMarkdown .hlog div.lk { color: #34d399 !important; font-weight: bold !important; } /* 完成/通过：经典绿 */
+.stMarkdown .hlog div.lw { color: #fbbf24 !important; font-weight: bold !important; } /* 警告：黄色 */
 
 /* 进度条 */
 .stProgress { margin: 8px 0 !important; padding: 0 !important; }

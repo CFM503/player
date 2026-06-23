@@ -57,7 +57,7 @@ class LLMBrain:
 
     def __init__(self, api_key: str, base_url: str, model_name: str):
         from openai import OpenAI
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=120.0)
         self.model_name = model_name
 
     def extract_sheet_json(self, ocr_text: str) -> SecuritySheetData:
@@ -81,6 +81,12 @@ class LLMBrain:
             "OCR容错：✓可能识别为√/V/7，×识别为X/x"
         )
 
+        # 截断过长 OCR 文本，避免 API 超时（保留前 2000 字符，通常包含票头+关键信息）
+        if len(ocr_text) > 2000:
+            print(f"[LLM Log] OCR 文本 {len(ocr_text)} 字符，截断至 2000 字符以加速推理")
+            ocr_text = ocr_text[:2000]
+
+        print(f"[LLM Log] 发送请求中，请等待...")
         response = self.client.chat.completions.create(
             model=self.model_name,
             messages=[
@@ -89,6 +95,7 @@ class LLMBrain:
             ],
             response_format={"type": "json_object"},
             temperature=0.1,
+            timeout=120,
         )
 
         return SecuritySheetData(**json.loads(response.choices[0].message.content))
@@ -378,6 +385,7 @@ class SecurityAgent:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=300,
+                timeout=120,
             )
             opinion = response.choices[0].message.content.strip()
 
