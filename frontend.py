@@ -220,13 +220,33 @@ with tab1:
         agent = SecurityAgent(brain=brain)
         st.session_state.results = []
 
+        # ---- 上传保存进度 ----
+        upload_status = st.empty()
+        upload_progress = st.progress(0)
+        saved_paths = []
+        upload_dir = os.path.join(os.path.dirname(__file__), "uploads")
+        os.makedirs(upload_dir, exist_ok=True)
+
+        for i, f in enumerate(final_files):
+            pct = int((i / len(final_files)) * 100)
+            upload_progress.progress(pct)
+            upload_status.caption(f"📤 保存中... {f.name} ({i+1}/{len(final_files)})")
+            suffix = os.path.splitext(f.name)[1] or ".jpg"
+            save_path = os.path.join(upload_dir, f"{int(time.time())}_{i}{suffix}")
+            with open(save_path, "wb") as fp:
+                fp.write(f.getvalue())
+            saved_paths.append(save_path)
+            time.sleep(0.1)  # 让进度条可见
+
+        upload_progress.progress(100)
+        upload_status.caption(f"✅ {len(saved_paths)} 张图片已保存，开始 Agent 处理...")
+        time.sleep(0.3)
+        upload_progress.empty()
+        upload_status.empty()
+
+        # ---- 逐张处理 ----
         for idx, uploaded in enumerate(final_files):
-            # 先保存文件
-            suffix = os.path.splitext(uploaded.name)[1] or ".jpg"
-            upload_dir = os.path.join(os.path.dirname(__file__), "uploads")
-            os.makedirs(upload_dir, exist_ok=True)
-            save_path = os.path.join(upload_dir, f"{int(time.time())}_{idx}{suffix}")
-            with open(save_path, "wb") as f: f.write(uploaded.getvalue())
+            save_path = saved_paths[idx]
 
             # 分栏：左边结果，右边日志
             col_r, col_l = st.columns([3, 2])
