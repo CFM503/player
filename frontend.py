@@ -14,7 +14,7 @@ _cfg = json.load(open(_cfg_path, encoding="utf-8")) if os.path.exists(_cfg_path)
 
 st.set_page_config(page_title="安全哨兵", page_icon="🛡️", layout="wide")
 
-# ---- 紧凑 CSS ----
+# ---- 紧凑 CSS + 黑客风格 ----
 st.markdown("""
 <style>
 .block-container { padding-top: 1rem; padding-bottom: 0.5rem; }
@@ -30,17 +30,26 @@ st.markdown("""
 .step-result { color: #ccc; font-size: 12px; }
 .check-line { font-size: 12px; line-height: 1.5; }
 .tool-line { color: #00cc33; font-size: 12px; margin: 1px 0 1px 12px; }
-.raw-log {
-    background: #0a0a0a; border: 1px solid #222; border-radius: 6px;
-    padding: 8px; font-family: monospace; font-size: 11px; color: #555;
-    max-height: 200px; overflow-y: auto; line-height: 1.4;
-}
 .metric-card {
     background: #1a1a2e; border: 1px solid #333; border-radius: 8px;
     padding: 10px 14px; text-align: center;
 }
 .metric-val { font-size: 22px; font-weight: 700; color: #00d4ff; }
 .metric-label { font-size: 11px; color: #888; }
+/* 黑客帝国风格日志面板 */
+.hacker-log {
+    background: #0a0a0a; border: 1px solid #00ff41; border-radius: 8px;
+    padding: 12px 16px; font-family: 'Courier New', 'Consolas', monospace;
+    font-size: 13px; color: #00ff41; line-height: 1.6;
+    max-height: 75vh; overflow-y: auto;
+    box-shadow: 0 0 20px rgba(0, 255, 65, 0.1);
+}
+.hacker-log .log-line { margin: 1px 0; }
+.hacker-log .log-tool { color: #00ccaa; }
+.hacker-log .log-err { color: #ff4444; }
+.hacker-log .log-ok { color: #00ff41; }
+.hacker-log .log-warn { color: #ffb800; }
+.hacker-log .log-title { color: #00ff41; font-weight: bold; font-size: 14px; border-bottom: 1px solid #00ff4133; padding-bottom: 4px; margin-bottom: 8px; }
 #MainMenu, footer, header { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
@@ -178,7 +187,6 @@ with tab_process:
     run_btn = st.button("🚀 开始批量处理", type="primary", use_container_width=True)
 
     if not run_btn:
-        # 预览图片
         cols = st.columns(min(len(uploaded_files), 4))
         for i, f in enumerate(uploaded_files[:4]):
             with cols[i % 4]:
@@ -187,7 +195,7 @@ with tab_process:
             st.caption(f"还有 {len(uploaded_files)-4} 张...")
         st.stop()
 
-    # ---- 批量执行 ----
+    # ---- 批量执行：左右分栏 ----
     from agent_core import SecurityAgent, LLMBrain
 
     brain = LLMBrain(api_key=api_key, base_url=base_url, model_name=model_name)
@@ -196,50 +204,75 @@ with tab_process:
     all_results = []
 
     for idx, uploaded in enumerate(uploaded_files):
-        st.markdown(f"---\n### 📄 [{idx+1}/{len(uploaded_files)}] {uploaded.name}")
+        # 进度条
+        progress = st.progress(0, text=f"📄 [{idx+1}/{len(uploaded_files)}] {uploaded.name} — 准备中...")
 
+        # 左右分栏：左边结果，右边黑客风格日志
+        col_result, col_log = st.columns([3, 2])
+
+        # 右栏：黑客日志面板（先占位）
+        log_placeholder = col_log.empty()
+        log_lines = []
+
+        def update_hacker_log(line):
+            log_lines.append(line)
+            # 构建 HTML 日志
+            html_lines = []
+            for l in log_lines:
+                css = "log-line"
+                if "Tool" in l:
+                    css = "log-tool"
+                elif "FAIL" in l or "出错" in l:
+                    css = "log-err"
+                elif "OK" in l or "通过" in l or "完成" in l:
+                    css = "log-ok"
+                elif "重试" in l or "未通过" in l:
+                    css = "log-warn"
+                # 转义 HTML
+                import html as _html
+                safe = _html.escape(l)
+                html_lines.append(f'<div class="{css}">{safe}</div>')
+            log_html = (
+                '<div class="hacker-log">'
+                '<div class="log-title">🤖 AGENT THINKING...</div>'
+                + "".join(html_lines[-30:]) +  # 最近30行
+                '</div>'
+            )
+            log_placeholder.markdown(log_html, unsafe_allow_html=True)
+
+        # 写入临时文件
         suffix = os.path.splitext(uploaded.name)[1] or ".jpg"
         tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
         tmp.write(uploaded.getvalue())
         tmp.close()
         image_path = tmp.name
 
-        raw_logs: List[str] = []
-        step_ph = st.empty()
-        log_ph = st.empty()
-        result_data = {"text": None, "json": None}
+        # 左栏先显示图片
+        with col_result:
+            st.image(uploaded, caption=uploaded.name, width=350)
 
-        def render(logs):
-            steps = parse_log_to_steps(logs)
-            with step_ph.container():
-                for i, s in enumerate(steps):
-                    icon = {"pending": "⬜", "running": "🔄", "done": "✅", "retry": "🔄", "error": "❌"}.get(s.status, "⬜")
-                    bc = {"done": "#1a3a1a", "running": "#3a3a00", "retry": "#3a2a00", "error": "#3a1a1a"}.get(s.status, "#222")
-                    st.markdown(f'<div class="step-card" style="border-color:{bc}">', unsafe_allow_html=True)
-                    st.markdown(f'<div class="step-header">{icon} {s.emoji} {s.name}</div>', unsafe_allow_html=True)
-                    if s.action:
-                        st.markdown(f'<div class="step-action">→ {s.action}</div>', unsafe_allow_html=True)
-                    for t in s.tools:
-                        st.markdown(f'<div class="tool-line">🔧 {t}</div>', unsafe_allow_html=True)
-                    for c in s.checks:
-                        st.markdown(f'<div class="check-line">{c}</div>', unsafe_allow_html=True)
-                    if s.result:
-                        cls = {"done": "step-result-ok", "retry": "step-result-retry", "error": "step-result-error"}.get(s.status, "step-result")
-                        for rl in s.result.strip().split("\n"):
-                            if rl.strip():
-                                st.markdown(f'<div class="{cls}">{rl.strip()}</div>', unsafe_allow_html=True)
-                    st.markdown('</div>', unsafe_allow_html=True)
-            with log_ph.expander("📜 原始日志", expanded=False):
-                st.markdown(f'<div class="raw-log">{"<br>".join(logs)}</div>', unsafe_allow_html=True)
+        update_hacker_log(f">>> 收到任务: {uploaded.name}")
+        progress.progress(5, text=f"📄 [{idx+1}/{len(uploaded_files)}] OCR 识别中...")
 
+        # 捕获 stdout
         _orig = sys.stdout
+        result_data = {"text": None, "json": None}
+        agent_log_lines = []
+        step_names = {"Plan": "规划", "Perceive": "感知", "Reason": "推理", "Reflect": "反思", "Act": "执行", "Report": "总结"}
+        step_progress = {"Plan": 10, "Perceive": 25, "Reason": 50, "Reflect": 70, "Act": 85, "Report": 98}
 
         class Capture(io.TextIOBase):
             def write(self, s):
                 s = s.strip()
                 if s:
-                    raw_logs.append(s)
-                    render(raw_logs)
+                    agent_log_lines.append(s)
+                    # 更新黑客日志
+                    update_hacker_log(s)
+                    # 更新进度条
+                    for key, pct in step_progress.items():
+                        if f"Agent {key}" in s:
+                            label = step_names.get(key, key)
+                            progress.progress(pct, text=f"📄 [{idx+1}/{len(uploaded_files)}] {label}...")
                 return len(s) if s else 0
             def flush(self):
                 pass
@@ -250,84 +283,80 @@ with tab_process:
             result_data["text"] = ocr_text
             result_data["json"] = structured
         except Exception as e:
-            raw_logs.append(f"❌ 出错: {e}")
-            render(raw_logs)
+            update_hacker_log(f"❌ 出错: {e}")
         finally:
             sys.stdout = _orig
 
         if os.path.exists(image_path):
             os.remove(image_path)
 
-        # 结果卡片
-        if result_data["json"]:
-            d = result_data["json"]
-            all_results.append(d)
+        progress.progress(100, text=f"📄 [{idx+1}/{len(uploaded_files)}] ✅ 处理完成")
 
-            # 指标行
-            c1, c2, c3, c4 = st.columns(4)
-            with c1:
-                st.markdown(f'<div class="metric-card"><div class="metric-val">{d.ticket_id}</div><div class="metric-label">票号</div></div>', unsafe_allow_html=True)
-            with c2:
-                color = "#ff4444" if d.has_abnormal else "#00ff41"
-                val = f"{len(d.issues)} 项隐患" if d.has_abnormal else "正常"
-                st.markdown(f'<div class="metric-card"><div class="metric-val" style="color:{color}">{val}</div><div class="metric-label">安全状态</div></div>', unsafe_allow_html=True)
-            with c3:
-                st.markdown(f'<div class="metric-card"><div class="metric-val">{len(d.safety_measures)}</div><div class="metric-label">措施</div></div>', unsafe_allow_html=True)
-            with c4:
-                conc = ", ".join(f"{v}%" for v in d.gas_concentration) if d.gas_concentration else "无数据"
-                st.markdown(f'<div class="metric-card"><div class="metric-val" style="font-size:14px">{conc}</div><div class="metric-label">浓度</div></div>', unsafe_allow_html=True)
+        # 左栏展示结果
+        with col_result:
+            if result_data["json"]:
+                d = result_data["json"]
+                all_results.append(d)
 
-            # 审批建议（醒目展示）
-            if d.approval_opinion:
-                risk_colors = {"重大": "error", "较大": "warning", "一般": "warning", "低风险": "success"}
-                risk_icon = {"重大": "🔴", "较大": "🟡", "一般": "🟡", "低风险": "🟢"}.get(d.risk_level or "", "")
-                if d.has_abnormal:
-                    st.warning(f"{risk_icon} **审批建议（风险等级：{d.risk_level or '未评估'}）：** {d.approval_opinion}")
-                else:
-                    st.success(f"🟢 **审批建议：** {d.approval_opinion}")
+                c1, c2, c3, c4 = st.columns(4)
+                with c1:
+                    st.markdown(f'<div class="metric-card"><div class="metric-val">{d.ticket_id}</div><div class="metric-label">票号</div></div>', unsafe_allow_html=True)
+                with c2:
+                    color = "#ff4444" if d.has_abnormal else "#00ff41"
+                    val = f"{len(d.issues)} 项隐患" if d.has_abnormal else "正常"
+                    st.markdown(f'<div class="metric-card"><div class="metric-val" style="color:{color}">{val}</div><div class="metric-label">状态</div></div>', unsafe_allow_html=True)
+                with c3:
+                    st.markdown(f'<div class="metric-card"><div class="metric-val">{len(d.safety_measures)}</div><div class="metric-label">措施</div></div>', unsafe_allow_html=True)
+                with c4:
+                    conc = ", ".join(f"{v}%" for v in d.gas_concentration) if d.gas_concentration else "无"
+                    st.markdown(f'<div class="metric-card"><div class="metric-val" style="font-size:14px">{conc}</div><div class="metric-label">浓度</div></div>', unsafe_allow_html=True)
 
-            # 预警状态
-            if d.has_abnormal and d.issues:
-                st.error(f"🚨 **已触发隐患预警** — {len(d.issues)} 项异常已记录，企业微信通知已发送（需配置 WECHAT_WEBHOOK_URL）")
+                # 审批建议
+                if d.approval_opinion:
+                    risk_icon = {"重大": "🔴", "较大": "🟡", "一般": "🟡", "低风险": "🟢"}.get(d.risk_level or "", "")
+                    if d.has_abnormal:
+                        st.warning(f"{risk_icon} **审批建议（{d.risk_level or '未评估'}）：** {d.approval_opinion}")
+                    else:
+                        st.success(f"🟢 **审批建议：** {d.approval_opinion}")
 
-            # 详情 Tabs
-            t1, t2, t3 = st.tabs(["📦 结构化数据", "📝 OCR 原文", f"⚠️ 隐患 ({len(d.issues)})"])
-            with t1:
-                st.json(d.model_dump())
-            with t2:
-                if result_data["text"]:
-                    st.code(result_data["text"], language=None)
-            with t3:
-                if d.issues:
-                    for issue in d.issues:
-                        st.markdown(f"- **{issue.item_name}** — {issue.status}" + (f" ({issue.raw_text})" if issue.raw_text else ""))
-                else:
-                    st.success("无隐患，所有检查项正常。")
+                if d.has_abnormal and d.issues:
+                    st.error(f"🚨 已触发隐患预警 — {len(d.issues)} 项异常")
+
+                # 详情
+                t1, t2, t3 = st.tabs(["📦 数据", "📝 OCR", f"⚠️ 隐患 ({len(d.issues)})"])
+                with t1:
+                    st.json(d.model_dump())
+                with t2:
+                    if result_data["text"]:
+                        st.code(result_data["text"][:2000], language=None)
+                with t3:
+                    if d.issues:
+                        for issue in d.issues:
+                            st.markdown(f"- **{issue.item_name}** — {issue.status}" + (f" ({issue.raw_text})" if issue.raw_text else ""))
+                    else:
+                        st.success("无隐患。")
 
     # 批量汇总
     if len(all_results) > 1:
         st.divider()
-        st.markdown(f"### 📊 批量处理汇总（{len(all_results)} 张）")
+        st.markdown(f"### 📊 批量汇总（{len(all_results)} 张）")
         abnormal_count = sum(1 for d in all_results if d.has_abnormal)
-        normal_count = len(all_results) - abnormal_count
         sc1, sc2, sc3 = st.columns(3)
         with sc1:
             st.metric("总处理", len(all_results))
         with sc2:
-            st.metric("有隐患", abnormal_count, delta=f"-{abnormal_count}" if abnormal_count else None)
+            st.metric("有隐患", abnormal_count)
         with sc3:
-            st.metric("正常", normal_count)
+            st.metric("正常", len(all_results) - abnormal_count)
 
-        # 汇总表格
         import pandas as pd
         rows = []
         for d in all_results:
             rows.append({
                 "票号": d.ticket_id, "场站": d.station_name,
                 "动火人": d.worker_id, "日期": d.check_date,
-                "浓度": str(d.gas_concentration), "措施": len(d.safety_measures),
                 "状态": "有隐患" if d.has_abnormal else "正常",
-                "隐患数": len(d.issues),
+                "风险": d.risk_level or "-", "隐患数": len(d.issues),
             })
         st.dataframe(pd.DataFrame(rows), use_container_width=True)
 

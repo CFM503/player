@@ -168,7 +168,7 @@ class AgentTools:
 
     @staticmethod
     def save_to_db(data: SecuritySheetData, raw_ocr: str = "") -> bool:
-        """写入 SQLite"""
+        """写入 SQLite，自动迁移旧表"""
         import sqlite3
         db_path = os.path.join(os.path.dirname(__file__), "security_data.db")
         print(f"[Tool] 写入 SQLite: {db_path}")
@@ -186,6 +186,14 @@ class AgentTools:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # 自动迁移：给旧表补列
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(hse_fire_work_tickets)").fetchall()}
+        for col, typ in [("approval_opinion", "TEXT"), ("risk_level", "TEXT")]:
+            if col not in existing:
+                conn.execute(f"ALTER TABLE hse_fire_work_tickets ADD COLUMN {col} {typ}")
+                print(f"[Tool] 旧表迁移：新增列 {col}")
+
         conn.execute(
             "INSERT INTO hse_fire_work_tickets "
             "(ticket_id,station_name,content,worker_id,check_date,"
