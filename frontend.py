@@ -45,27 +45,31 @@ section[data-testid="stSidebar"] .block-container {{ padding-top: 0.5rem; }}
     background: var(--card) !important; border: 1px dashed var(--border) !important;
     border-radius: 6px !important; padding: 4px 8px !important; min-height: 0 !important;
 }}
-/* file_uploader 自适应内容宽度 */
-[data-testid="stFileUploader"] {{ max-width: 320px !important; }}
-/* camera_input 压成小按钮 */
-[data-testid="stCameraInput"] {{ max-width: 50px !important; }}
-[data-testid="stCameraInput"] section {{ padding: 2px !important; min-height: 0 !important; }}
+/* 上传区 - 统一蓝色按钮外观 */
+[data-testid="stFileUploader"], [data-testid="stCameraInput"] {{ padding: 0 !important; margin: 0 !important; }}
+[data-testid="stFileUploader"] section, [data-testid="stCameraInput"] section {{
+    background: #007BFF !important; border: none !important;
+    border-radius: 8px !important; padding: 8px 16px !important;
+    min-height: 40px !important; display: flex !important; align-items: center !important; justify-content: center !important;
+}}
+[data-testid="stFileUploader"] label, [data-testid="stCameraInput"] label {{ color: #fff !important; font-size: 14px !important; font-weight: 500 !important; }}
+[data-testid="stFileUploader"] section svg, [data-testid="stCameraInput"] section svg {{ fill: #fff !important; }}
+[data-testid="stFileUploader"] section p, [data-testid="stCameraInput"] section p {{ color: rgba(255,255,255,0.8) !important; font-size: 12px !important; }}
 [data-testid="stCameraInput"] [data-testid="stImage"] {{ display: none !important; }}
-/* 列间距清零 */
-[data-testid="stHorizontalBlock"] {{ gap: 4px !important; }}
+/* 列间距 */
+[data-testid="stHorizontalBlock"] {{ gap: 6px !important; }}
 
-/* 按钮 */
+/* 按钮 - 统一蓝色 */
 .stButton > button {{
-    background: var(--card) !important; color: var(--text) !important;
-    border: 1px solid var(--border) !important; border-radius: 6px !important;
-    padding: 4px 14px !important; font-size: 13px !important; min-height: 0 !important;
-    transition: all 0.15s;
+    background: #007BFF !important; color: #fff !important;
+    border: none !important; border-radius: 8px !important;
+    padding: 8px 16px !important; font-size: 14px !important; font-weight: 500 !important;
+    min-height: 40px !important; transition: all 0.15s;
 }}
-.stButton > button:hover {{ border-color: var(--blue) !important; color: var(--blue) !important; }}
-.stButton > button[kind="primary"] {{
-    background: #238636 !important; border-color: #2ea043 !important; color: #fff !important;
-}}
-.stButton > button[kind="primary"]:hover {{ background: #2ea043 !important; }}
+.stButton > button:hover {{ background: #0056b3 !important; }}
+.stButton > button:disabled {{ background: #b0d4ff !important; color: #fff !important; }}
+.stButton > button[kind="primary"] {{ background: #007BFF !important; }}
+.stButton > button[kind="primary"]:hover {{ background: #0056b3 !important; }}
 
 /* 指标卡 */
 .kpi {{ background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; text-align: center; }}
@@ -137,16 +141,22 @@ tab1, tab2 = st.tabs(["📷 处理作业票", "📊 AI 看板"])
 
 # ==================== Tab 1 ====================
 with tab1:
-    # 上传条：三个控件紧挨一行
-    c_upload, c_cam, c_btn = st.columns([5, 1, 1])
-    with c_upload:
-        uploaded_files = st.file_uploader("上传照片", type=["jpg","jpeg","png","bmp"], accept_multiple_files=True, label_visibility="collapsed")
-    with c_cam:
-        camera_photo = st.camera_input("📷", label_visibility="collapsed", help="拍照上传")
-    with c_btn:
-        st.markdown("<div style='padding-top:2px'></div>", unsafe_allow_html=True)
+    # ---- 照片管理面板 ----
+    st.markdown("""
+    <div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:10px;padding:10px 16px;margin-bottom:8px;">
+        <div style="font-size:13px;color:#495057;font-weight:600;margin-bottom:6px;">📷 照片管理</div>
+        <div style="border-top:1px solid #dee2e6;margin-bottom:8px;"></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    c_btn1, c_btn2, c_btn3 = st.columns(3)
+    with c_btn1:
+        uploaded_files = st.file_uploader("📤 上传", type=["jpg","jpeg","png","bmp"], accept_multiple_files=True, label_visibility="collapsed")
+    with c_btn2:
+        camera_photo = st.camera_input("📷 拍照", label_visibility="collapsed")
+    with c_btn3:
         has_files = bool(uploaded_files) or camera_photo is not None
-        run_clicked = st.button("🚀 处理", type="primary", use_container_width=True, disabled=not has_files)
+        run_clicked = st.button("⚙️ 处理", type="primary", use_container_width=True, disabled=not has_files)
 
     if camera_photo is not None:
         uploaded_files = [camera_photo]
