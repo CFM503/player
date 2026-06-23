@@ -174,6 +174,48 @@ class AgentTools:
         return full_text
 
     @staticmethod
+    def check_weather_tool(city: str = "牡丹江") -> dict:
+        """查询实时天气，判断是否符合作业条件"""
+        import requests
+        print(f"[Tool] 查询 {city} 实时天气...")
+        try:
+            resp = requests.get(f"https://wttr.in/{city}?format=j1", timeout=10)
+            data = resp.json()
+            current = data["current_condition"][0]
+
+            temp_c = int(current.get("temp_C", 0))
+            wind_kmph = int(current.get("windspeedKmph", 0))
+            wind_level = wind_kmph // 6  # 大致换算为风级
+            humidity = int(current.get("humidity", 0))
+            desc = current.get("lang_zh", [{}])[0].get("value", current.get("weatherDesc", [{}])[0].get("value", ""))
+            weather_code = int(current.get("weather_code", 0))
+
+            # 判断是否符合动火条件
+            issues = []
+            if wind_level >= 5:
+                issues.append(f"风力{wind_level}级(≥5级)，禁止露天动火")
+            if weather_code in [386, 389, 392, 395, 200, 386, 392]:  # 雷雨/暴雨
+                issues.append(f"天气{desc}，禁止动火作业")
+            if temp_c >= 40:
+                issues.append(f"气温{temp_c}℃(≥40℃)，需加强防暑")
+            if wind_level >= 4:
+                issues.append(f"风力{wind_level}级(4级)，需加强防火措施")
+
+            ok = len(issues) == 0
+            result = {
+                "city": city, "temp_c": temp_c, "wind_level": wind_level,
+                "humidity": humidity, "weather": desc, "ok": ok, "issues": issues,
+            }
+            if ok:
+                print(f"[Tool] 天气正常: {desc} {temp_c}℃ 风{wind_level}级")
+            else:
+                print(f"[Tool] 天气异常: {'; '.join(issues)}")
+            return result
+        except Exception as e:
+            print(f"[Tool] 天气查询失败: {e}, 跳过天气检查")
+            return {"city": city, "ok": True, "issues": [], "error": str(e)}
+
+    @staticmethod
     def save_to_db(data: SecuritySheetData, raw_ocr: str = "", image_path: str = "") -> bool:
         """写入 SQLite，自动迁移旧表"""
         import sqlite3
@@ -334,31 +376,31 @@ class SecurityAgent:
         mem.remember("反思", "🔍", "最大重试", "标记高风险", status="error")
         return data
 
-    def _generate_approval(self, data: SecuritySheetData) -> str:
-        """调用 LLM 生成专业审批建议，列出具体异常项"""
-        # 构建异常摘要：逐项列出问题
+    def _generate_approval(self, data: SecuritySheetData, weather: dict = None) -> str:
+        """调用 LLM 生成专业审批建议，含天气和具体异常"""
         issues_desc = ""
         if data.has_abnormal:
             items = []
-            # 未落实措施
             for m in data.safety_measures:
                 if not m.implemented:
                     items.append(f"第{m.measure_id}项「{m.description}」未落实")
-            # 浓度异常
             for i, v in enumerate(data.gas_concentration):
                 if v > 0:
                     items.append(f"第{i+1}次检测浓度{v}%超标")
-            # 隐患项
             for issue in data.issues:
                 items.append(f"{issue.item_name}（{issue.raw_text or '异常'}）")
             issues_desc = "\n".join(f"- {item}" for item in items[:10])
+
+        weather_desc = ""
+        if weather and not weather.get("ok"):
+            weather_desc = "\n天气异常：" + "；".join(weather.get("issues", []))
 
         prompt = (
             "你是HSE安全审计专家，生成动火作业票审批建议。\n\n"
             "【标准依据】\n"
             "- GB 30871-2022 第5.3.2条：浓度低于LEL的20%\n"
             "- GB 30871-2022 第6.4条：动火点10m内清除可燃物配消防器材\n"
-            "- GB 30871-2022 第6.5条：监护人全程在场\n\n"
+            "- 五级风及以上禁止露天动火，雷雨天气禁止动火\n\n"
             "【输出格式】\n"
             "无异常→【同意作业】+简要确认\n"
             "有异常→【暂缓作业】+逐项列出问题（简写）+风险等级\n"
@@ -366,7 +408,7 @@ class SecurityAgent:
             f"票号：{data.ticket_id} 场站：{data.station_name}\n"
             f"浓度：{data.gas_concentration} 措施：{len(data.safety_measures)}项\n"
             f"异常：{data.has_abnormal}\n"
-            f"{issues_desc}"
+            f"{issues_desc}{weather_desc}"
         )
 
         try:
@@ -436,9 +478,15 @@ class SecurityAgent:
     def _act(self, data: SecuritySheetData, ocr_text: str, mem: AgentMemory, image_path: str = ""):
         print("[Agent Act] 执行工具组合...")
 
-        # 生成审批建议
-        data.approval_opinion = self._generate_approval(data)
-        print(f"[Agent Act] 审批建议: {data.approval_opinion[:60]}...")
+        # 天气检查
+        weather = self.tools.check_weather_tool("牡丹江")
+        if weather.get("issues"):
+            for w in weather["issues"]:
+                mem.remember("执行", "⛅", "天气检查", w, status="retry")
+
+        # 生成审批建议（含天气信息）
+        data.approval_opinion = self._generate_approval(data, weather)
+        print(f"[Agent Act] 审批建议: {data.approval_opinion[:80]}...")
 
         self.tools.save_to_db(data, raw_ocr=ocr_text, image_path=image_path)
 
