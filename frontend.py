@@ -845,9 +845,14 @@ with tab2:
                         st.session_state.delete_id = None; st.rerun()
             confirm_delete()
 
-        # 记录列表
+        # 搜索框
+        search = st.text_input("🔍 搜索票号", placeholder="输入票号模糊查询...", label_visibility="collapsed")
+
+        # 记录列表（搜索过滤）
         for row in rows_db:
             rid, ticket, station, worker, date, abnormal, opinion, risk, created, img_path = row
+            if search and search.lower() not in (ticket or "").lower():
+                continue
             icon = "🚨" if abnormal else "✅"
             badge_html = f' {badge(risk, "err" if risk=="重大" else ("warn" if risk in ["较大","一般"] else "ok"))}' if risk else ""
 
