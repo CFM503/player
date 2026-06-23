@@ -866,13 +866,21 @@ with tab2:
                         if risk: st.markdown(f"**风险** {risk}")
                         st.caption(f"处理: {created}")
                         if opinion: st.caption(f"审批: {opinion}")
-                    # 查看原图按钮
+                    # 查看原图 + 下载按钮
                     if img_path and os.path.exists(img_path):
-                        if st.button("🖼️ 查看原图", key=f"img_{rid}", use_container_width=True):
-                            @st.dialog("原图", width="large")
-                            def show_orig_img(_path=img_path, _name=ticket):
-                                st.image(_path, caption=_name, use_container_width=True)
-                            show_orig_img()
+                        dc1, dc2 = st.columns(2)
+                        with dc1:
+                            if st.button("🖼️ 查看原图", key=f"img_{rid}", use_container_width=True):
+                                @st.dialog("原图", width="large")
+                                def show_orig_img(_path=img_path, _name=ticket):
+                                    st.image(_path, caption=_name, use_container_width=True)
+                                show_orig_img()
+                        with dc2:
+                            ext = os.path.splitext(img_path)[1] or ".png"
+                            dl_name = f"{ticket or f'作业票_{rid}'}{ext}"
+                            with open(img_path, "rb") as f:
+                                img_bytes = f.read()
+                            st.download_button("⬇️ 下载原图", data=img_bytes, file_name=dl_name, mime="image/png", key=f"dl_{rid}", use_container_width=True)
                     else:
                         st.caption("原图不可用")
             with cd:
