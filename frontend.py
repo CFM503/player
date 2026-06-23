@@ -183,6 +183,7 @@ with tab1:
             prog_ph.empty()
             status_ph.success(f"✅ 上传完成 — {picked.name}（{picked.size/1024:.0f} KB）")
             st.session_state.upload_done = True
+            st.rerun()
         elif picked and st.session_state.get("upload_done"):
             st.success(f"✅ {picked.name}（{picked.size/1024:.0f} KB）")
 
@@ -200,6 +201,7 @@ with tab1:
             prog_ph.empty()
             status_ph.success(f"✅ 上传完成 — {camera_photo.name}（{camera_photo.size/1024:.0f} KB）")
             st.session_state.upload_done = True
+            st.rerun()
         elif camera_photo and st.session_state.get("upload_done"):
             st.success(f"📷 {camera_photo.name}（{camera_photo.size/1024:.0f} KB）")
 
