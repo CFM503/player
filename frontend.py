@@ -441,9 +441,23 @@ with st.sidebar:
     st.markdown(f"**🛡️ 安全数字监督员** `v{_ver}`")
     st.caption("牡丹江中燃 HSE · AI Agent")
     st.markdown("---")
+
+    # API 配置
     api_key = st.text_input("API Key", _cfg.get("api_key", ""), type="password")
     base_url = st.text_input("API URL", _cfg.get("base_url", ""))
     model_name = st.text_input("模型", _cfg.get("model_name", ""))
+
+    # 设置面板
+    st.markdown("---")
+    with st.expander("⚙️ 通知设置", expanded=False):
+        wechat_webhook = st.text_input("企业微信 Webhook", _cfg.get("wechat_webhook", ""), type="password", help="企业微信群机器人 Webhook 地址")
+        dingtalk_webhook = st.text_input("钉钉 Webhook", _cfg.get("dingtalk_webhook", ""), type="password", help="钉钉群机器人 Webhook 地址")
+        if st.button("💾 保存设置", use_container_width=True):
+            _cfg["wechat_webhook"] = wechat_webhook
+            _cfg["dingtalk_webhook"] = dingtalk_webhook
+            with open(_cfg_path, "w", encoding="utf-8") as f:
+                json.dump(_cfg, f, ensure_ascii=False, indent=2)
+            st.success("已保存")
 
 # ---- 主面板 ----
 tab1, tab2 = st.tabs(["📷 处理作业票", "📊 AI 看板"])
@@ -703,6 +717,43 @@ with tab1:
                     if d.approval_opinion:
                         ic = {"重大":"🔴","较大":"🟡","一般":"🟡","低风险":"🟢"}.get(d.risk_level or "", "")
                         (st.warning if d.has_abnormal else st.success)(f"{ic} {d.approval_opinion}")
+
+                    # 通知推送模拟
+                    nc1, nc2 = st.columns(2)
+                    with nc1:
+                        if st.button("📱 发送钉钉", key=f"dt_{idx}", use_container_width=True):
+                            dt_url = _cfg.get("dingtalk_webhook", "")
+                            if dt_url:
+                                import requests as _req
+                                msg = f"【安全数字监督员】\n票号: {d.ticket_id}\n场站: {d.station_name}\n状态: {'有隐患' if d.has_abnormal else '正常'}\n风险: {d.risk_level or '-'}\n审批: {d.approval_opinion or '-'}"
+                                try:
+                                    _resp = _req.post(dt_url, json={"msgtype": "text", "text": {"content": msg}}, timeout=10)
+                                    if _resp.status_code == 200:
+                                        st.success("✅ 钉钉发送成功")
+                                    else:
+                                        st.error(f"发送失败: {_resp.status_code}")
+                                except Exception as e:
+                                    st.error(f"发送失败: {e}")
+                            else:
+                                st.info("📋 模拟发送（未配置钉钉 Webhook）")
+                                st.caption(f"票号: {d.ticket_id} | 状态: {'有隐患' if d.has_abnormal else '正常'}")
+                    with nc2:
+                        if st.button("💬 发送微信", key=f"wx_{idx}", use_container_width=True):
+                            wx_url = _cfg.get("wechat_webhook", "")
+                            if wx_url:
+                                import requests as _req
+                                msg = f"**【安全数字监督员】**\n> 票号: {d.ticket_id}\n> 场站: {d.station_name}\n> 状态: {'有隐患' if d.has_abnormal else '正常'}\n> 风险: {d.risk_level or '-'}\n> 审批: {d.approval_opinion or '-'}"
+                                try:
+                                    _resp = _req.post(wx_url, json={"msgtype": "markdown", "markdown": {"content": msg}}, timeout=10)
+                                    if _resp.status_code == 200:
+                                        st.success("✅ 微信发送成功")
+                                    else:
+                                        st.error(f"发送失败: {_resp.status_code}")
+                                except Exception as e:
+                                    st.error(f"发送失败: {e}")
+                            else:
+                                st.info("📋 模拟发送（未配置微信 Webhook）")
+                                st.caption(f"票号: {d.ticket_id} | 状态: {'有隐患' if d.has_abnormal else '正常'}")
 
                     # OCR + 隐患（折叠）
                     if result["ocr"]:
