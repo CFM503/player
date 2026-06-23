@@ -169,11 +169,18 @@ with tab1:
         if picked:
             st.session_state.pending_files = picked
             uploaded_files = picked
+            # 上传反馈：显示文件列表
+            total_kb = sum(f.size for f in picked) / 1024
+            info_lines = [f"✅ 已选择 **{len(picked)}** 张图片（共 {total_kb:.0f} KB）"]
+            for f in picked:
+                info_lines.append(f"  📄 {f.name} — {f.size/1024:.0f} KB")
+            st.markdown("  \n".join(info_lines))
     if st.session_state.get("show_camera"):
         camera_photo = st.camera_input("拍照上传", label_visibility="collapsed", key="cam_main")
         if camera_photo:
             st.session_state.pending_files = [camera_photo]
             uploaded_files = [camera_photo]
+            st.success(f"📷 拍照成功 — {camera_photo.name} ({camera_photo.size/1024:.0f} KB)")
 
     # 无文件 + 有历史结果：显示上次结果
     # 合并最终文件
