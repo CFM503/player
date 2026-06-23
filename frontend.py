@@ -42,6 +42,18 @@ html, body, [data-testid="stAppViewContainer"] {
     background-color: var(--bg) !important;
     color: var(--text) !important;
     color-scheme: light !important;
+    overflow: hidden !important; /* 隐藏浏览器视口及外层容器滚动条，防止双滚动条 */
+}
+
+/* 仅在 Streamlit 实际的内容滚动容器上强制启用垂直滚动条轨道，锁定排版宽度，彻底杜绝闪烁和抖动 */
+.main, [data-testid="stMain"] {
+    overflow-y: scroll !important;
+    overflow-x: hidden !important;
+}
+
+/* 侧边栏允许其内容超出时正常垂直滚动 */
+section[data-testid="stSidebar"] {
+    overflow-y: auto !important;
 }
 
 .stApp {
@@ -52,7 +64,6 @@ html, body, [data-testid="stAppViewContainer"] {
     padding: 0.5rem 1.2rem 0.3rem 1.2rem;
     max-width: 100%;
     color: var(--text);
-    animation: fadeInUp 0.4s ease-out;
 }
 #MainMenu, footer, header { display: none !important; }
 
@@ -105,8 +116,8 @@ section[data-testid="stSidebar"] .stTextInput input {
     box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05) !important;
 }
 
-/* 按钮样式（上传 / 拍照 / 处理） */
-.stButton > button {
+/* 按钮样式（上传 / 拍照 / 处理 / 下载） */
+.stButton > button, .stDownloadButton > button {
     background: var(--blue) !important;
     color: #ffffff !important;
     border: none !important;
@@ -115,28 +126,26 @@ section[data-testid="stSidebar"] .stTextInput input {
     font-size: 14px !important;
     font-weight: 600 !important;
     min-height: 40px !important;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    transition: background-color 0.2s ease, box-shadow 0.2s ease !important;
     box-shadow: 0 2px 6px rgba(59, 130, 246, 0.15) !important;
 }
-.stButton > button:hover {
+.stButton > button:hover, .stDownloadButton > button:hover {
     background: var(--blue-hover) !important;
-    transform: translateY(-1px) !important;
     box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25) !important;
 }
-.stButton > button:active {
-    transform: translateY(1px) !important;
+.stButton > button:active, .stDownloadButton > button:active {
+    box-shadow: 0 1px 3px rgba(59, 130, 246, 0.1) !important;
 }
-.stButton > button:disabled {
+.stButton > button:disabled, .stDownloadButton > button:disabled {
     background: #e2e8f0 !important;
     color: #94a3b8 !important;
     box-shadow: none !important;
-    transform: none !important;
     cursor: not-allowed !important;
 }
-.stButton > button[kind="primary"] {
+.stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] {
     background: linear-gradient(135deg, var(--blue) 0%, #4f46e5 100%) !important;
 }
-.stButton > button[kind="primary"]:hover {
+.stButton > button[kind="primary"]:hover, .stDownloadButton > button[kind="primary"]:hover {
     background: linear-gradient(135deg, var(--blue-hover) 0%, #4338ca 100%) !important;
 }
 
@@ -233,12 +242,16 @@ section[data-testid="stSidebar"] .stTextInput input {
 .badge-warn { background: var(--yellow-bg); color: var(--yellow) !important; border: 1px solid #fde68a; }
 .badge-err { background: var(--red-bg); color: var(--red) !important; border: 1px solid #fecaca; }
 
-/* 提示框 */
+/* 提示框 - 保留 Streamlit 浅色原生警示色，仅美化圆角和阴影 */
 .stAlert {
     border-radius: 10px !important;
-    border: 1px solid var(--border) !important;
-    background-color: var(--card) !important;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.02) !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03) !important;
+}
+/* 防止全局文字颜色覆盖警示框内部的文字颜色 */
+div[data-testid="stAlert"] .stMarkdown, 
+div[data-testid="stAlert"] .stMarkdown p, 
+div[data-testid="stAlert"] .stMarkdown span {
+    color: inherit !important;
 }
 div[data-baseweb="notification"] {
     border-radius: 10px !important;
@@ -316,7 +329,6 @@ details {
     padding: 8px 12px !important;
     margin-bottom: 12px !important;
     box-shadow: 0 2px 6px rgba(0,0,0,0.01) !important;
-    transition: all 0.2s ease !important;
 }
 details summary {
     color: var(--text) !important;
@@ -866,11 +878,11 @@ with tab2:
             if search and search.lower() not in (ticket or "").lower():
                 continue
             icon = "🚨" if abnormal else "✅"
-            badge_html = f' {badge(risk, "err" if risk=="重大" else ("warn" if risk in ["较大","一般"] else "ok"))}' if risk else ""
+            badge_md = f" | :{'red' if risk=='重大' else ('orange' if risk in ['较大','一般'] else 'green')}[{risk}]" if risk else ""
 
             cm, cd = st.columns([9, 1])
             with cm:
-                with st.expander(f"{icon} #{rid} | {ticket} | {station} | {date}{badge_html}", expanded=False):
+                with st.expander(f"{icon} #{rid} | {ticket} | {station} | {date}{badge_md}", expanded=False):
                     ca, cb = st.columns(2)
                     with ca: st.markdown(f"**票号** {ticket}  \n**场站** {station}  \n**动火人** {worker}  \n**日期** {date}")
                     with cb:
