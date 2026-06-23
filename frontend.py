@@ -295,30 +295,27 @@ with tab_dashboard:
 
         # 删除密码弹窗
         if st.session_state.delete_id:
-            st.divider()
-            with st.form("delete_form", clear_on_submit=True):
-                st.warning(f"⚠️ 删除记录 #{st.session_state.delete_id}？请输入密码确认。")
-                pwd = st.text_input("删除密码", type="password")
+            @st.dialog("🗑️ 确认删除", width="small")
+            def confirm_delete():
+                st.warning(f"删除记录 **#{st.session_state.delete_id}**？此操作不可撤销。")
+                pwd = st.text_input("🔑 输入删除密码", type="password")
                 fc1, fc2 = st.columns(2)
                 with fc1:
-                    confirm = st.form_submit_button("✅ 确认删除", type="primary", use_container_width=True)
+                    if st.button("✅ 确认删除", type="primary", use_container_width=True):
+                        if pwd == _del_pwd:
+                            conn2 = sqlite3.connect(db_path)
+                            conn2.execute("DELETE FROM hse_fire_work_tickets WHERE id=?", (st.session_state.delete_id,))
+                            conn2.commit()
+                            conn2.close()
+                            st.session_state.delete_id = None
+                            st.rerun()
+                        else:
+                            st.error("密码错误")
                 with fc2:
-                    cancel = st.form_submit_button("❌ 取消", use_container_width=True)
-                if confirm:
-                    if pwd == _del_pwd:
-                        conn2 = sqlite3.connect(db_path)
-                        conn2.execute("DELETE FROM hse_fire_work_tickets WHERE id=?", (st.session_state.delete_id,))
-                        conn2.commit()
-                        conn2.close()
+                    if st.button("❌ 取消", use_container_width=True):
                         st.session_state.delete_id = None
-                        st.success("已删除")
-                        time.sleep(0.5)
                         st.rerun()
-                    else:
-                        st.error("密码错误")
-                if cancel:
-                    st.session_state.delete_id = None
-                    st.rerun()
+            confirm_delete()
 
         # 记录列表
         st.divider()
