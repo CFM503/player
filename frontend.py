@@ -12,7 +12,7 @@ _cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
 _cfg = json.load(open(_cfg_path, encoding="utf-8")) if os.path.exists(_cfg_path) else {}
 _ver = open(os.path.join(os.path.dirname(__file__), "VERSION"), encoding="utf-8").read().strip()
 
-st.set_page_config(page_title="安全数字监督员", page_icon="🛡️", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="安全数字监督员", page_icon="🛡️", layout="wide", initial_sidebar_state="expanded")
 
 # ---- 自定义主题（柔和暗色，不刺眼，所有颜色显式）----
 st.markdown("""
