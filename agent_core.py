@@ -143,7 +143,7 @@ class AgentTools:
                         y = (box[0][1] + box[2][1]) / 2 if len(box) >= 3 else 0
                         x = box[0][0] if box else 0
                         entries.append((y, x, text))
-                    entries.sort(key=lambda e: (e[0] // 30, e[1]))
+                    entries.sort(key=lambda e: (e[0] // 15, e[1]))
                     lines = [e[2] for e in entries]
             return lines
 

@@ -322,14 +322,16 @@ with tab_process:
                 if d.has_abnormal and d.issues:
                     st.error(f"🚨 已触发隐患预警 — {len(d.issues)} 项异常")
 
+                # OCR 原文预览（可展开）
+                if result_data["text"]:
+                    with st.expander("📝 OCR 识别原文", expanded=False):
+                        st.code(result_data["text"], language=None)
+
                 # 详情
-                t1, t2, t3 = st.tabs(["📦 数据", "📝 OCR", f"⚠️ 隐患 ({len(d.issues)})"])
+                t1, t2 = st.tabs(["📦 数据", f"⚠️ 隐患 ({len(d.issues)})"])
                 with t1:
                     st.json(d.model_dump())
                 with t2:
-                    if result_data["text"]:
-                        st.code(result_data["text"][:2000], language=None)
-                with t3:
                     if d.issues:
                         for issue in d.issues:
                             st.markdown(f"- **{issue.item_name}** — {issue.status}" + (f" ({issue.raw_text})" if issue.raw_text else ""))
