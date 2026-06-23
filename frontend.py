@@ -231,12 +231,13 @@ with tab1:
             # 分栏：左边结果，右边日志
             col_r, col_l = st.columns([3, 2])
 
-            # 左栏：进度条 + 预览图（点击放大可看原图）
+            # 左栏：进度条 + 预览图（处理完自动收起）
             with col_r:
                 status_text = st.empty()
                 progress = st.progress(0)
+                img_placeholder = st.empty()
                 status_text.caption(f"[{idx+1}/{len(final_files)}] {uploaded.name} — 准备中...")
-                st.image(save_path, caption=uploaded.name, use_container_width=True)
+                img_placeholder.image(save_path, caption=uploaded.name, use_container_width=True)
 
             # 右栏：日志面板
             with col_l:
@@ -292,6 +293,7 @@ with tab1:
 
             progress.progress(100)
             status_text.caption(f"[{idx+1}/{len(final_files)}] ✅ 完成")
+            img_placeholder.empty()  # 处理完收起预览图
 
             # 左栏：结果展示
             with col_r:
