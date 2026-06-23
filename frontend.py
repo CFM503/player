@@ -117,6 +117,7 @@ if "delete_id" not in st.session_state: st.session_state.delete_id = None
 if "pending_files" not in st.session_state: st.session_state.pending_files = None
 if "show_uploader" not in st.session_state: st.session_state.show_uploader = False
 if "show_camera" not in st.session_state: st.session_state.show_camera = False
+if "upload_done" not in st.session_state: st.session_state.upload_done = False
 
 
 def kpi(label, value, color="var(--blue)"):
@@ -145,37 +146,62 @@ tab1, tab2 = st.tabs(["📷 处理作业票", "📊 AI 看板"])
 # ==================== Tab 1 ====================
 with tab1:
     # ---- 三个按钮：上传 / 拍照 / 处理 ----
-    camera_photo = None
     c1, c2, c3 = st.columns(3)
     with c1:
         show_upload = st.button("📤 上传", use_container_width=True)
     with c2:
         show_cam = st.button("📷 拍照", use_container_width=True)
     with c3:
-        has_files = bool(st.session_state.get("pending_files")) or camera_photo is not None
-        run_clicked = st.button("⚙️ 处理", type="primary", use_container_width=True, disabled=not has_files)
+        # 上传完成才能点处理
+        can_process = st.session_state.get("upload_done") and st.session_state.get("pending_files")
+        run_clicked = st.button("⚙️ 处理", type="primary", use_container_width=True, disabled=not can_process)
 
-    # 点击上传后显示文件选择
+    # 点击按钮切换模式
     if show_upload:
         st.session_state.show_uploader = True
         st.session_state.show_camera = False
+        st.session_state.upload_done = False
+        st.session_state.pending_files = None
     if show_cam:
         st.session_state.show_camera = True
         st.session_state.show_uploader = False
+        st.session_state.upload_done = False
+        st.session_state.pending_files = None
 
-    uploaded_files = st.session_state.get("pending_files")
+    # ---- 文件选择 ----
     if st.session_state.get("show_uploader"):
         picked = st.file_uploader("选择图片", type=["jpg","jpeg","png","bmp"], accept_multiple_files=False, label_visibility="collapsed", key="fu_main")
-        if picked:
+        if picked and not st.session_state.get("upload_done"):
+            # 模拟上传进度条
             st.session_state.pending_files = [picked]
-            uploaded_files = [picked]
+            prog_ph = st.empty()
+            status_ph = st.empty()
+            for pct in range(0, 101, 5):
+                prog_ph.progress(pct)
+                status_ph.caption(f"📤 上传中... {picked.name} — {pct}%")
+                time.sleep(0.05)
+            prog_ph.empty()
+            status_ph.success(f"✅ 上传完成 — {picked.name}（{picked.size/1024:.0f} KB）")
+            st.session_state.upload_done = True
+        elif picked and st.session_state.get("upload_done"):
             st.success(f"✅ {picked.name}（{picked.size/1024:.0f} KB）")
+
+    # ---- 拍照 ----
     if st.session_state.get("show_camera"):
         camera_photo = st.camera_input("拍照上传", label_visibility="collapsed", key="cam_main")
-        if camera_photo:
+        if camera_photo and not st.session_state.get("upload_done"):
             st.session_state.pending_files = [camera_photo]
-            uploaded_files = [camera_photo]
-            st.success(f"📷 拍照成功 — {camera_photo.name} ({camera_photo.size/1024:.0f} KB)")
+            prog_ph = st.empty()
+            status_ph = st.empty()
+            for pct in range(0, 101, 5):
+                prog_ph.progress(pct)
+                status_ph.caption(f"📤 上传中... {camera_photo.name} — {pct}%")
+                time.sleep(0.05)
+            prog_ph.empty()
+            status_ph.success(f"✅ 上传完成 — {camera_photo.name}（{camera_photo.size/1024:.0f} KB）")
+            st.session_state.upload_done = True
+        elif camera_photo and st.session_state.get("upload_done"):
+            st.success(f"📷 {camera_photo.name}（{camera_photo.size/1024:.0f} KB）")
 
     # 无文件 + 有历史结果：显示上次结果
     # 合并最终文件
