@@ -10,7 +10,7 @@ from agent_core import SecurityAgent, LLMBrain, AgentTools
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "upload")
 images = sorted(glob.glob(os.path.join(UPLOAD_DIR, "*.png")) + glob.glob(os.path.join(UPLOAD_DIR, "*.jpg")))
 
-print(f"=== 安全哨兵 Agent 端到端测试 ===")
+print(f"=== 安全数字监督员 Agent 端到端测试 ===")
 print(f"共发现 {len(images)} 张图片\n")
 
 # 阶段 1: OCR 测试

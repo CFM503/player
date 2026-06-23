@@ -1,5 +1,5 @@
 """
-安全哨兵 - Agent 可视化决策链面板
+安全数字监督员 - Agent 可视化决策链面板
 启动: streamlit run frontend.py
 """
 
@@ -10,7 +10,7 @@ import pandas as pd
 _cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
 _cfg = json.load(open(_cfg_path, encoding="utf-8")) if os.path.exists(_cfg_path) else {}
 
-st.set_page_config(page_title="安全哨兵", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="安全数字监督员", page_icon="🛡️", layout="wide")
 
 st.markdown("""
 <style>
@@ -40,7 +40,7 @@ if "delete_id" not in st.session_state:
 
 with st.sidebar:
     _ver = open(os.path.join(os.path.dirname(__file__), "VERSION"), encoding="utf-8").read().strip()
-    st.markdown(f"### 🛡️ 安全哨兵 v{_ver}")
+    st.markdown(f"### 🛡️ 安全数字监督员 v{_ver}")
     st.caption("牡丹江中燃 HSE · AI Agent")
     st.divider()
     api_key = st.text_input("🔑 API Key", _cfg.get("api_key", ""), type="password")
