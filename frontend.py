@@ -14,76 +14,125 @@ _ver = open(os.path.join(os.path.dirname(__file__), "VERSION"), encoding="utf-8"
 
 st.set_page_config(page_title="安全数字监督员", page_icon="🛡️", layout="wide", initial_sidebar_state="collapsed")
 
-# ---- 全局 CSS（所有颜色显式指定，不依赖系统主题）----
+# ---- 自定义主题（柔和暗色，不刺眼，所有颜色显式）----
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
 
-.block-container { padding: 0.4rem 1rem 0.2rem 1rem; max-width: 100%; }
+/* 色板 */
+:root {
+    --bg: #1a1b2e;        /* 主背景 - 深蓝灰 */
+    --sidebar: #232438;    /* 侧边栏 */
+    --card: #282a3a;       /* 卡片/面板 */
+    --border: #3d3f54;     /* 边框 */
+    --text: #e2e4f0;       /* 主文字 - 柔白 */
+    --dim: #9395a5;        /* 次要文字 */
+    --blue: #5b9df9;       /* 主蓝 - 柔和 */
+    --green: #4ade80;      /* 成功绿 */
+    --red: #f87171;        /* 错误红 */
+    --yellow: #fbbf24;     /* 警告黄 */
+}
+
+/* 全局背景 */
+.stApp { background: var(--bg) !important; }
+.stApp > header { background: transparent !important; }
+.block-container { padding: 0.5rem 1.2rem 0.3rem 1.2rem; max-width: 100%; color: var(--text); }
 #MainMenu, footer, header { display: none !important; }
 
-/* Tabs */
-.stTabs [data-baseweb="tab-list"] { gap: 0; border-radius: 6px; padding: 2px; }
-.stTabs [data-baseweb="tab"] { font-size: 13px; padding: 6px 16px; border-radius: 4px; }
+/* 侧边栏 */
+section[data-testid="stSidebar"] { background: var(--sidebar) !important; border-right: 1px solid var(--border) !important; }
+section[data-testid="stSidebar"] .block-container { padding-top: 0.6rem; color: var(--text); }
+section[data-testid="stSidebar"] label { color: var(--dim) !important; font-size: 12px !important; }
+section[data-testid="stSidebar"] .stTextInput input { background: var(--card) !important; color: var(--text) !important; border: 1px solid var(--border) !important; border-radius: 6px !important; }
 
-/* 上传区 - 蓝色按钮 */
+/* Tabs */
+.stTabs [data-baseweb="tab-list"] { gap: 0; background: var(--card); border-radius: 8px; padding: 3px; border: 1px solid var(--border); }
+.stTabs [data-baseweb="tab"] { color: var(--dim); font-size: 13px; padding: 6px 18px; border-radius: 6px; }
+.stTabs [aria-selected="true"] { color: var(--text) !important; background: var(--bg) !important; }
+
+/* 上传区 - 柔蓝按钮 */
 [data-testid="stFileUploader"], [data-testid="stCameraInput"] { padding: 0 !important; margin: 0 !important; }
 [data-testid="stFileUploader"] section, [data-testid="stCameraInput"] section {
-    background: #007BFF !important; border: none !important;
+    background: var(--blue) !important; border: none !important;
     border-radius: 8px !important; padding: 8px 16px !important;
     min-height: 40px !important; display: flex !important; align-items: center !important; justify-content: center !important;
 }
 [data-testid="stFileUploader"] label, [data-testid="stCameraInput"] label { color: #fff !important; font-size: 14px !important; font-weight: 500 !important; }
 [data-testid="stFileUploader"] section svg, [data-testid="stCameraInput"] section svg { fill: #fff !important; }
-[data-testid="stFileUploader"] section p, [data-testid="stCameraInput"] section p { color: rgba(255,255,255,0.8) !important; font-size: 12px !important; }
+[data-testid="stFileUploader"] section p, [data-testid="stCameraInput"] section p { color: rgba(255,255,255,0.7) !important; font-size: 12px !important; }
 [data-testid="stCameraInput"] [data-testid="stImage"] { display: none !important; }
 [data-testid="stHorizontalBlock"] { gap: 6px !important; }
 
-/* 按钮 - 蓝色统一 */
+/* 按钮 - 柔蓝 */
 .stButton > button {
-    background: #007BFF !important; color: #fff !important;
+    background: var(--blue) !important; color: #fff !important;
     border: none !important; border-radius: 8px !important;
     padding: 8px 16px !important; font-size: 14px !important; font-weight: 500 !important;
     min-height: 40px !important; transition: all 0.15s;
 }
-.stButton > button:hover { background: #0056b3 !important; }
-.stButton > button:disabled { background: #b0d4ff !important; color: #fff !important; }
-.stButton > button[kind="primary"] { background: #007BFF !important; }
-.stButton > button[kind="primary"]:hover { background: #0056b3 !important; }
+.stButton > button:hover { background: #4a8ae8 !important; }
+.stButton > button:disabled { background: #3a3c50 !important; color: #6b6d80 !important; }
+.stButton > button[kind="primary"] { background: var(--blue) !important; }
+.stButton > button[kind="primary"]:hover { background: #4a8ae8 !important; }
 
-/* KPI 指标卡 - 浅色底，深色字 */
-.kpi { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 8px; padding: 10px 14px; text-align: center; }
-.kpi-val { font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 700; color: #0969da; line-height: 1.3; }
-.kpi-lbl { font-size: 10px; color: #57606a; text-transform: uppercase; letter-spacing: 0.5px; }
-
-/* 状态徽章 - 浅色底，明确文字色 */
-.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
-.badge-ok { background: #dafbe1; color: #116329; border: 1px solid #4ac26b; }
-.badge-warn { background: #fff8c5; color: #9a6700; border: 1px solid #e3b341; }
-.badge-err { background: #ffebe9; color: #cf222e; border: 1px solid #ff8182; }
-
-/* 黑客日志面板 - 独立暗色 */
-.hlog {
-    background: #0d1117; border: 1px solid #1a3a1a; border-radius: 8px;
-    padding: 10px 12px; font-family: 'JetBrains Mono', 'Courier New', monospace;
-    font-size: 12px; color: #3fb950; line-height: 1.5;
-    overflow-y: auto; box-shadow: inset 0 0 30px rgba(0,255,65,0.05);
+/* 输入框/文本区域 */
+.stTextInput input, .stTextArea textarea, .stSelectbox [data-baseweb="select"] {
+    background: var(--card) !important; color: var(--text) !important;
+    border: 1px solid var(--border) !important; border-radius: 6px !important;
 }
-.hlog .lt { color: #3fb950; font-weight: bold; border-bottom: 1px solid #1a3a1a; padding-bottom: 3px; margin-bottom: 6px; font-size: 13px; }
-.hlog .lo { color: #39d353; }
-.hlog .le { color: #f85149; }
-.hlog .lk { color: #58a6ff; }
-.hlog .lw { color: #d29922; }
+
+/* KPI 指标卡 */
+.kpi { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; text-align: center; }
+.kpi-val { font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 700; color: var(--blue); line-height: 1.3; }
+.kpi-lbl { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; }
+
+/* 状态徽章 */
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.badge-ok { background: #1a3a2a; color: var(--green); border: 1px solid #2d5a3d; }
+.badge-warn { background: #3a3a1a; color: var(--yellow); border: 1px solid #5a5a2d; }
+.badge-err { background: #3a1a1a; color: var(--red); border: 1px solid #5a2d2d; }
+
+/* 提示框 */
+.stAlert { border-radius: 8px !important; }
+div[data-baseweb="notification"] { border-radius: 8px !important; }
+
+/* 黑客日志面板 */
+.hlog {
+    background: #12131f; border: 1px solid #1a3a1a; border-radius: 8px;
+    padding: 10px 12px; font-family: 'JetBrains Mono', monospace;
+    font-size: 12px; color: #4ade80; line-height: 1.5;
+    overflow-y: auto; box-shadow: inset 0 0 30px rgba(74,222,128,0.03);
+}
+.hlog .lt { color: #4ade80; font-weight: bold; border-bottom: 1px solid #1a3a1a; padding-bottom: 3px; margin-bottom: 6px; font-size: 13px; }
+.hlog .lo { color: #4ade80; }
+.hlog .le { color: #f87171; }
+.hlog .lk { color: #5b9df9; }
+.hlog .lw { color: #fbbf24; }
 
 /* 进度条 */
 .stProgress { margin: 0 !important; padding: 0 !important; }
-.stProgress > div { margin: 0 !important; height: 3px !important; border-radius: 2px !important; }
-.stProgress > div > div { background: #007BFF !important; }
+.stProgress > div { margin: 0 !important; height: 3px !important; border-radius: 2px !important; background: var(--border) !important; }
+.stProgress > div > div { background: var(--blue) !important; }
 .stSpinner { display: none !important; }
 
 /* 图片 */
-[data-testid="stImage"] img { border-radius: 4px; cursor: zoom-in; }
-[data-testid="stImage"] img:hover { opacity: 0.85; }
+[data-testid="stImage"] img { border-radius: 6px; cursor: zoom-in; }
+[data-testid="stImage"] img:hover { opacity: 0.9; }
+
+/* Expander / 折叠 */
+details { background: var(--card) !important; border: 1px solid var(--border) !important; border-radius: 8px !important; }
+details summary { color: var(--text) !important; font-size: 13px; }
+details[open] { border-color: var(--blue) !important; }
+
+/* 表格 */
+.stDataFrame { border-radius: 8px; overflow: hidden; }
+[data-testid="stDataFrame"] { border: 1px solid var(--border); border-radius: 8px; }
+
+/* Markdown 文字 */
+.stMarkdown { color: var(--text); }
+.stMarkdown p { color: var(--text); }
+.stMarkdown strong { color: var(--text); }
+.stCaption { color: var(--dim) !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -96,7 +145,7 @@ if "show_camera" not in st.session_state: st.session_state.show_camera = False
 if "upload_done" not in st.session_state: st.session_state.upload_done = False
 
 
-def kpi(label, value, color="#0969da"):
+def kpi(label, value, color="var(--blue)"):
     return f'<div class="kpi"><div class="kpi-val" style="color:{color}">{value}</div><div class="kpi-lbl">{label}</div></div>'
 
 def badge(text, level="ok"):
