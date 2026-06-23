@@ -141,20 +141,13 @@ tab1, tab2 = st.tabs(["📷 处理作业票", "📊 AI 看板"])
 
 # ==================== Tab 1 ====================
 with tab1:
-    # ---- 照片管理面板 ----
-    st.markdown("""
-    <div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:10px;padding:10px 16px;margin-bottom:8px;">
-        <div style="font-size:13px;color:#495057;font-weight:600;margin-bottom:6px;">📷 照片管理</div>
-        <div style="border-top:1px solid #dee2e6;margin-bottom:8px;"></div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    c_btn1, c_btn2, c_btn3 = st.columns(3)
-    with c_btn1:
+    # ---- 三个按钮：上传 / 拍照 / 处理 ----
+    c1, c2, c3 = st.columns(3)
+    with c1:
         uploaded_files = st.file_uploader("📤 上传", type=["jpg","jpeg","png","bmp"], accept_multiple_files=True, label_visibility="collapsed")
-    with c_btn2:
+    with c2:
         camera_photo = st.camera_input("📷 拍照", label_visibility="collapsed")
-    with c_btn3:
+    with c3:
         has_files = bool(uploaded_files) or camera_photo is not None
         run_clicked = st.button("⚙️ 处理", type="primary", use_container_width=True, disabled=not has_files)
 
