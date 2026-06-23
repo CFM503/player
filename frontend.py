@@ -131,12 +131,14 @@ with tab_process:
                         unsafe_allow_html=True)
 
                 suffix = os.path.splitext(uploaded.name)[1] or ".jpg"
-                tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-                tmp.write(uploaded.getvalue())
-                tmp.close()
+                upload_dir = os.path.join(os.path.dirname(__file__), "uploads")
+                os.makedirs(upload_dir, exist_ok=True)
+                save_path = os.path.join(upload_dir, f"{int(time.time())}_{idx}{suffix}")
+                with open(save_path, "wb") as f:
+                    f.write(uploaded.getvalue())
 
                 with col_result:
-                    st.image(uploaded, caption=uploaded.name, width=350)
+                    st.image(save_path, caption=uploaded.name, width=350)
 
                 hack_log(f">>> 收到任务: {uploaded.name}")
                 progress.progress(5, text=f"[{idx+1}/{len(uploaded_files)}] OCR...")
@@ -159,16 +161,13 @@ with tab_process:
 
                 sys.stdout = Cap()
                 try:
-                    ocr_text, structured = agent.run(tmp.name)
+                    ocr_text, structured = agent.run(save_path)
                     result["ocr"] = ocr_text
                     result["data"] = structured
                 except Exception as e:
                     hack_log(f"❌ 出错: {e}")
                 finally:
                     sys.stdout = _orig
-
-                if os.path.exists(tmp.name):
-                    os.remove(tmp.name)
 
                 progress.progress(100, text=f"[{idx+1}/{len(uploaded_files)}] ✅ 完成")
 
