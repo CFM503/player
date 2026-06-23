@@ -718,42 +718,40 @@ with tab1:
                         ic = {"重大":"🔴","较大":"🟡","一般":"🟡","低风险":"🟢"}.get(d.risk_level or "", "")
                         (st.warning if d.has_abnormal else st.success)(f"{ic} {d.approval_opinion}")
 
-                    # 通知推送模拟
+                    # 通知推送
                     nc1, nc2 = st.columns(2)
                     with nc1:
-                        if st.button("📱 发送钉钉", key=f"dt_{idx}", use_container_width=True):
-                            dt_url = _cfg.get("dingtalk_webhook", "")
-                            if dt_url:
-                                import requests as _req
-                                msg = f"【安全数字监督员】\n票号: {d.ticket_id}\n场站: {d.station_name}\n状态: {'有隐患' if d.has_abnormal else '正常'}\n风险: {d.risk_level or '-'}\n审批: {d.approval_opinion or '-'}"
-                                try:
-                                    _resp = _req.post(dt_url, json={"msgtype": "text", "text": {"content": msg}}, timeout=10)
-                                    if _resp.status_code == 200:
-                                        st.success("✅ 钉钉发送成功")
-                                    else:
-                                        st.error(f"发送失败: {_resp.status_code}")
-                                except Exception as e:
-                                    st.error(f"发送失败: {e}")
-                            else:
-                                st.info("📋 模拟发送（未配置钉钉 Webhook）")
-                                st.caption(f"票号: {d.ticket_id} | 状态: {'有隐患' if d.has_abnormal else '正常'}")
+                        dt_url = _cfg.get("dingtalk_webhook", "")
+                        if not dt_url:
+                            st.button("📱 发送钉钉", key=f"dt_{idx}", use_container_width=True, disabled=True, help="请在侧边栏通知设置中配置钉钉 Webhook")
+                            st.caption("⚠️ 未配置钉钉 Webhook，请在左侧边栏设置")
+                        elif st.button("📱 发送钉钉", key=f"dt_{idx}", use_container_width=True):
+                            import requests as _req
+                            msg = f"【安全数字监督员】\n票号: {d.ticket_id}\n场站: {d.station_name}\n状态: {'有隐患' if d.has_abnormal else '正常'}\n风险: {d.risk_level or '-'}\n审批: {d.approval_opinion or '-'}"
+                            try:
+                                _resp = _req.post(dt_url, json={"msgtype": "text", "text": {"content": msg}}, timeout=10)
+                                if _resp.status_code == 200:
+                                    st.success("✅ 钉钉发送成功")
+                                else:
+                                    st.error(f"发送失败: {_resp.status_code}")
+                            except Exception as e:
+                                st.error(f"发送失败: {e}")
                     with nc2:
-                        if st.button("💬 发送微信", key=f"wx_{idx}", use_container_width=True):
-                            wx_url = _cfg.get("wechat_webhook", "")
-                            if wx_url:
-                                import requests as _req
-                                msg = f"**【安全数字监督员】**\n> 票号: {d.ticket_id}\n> 场站: {d.station_name}\n> 状态: {'有隐患' if d.has_abnormal else '正常'}\n> 风险: {d.risk_level or '-'}\n> 审批: {d.approval_opinion or '-'}"
-                                try:
-                                    _resp = _req.post(wx_url, json={"msgtype": "markdown", "markdown": {"content": msg}}, timeout=10)
-                                    if _resp.status_code == 200:
-                                        st.success("✅ 微信发送成功")
-                                    else:
-                                        st.error(f"发送失败: {_resp.status_code}")
-                                except Exception as e:
-                                    st.error(f"发送失败: {e}")
-                            else:
-                                st.info("📋 模拟发送（未配置微信 Webhook）")
-                                st.caption(f"票号: {d.ticket_id} | 状态: {'有隐患' if d.has_abnormal else '正常'}")
+                        wx_url = _cfg.get("wechat_webhook", "")
+                        if not wx_url:
+                            st.button("💬 发送微信", key=f"wx_{idx}", use_container_width=True, disabled=True, help="请在侧边栏通知设置中配置微信 Webhook")
+                            st.caption("⚠️ 未配置微信 Webhook，请在左侧边栏设置")
+                        elif st.button("💬 发送微信", key=f"wx_{idx}", use_container_width=True):
+                            import requests as _req
+                            msg = f"**【安全数字监督员】**\n> 票号: {d.ticket_id}\n> 场站: {d.station_name}\n> 状态: {'有隐患' if d.has_abnormal else '正常'}\n> 风险: {d.risk_level or '-'}\n> 审批: {d.approval_opinion or '-'}"
+                            try:
+                                _resp = _req.post(wx_url, json={"msgtype": "markdown", "markdown": {"content": msg}}, timeout=10)
+                                if _resp.status_code == 200:
+                                    st.success("✅ 微信发送成功")
+                                else:
+                                    st.error(f"发送失败: {_resp.status_code}")
+                            except Exception as e:
+                                st.error(f"发送失败: {e}")
 
                     # OCR + 隐患（折叠）
                     if result["ocr"]:
