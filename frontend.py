@@ -52,10 +52,19 @@ tab_process, tab_dashboard = st.tabs(["📷 处理作业票", "🤖 AI 看板"])
 
 # ==================== Tab 1 ====================
 with tab_process:
-    uploaded_files = st.file_uploader(
-        "上传作业票图片（支持多张）", type=["jpg","jpeg","png","bmp"],
-        accept_multiple_files=True, help="手机可直接唤起摄像头",
-    )
+    # 手机拍照 或 选择文件
+    col_cam, col_file = st.columns(2)
+    with col_cam:
+        camera_photo = st.camera_input("📷 拍照上传", help="手机端点击唤起摄像头")
+    with col_file:
+        uploaded_files = st.file_uploader(
+            "📁 选择图片", type=["jpg","jpeg","png","bmp"],
+            accept_multiple_files=True, help="从相册选择",
+        )
+
+    # 合并：拍照结果也当作一张图片处理
+    if camera_photo is not None:
+        uploaded_files = [camera_photo]  # 拍照优先，覆盖文件选择
 
     if not uploaded_files:
         if st.session_state.results:
