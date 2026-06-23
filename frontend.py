@@ -3,7 +3,7 @@
 启动: streamlit run frontend.py
 """
 
-import io, sys, os, re, time, tempfile, json
+import io, sys, os, re, time, json
 import streamlit as st
 import pandas as pd
 
@@ -14,94 +14,98 @@ st.set_page_config(page_title="安全数字监督员", page_icon="🛡️", layo
 
 st.markdown("""
 <style>
-.block-container { padding-top: 1rem; padding-bottom: 0.5rem; }
-.metric-card { background: #1a1a2e; border: 1px solid #333; border-radius: 8px; padding: 10px 14px; text-align: center; }
-.metric-val { font-size: 22px; font-weight: 700; color: #00d4ff; }
-.metric-label { font-size: 11px; color: #888; }
-.hacker-log {
-    background: #0a0a0a; border: 1px solid #00ff41; border-radius: 8px;
-    padding: 12px 16px; font-family: 'Courier New', monospace;
-    font-size: 13px; color: #00ff41; line-height: 1.6;
-    max-height: 75vh; overflow-y: auto; box-shadow: 0 0 20px rgba(0,255,65,0.1);
-}
-.hacker-log .log-tool { color: #00ccaa; }
-.hacker-log .log-err { color: #ff4444; }
-.hacker-log .log-ok { color: #00ff41; }
-.hacker-log .log-warn { color: #ffb800; }
-.hacker-log .log-title { color: #00ff41; font-weight: bold; font-size: 14px; border-bottom: 1px solid #00ff4133; padding-bottom: 4px; margin-bottom: 8px; }
-#MainMenu, footer, header { visibility: hidden; }
+/* 全局紧凑 */
+.block-container { padding: 0.5rem 1rem 0.3rem 1rem; }
+section[data-testid="stSidebar"] .block-container { padding-top: 0.5rem; }
+/* 隐藏 Streamlit 默认元素 */
+#MainMenu, footer, header { display: none !important; }
+/* 上传区域压缩 */
+[data-testid="stFileUploader"] { padding: 0 !important; }
+[data-testid="stFileUploader"] section { padding: 4px 8px !important; min-height: 0 !important; }
+[data-testid="stCameraInput"] { padding: 0 !important; }
+[data-testid="stCameraInput"] section { padding: 4px 8px !important; min-height: 0 !important; }
+/* 按钮紧凑 */
+.stButton > button { padding: 4px 12px !important; min-height: 0 !important; font-size: 13px !important; }
+/* Tab 紧凑 */
+.stTabs [data-baseweb="tab-list"] { gap: 4px; }
+.stTabs [data-baseweb="tab"] { padding: 4px 12px; font-size: 13px; }
+/* 指标卡 */
+.mcard { background: #1a1a2e; border: 1px solid #333; border-radius: 6px; padding: 6px 10px; text-align: center; }
+.mval { font-size: 18px; font-weight: 700; color: #00d4ff; line-height: 1.2; }
+.mlbl { font-size: 10px; color: #888; }
+/* 黑客日志 */
+.hlog { background: #0a0a0a; border: 1px solid #00ff41; border-radius: 6px; padding: 8px 10px; font-family: 'Courier New', monospace; font-size: 12px; color: #00ff41; line-height: 1.4; overflow-y: auto; box-shadow: 0 0 15px rgba(0,255,65,0.08); }
+.hlog .lt { color: #00ff41; font-weight: bold; font-size: 12px; border-bottom: 1px solid #00ff4133; padding-bottom: 3px; margin-bottom: 4px; }
+.hlog .lo { color: #00ccaa; } .hlog .le { color: #ff4444; } .hlog .lk { color: #00ff41; } .hlog .lw { color: #ffb800; }
+/* 进度条紧凑 */
+.stProgress > div { margin: 0 !important; }
 </style>
 """, unsafe_allow_html=True)
 
-if "results" not in st.session_state:
-    st.session_state.results = []
-if "delete_id" not in st.session_state:
-    st.session_state.delete_id = None
+if "results" not in st.session_state: st.session_state.results = []
+if "delete_id" not in st.session_state: st.session_state.delete_id = None
 
+
+def metric_card(label, value, color="#00d4ff"):
+    return f'<div class="mcard"><div class="mval" style="color:{color}">{value}</div><div class="mlbl">{label}</div></div>'
+
+
+# ---- 侧边栏 ----
 with st.sidebar:
     _ver = open(os.path.join(os.path.dirname(__file__), "VERSION"), encoding="utf-8").read().strip()
     st.markdown(f"### 🛡️ 安全数字监督员 v{_ver}")
     st.caption("牡丹江中燃 HSE · AI Agent")
-    st.divider()
     api_key = st.text_input("🔑 API Key", _cfg.get("api_key", ""), type="password")
-    base_url = st.text_input("🌐 Base URL", _cfg.get("base_url", ""))
+    base_url = st.text_input("🌐 URL", _cfg.get("base_url", ""))
     model_name = st.text_input("🤖 Model", _cfg.get("model_name", ""))
 
-tab_process, tab_dashboard = st.tabs(["📷 处理作业票", "🤖 AI 看板"])
+# ---- 主面板 ----
+tab1, tab2 = st.tabs(["📷 处理作业票", "🤖 AI 看板"])
 
 
 # ==================== Tab 1 ====================
-with tab_process:
-    # 手机拍照 或 选择文件
-    col_cam, col_file = st.columns(2)
-    with col_cam:
-        camera_photo = st.camera_input("📷 拍照上传", help="手机端点击唤起摄像头")
-    with col_file:
-        uploaded_files = st.file_uploader(
-            "📁 选择图片", type=["jpg","jpeg","png","bmp"],
-            accept_multiple_files=True, help="从相册选择",
-        )
+with tab1:
+    # 上传区：一行搞定
+    c_up, c_cam = st.columns([3, 1])
+    with c_up:
+        uploaded_files = st.file_uploader("📁 选择图片", type=["jpg","jpeg","png","bmp"], accept_multiple_files=True, label_visibility="collapsed")
+    with c_cam:
+        camera_photo = st.camera_input("📷", label_visibility="collapsed", help="拍照上传")
 
-    # 合并：拍照结果也当作一张图片处理
     if camera_photo is not None:
-        uploaded_files = [camera_photo]  # 拍照优先，覆盖文件选择
+        uploaded_files = [camera_photo]
 
     if not uploaded_files:
         if st.session_state.results:
-            st.markdown("### 📋 上次处理结果")
+            st.markdown("**📋 上次结果：**", help="上传新图片覆盖")
             for item in st.session_state.results:
                 d = item["data"]
-                c1, c2, c3, c4 = st.columns(4)
-                with c1:
-                    st.markdown(f'<div class="metric-card"><div class="metric-val">{d.ticket_id}</div><div class="metric-label">票号</div></div>', unsafe_allow_html=True)
-                with c2:
-                    color = "#ff4444" if d.has_abnormal else "#00ff41"
-                    val = f"{len(d.issues)} 项隐患" if d.has_abnormal else "正常"
-                    st.markdown(f'<div class="metric-card"><div class="metric-val" style="color:{color}">{val}</div><div class="metric-label">状态</div></div>', unsafe_allow_html=True)
-                with c3:
-                    st.markdown(f'<div class="metric-card"><div class="metric-val">{len(d.safety_measures)}</div><div class="metric-label">措施</div></div>', unsafe_allow_html=True)
-                with c4:
-                    conc = ", ".join(f"{v}%" for v in d.gas_concentration) if d.gas_concentration else "无"
-                    st.markdown(f'<div class="metric-card"><div class="metric-val" style="font-size:14px">{conc}</div><div class="metric-label">浓度</div></div>', unsafe_allow_html=True)
+                ic1, ic2, ic3, ic4, ic5 = st.columns(5)
+                with ic1: st.markdown(metric_card("票号", d.ticket_id), unsafe_allow_html=True)
+                with ic2: st.markdown(metric_card("状态", f"{len(d.issues)}项隐患" if d.has_abnormal else "正常", "#ff4444" if d.has_abnormal else "#00ff41"), unsafe_allow_html=True)
+                with ic3: st.markdown(metric_card("措施", f"{len(d.safety_measures)}项"), unsafe_allow_html=True)
+                with ic4: st.markdown(metric_card("风险", d.risk_level or "-", "#ff4444" if d.has_abnormal else "#00ff41"), unsafe_allow_html=True)
+                with ic5: st.markdown(metric_card("浓度", ", ".join(f"{v}%" for v in d.gas_concentration) if d.gas_concentration else "无"), unsafe_allow_html=True)
                 if d.approval_opinion:
                     icon = {"重大":"🔴","较大":"🟡","一般":"🟡","低风险":"🟢"}.get(d.risk_level or "", "")
-                    (st.warning if d.has_abnormal else st.success)(f"{icon} **审批建议：** {d.approval_opinion}")
+                    (st.warning if d.has_abnormal else st.success)(f"{icon} {d.approval_opinion}")
         else:
-            st.info("👆 上传作业票照片，Agent 将自主完成：感知 → 推理 → 反思 → 执行 → 生成审批建议")
+            st.caption("👆 拍照或选择作业票图片，Agent 自动完成全部流程")
 
     else:
-        st.markdown(f"**已上传 {len(uploaded_files)} 张**")
-
-        if not st.session_state.get("run_processing"):
-            cols = st.columns(min(len(uploaded_files), 4))
+        # 有文件：预览 + 开始按钮（一行）
+        pc1, pc2 = st.columns([5, 1])
+        with pc1:
+            thumbs = st.columns(min(len(uploaded_files), 4))
             for i, f in enumerate(uploaded_files[:4]):
-                with cols[i % 4]:
-                    st.image(f, caption=f.name, width=180)
+                with thumbs[i]: st.image(f, width=120)
+        with pc2:
+            st.markdown(f"<div style='text-align:center;padding-top:30px;font-size:12px;color:#888'>{len(uploaded_files)} 张</div>", unsafe_allow_html=True)
             if st.button("🚀 开始处理", type="primary", use_container_width=True):
                 st.session_state.run_processing = True
                 st.rerun()
 
-        else:
+        if st.session_state.get("run_processing"):
             st.session_state.run_processing = False
 
             from agent_core import SecurityAgent, LLMBrain
@@ -111,36 +115,33 @@ with tab_process:
 
             for idx, uploaded in enumerate(uploaded_files):
                 progress = st.progress(0, text=f"[{idx+1}/{len(uploaded_files)}] {uploaded.name}")
-                col_result, col_log = st.columns([3, 2])
-                log_ph = col_log.empty()
-                log_lines = []
+                col_r, col_l = st.columns([3, 2])
+                log_ph = col_l.empty()
+                log_buf = []
 
-                def hack_log(line):
-                    log_lines.append(line)
-                    import html as _html
+                def hlog(line):
+                    log_buf.append(line)
+                    import html as _h
                     parts = []
-                    for l in log_lines[-40:]:
-                        css = "log-line"
-                        if "Tool" in l: css = "log-tool"
-                        elif "FAIL" in l or "出错" in l: css = "log-err"
-                        elif "OK" in l or "通过" in l or "完成" in l: css = "log-ok"
-                        elif "重试" in l or "未通过" in l: css = "log-warn"
-                        parts.append(f'<div class="{css}">{_html.escape(l)}</div>')
-                    log_ph.markdown(
-                        f'<div class="hacker-log"><div class="log-title">🤖 AGENT THINKING...</div>{"".join(parts)}</div>',
-                        unsafe_allow_html=True)
+                    for l in log_buf[-35:]:
+                        c = ""
+                        if "Tool" in l: c = "lo"
+                        elif "FAIL" in l or "出错" in l: c = "le"
+                        elif "OK" in l or "通过" in l or "完成" in l: c = "lk"
+                        elif "重试" in l or "未通过" in l: c = "lw"
+                        parts.append(f'<div class="{c}">{_h.escape(l)}</div>')
+                    log_ph.markdown(f'<div class="hlog"><div class="lt">🤖 AGENT THINKING...</div>{"".join(parts)}</div>', unsafe_allow_html=True)
 
                 suffix = os.path.splitext(uploaded.name)[1] or ".jpg"
                 upload_dir = os.path.join(os.path.dirname(__file__), "uploads")
                 os.makedirs(upload_dir, exist_ok=True)
                 save_path = os.path.join(upload_dir, f"{int(time.time())}_{idx}{suffix}")
-                with open(save_path, "wb") as f:
-                    f.write(uploaded.getvalue())
+                with open(save_path, "wb") as f: f.write(uploaded.getvalue())
 
-                with col_result:
-                    st.image(save_path, caption=uploaded.name, width=350)
+                with col_r:
+                    st.image(save_path, caption=uploaded.name, width=280)
 
-                hack_log(f">>> 收到任务: {uploaded.name}")
+                hlog(f">>> {uploaded.name}")
                 progress.progress(5, text=f"[{idx+1}/{len(uploaded_files)}] OCR...")
 
                 _orig = sys.stdout
@@ -152,7 +153,7 @@ with tab_process:
                     def write(self, s):
                         s = s.strip()
                         if s:
-                            hack_log(s)
+                            hlog(s)
                             for k, p in _sp.items():
                                 if f"Agent {k}" in s:
                                     progress.progress(p, text=f"[{idx+1}/{len(uploaded_files)}] {_sc[k]}...")
@@ -162,190 +163,143 @@ with tab_process:
                 sys.stdout = Cap()
                 try:
                     ocr_text, structured = agent.run(save_path)
-                    result["ocr"] = ocr_text
-                    result["data"] = structured
+                    result["ocr"], result["data"] = ocr_text, structured
                 except Exception as e:
-                    hack_log(f"❌ 出错: {e}")
+                    hlog(f"❌ {e}")
                 finally:
                     sys.stdout = _orig
 
-                progress.progress(100, text=f"[{idx+1}/{len(uploaded_files)}] ✅ 完成")
+                progress.progress(100, text=f"[{idx+1}/{len(uploaded_files)}] ✅")
 
-                with col_result:
+                with col_r:
                     if result["data"]:
                         d = result["data"]
                         st.session_state.results.append(result)
 
-                        c1, c2, c3, c4 = st.columns(4)
-                        with c1:
-                            st.markdown(f'<div class="metric-card"><div class="metric-val">{d.ticket_id}</div><div class="metric-label">票号</div></div>', unsafe_allow_html=True)
-                        with c2:
-                            color = "#ff4444" if d.has_abnormal else "#00ff41"
-                            val = f"{len(d.issues)} 项隐患" if d.has_abnormal else "正常"
-                            st.markdown(f'<div class="metric-card"><div class="metric-val" style="color:{color}">{val}</div><div class="metric-label">状态</div></div>', unsafe_allow_html=True)
-                        with c3:
-                            st.markdown(f'<div class="metric-card"><div class="metric-val">{len(d.safety_measures)}</div><div class="metric-label">措施</div></div>', unsafe_allow_html=True)
-                        with c4:
-                            conc = ", ".join(f"{v}%" for v in d.gas_concentration) if d.gas_concentration else "无"
-                            st.markdown(f'<div class="metric-card"><div class="metric-val" style="font-size:14px">{conc}</div><div class="metric-label">浓度</div></div>', unsafe_allow_html=True)
+                        # 紧凑指标行
+                        ic1, ic2, ic3, ic4, ic5 = st.columns(5)
+                        with ic1: st.markdown(metric_card("票号", d.ticket_id), unsafe_allow_html=True)
+                        with ic2: st.markdown(metric_card("状态", f"{len(d.issues)}项隐患" if d.has_abnormal else "正常", "#ff4444" if d.has_abnormal else "#00ff41"), unsafe_allow_html=True)
+                        with ic3: st.markdown(metric_card("措施", f"{len(d.safety_measures)}项"), unsafe_allow_html=True)
+                        with ic4: st.markdown(metric_card("风险", d.risk_level or "-", "#ff4444" if d.has_abnormal else "#00ff41"), unsafe_allow_html=True)
+                        with ic5: st.markdown(metric_card("浓度", ", ".join(f"{v}%" for v in d.gas_concentration) if d.gas_concentration else "无"), unsafe_allow_html=True)
 
+                        # 审批建议
                         if d.approval_opinion:
-                            icon = {"重大":"🔴","较大":"🟡","一般":"🟡","低风险":"🟢"}.get(d.risk_level or "", "")
-                            (st.warning if d.has_abnormal else st.success)(f"{icon} **审批建议（{d.risk_level or '-'}）：** {d.approval_opinion}")
+                            ic = {"重大":"🔴","较大":"🟡","一般":"🟡","低风险":"🟢"}.get(d.risk_level or "", "")
+                            (st.warning if d.has_abnormal else st.success)(f"{ic} {d.approval_opinion}")
 
-                        if d.has_abnormal:
-                            st.error(f"🚨 {len(d.issues)} 项隐患")
-
+                        # OCR + 隐患（折叠）
                         if result["ocr"]:
-                            with st.expander("📝 OCR 识别结果", expanded=False):
+                            with st.expander("📝 OCR 原文", expanded=False):
                                 ocr_rows = []
                                 for line in result["ocr"].strip().split("\n"):
                                     line = line.strip()
-                                    if not line:
-                                        continue
+                                    if not line: continue
                                     if "：" in line:
-                                        p = line.split("：", 1)
-                                        ocr_rows.append({"字段": p[0].strip(), "识别值": p[1].strip()})
+                                        p = line.split("：", 1); ocr_rows.append({"字段": p[0].strip(), "值": p[1].strip()})
                                     elif ":" in line and line.index(":") > 0:
-                                        p = line.split(":", 1)
-                                        ocr_rows.append({"字段": p[0].strip(), "识别值": p[1].strip()})
+                                        p = line.split(":", 1); ocr_rows.append({"字段": p[0].strip(), "值": p[1].strip()})
                                     else:
-                                        ocr_rows.append({"字段": "", "识别值": line})
+                                        ocr_rows.append({"字段": "", "值": line})
                                 if ocr_rows:
-                                    st.dataframe(pd.DataFrame(ocr_rows), use_container_width=True, height=min(len(ocr_rows)*35+40, 500))
-                                else:
-                                    st.code(result["ocr"], language=None)
+                                    st.dataframe(pd.DataFrame(ocr_rows), use_container_width=True, height=min(len(ocr_rows)*30+30, 400))
 
-                        t1, t2 = st.tabs(["📦 结构化数据", f"⚠️ 隐患 ({len(d.issues)})"])
-                        with t1:
-                            st.json(d.model_dump())
-                        with t2:
-                            if d.issues:
+                        if d.issues:
+                            with st.expander(f"⚠️ 隐患明细 ({len(d.issues)})", expanded=False):
                                 for issue in d.issues:
-                                    st.markdown(f"- **{issue.item_name}** — {issue.status}" + (f" ({issue.raw_text})" if issue.raw_text else ""))
-                            else:
-                                st.success("无隐患。")
+                                    st.caption(f"• **{issue.item_name}** — {issue.status}" + (f" ({issue.raw_text})" if issue.raw_text else ""))
 
+            # 批量汇总
             if len(st.session_state.results) > 1:
-                st.divider()
-                st.markdown(f"### 📊 汇总（{len(st.session_state.results)} 张）")
                 abn = sum(1 for r in st.session_state.results if r["data"].has_abnormal)
-                sc1, sc2, sc3 = st.columns(3)
-                with sc1: st.metric("总处理", len(st.session_state.results))
-                with sc2: st.metric("有隐患", abn)
-                with sc3: st.metric("正常", len(st.session_state.results) - abn)
-
-                summary_rows = []
-                for r in st.session_state.results:
-                    d = r["data"]
-                    summary_rows.append({"票号": d.ticket_id, "场站": d.station_name, "动火人": d.worker_id, "日期": d.check_date,
-                                         "状态": "有隐患" if d.has_abnormal else "正常", "风险": d.risk_level or "-", "隐患": len(d.issues)})
-                st.dataframe(pd.DataFrame(summary_rows), use_container_width=True)
+                st.caption(f"📊 汇总: {len(st.session_state.results)}张 | 有隐患{abn} | 正常{len(st.session_state.results)-abn}")
+                rows = [{"票号": r["data"].ticket_id, "场站": r["data"].station_name, "状态": "有隐患" if r["data"].has_abnormal else "正常", "风险": r["data"].risk_level or "-"} for r in st.session_state.results]
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, height=min(len(rows)*30+30, 200))
 
 
 # ==================== Tab 2: AI 看板 ====================
-with tab_dashboard:
+with tab2:
     import sqlite3
     db_path = os.path.join(os.path.dirname(__file__), "security_data.db")
     _del_pwd = _cfg.get("delete_password", "123")
 
-    st.markdown("#### 📊 安全数据看板")
-
     if not os.path.exists(db_path):
         sc1, sc2, sc3, sc4 = st.columns(4)
-        with sc1: st.metric("总处理票数", 0)
-        with sc2: st.metric("有隐患", 0)
+        with sc1: st.metric("总票数", 0)
+        with sc2: st.metric("隐患", 0)
         with sc3: st.metric("正常", 0)
         with sc4: st.metric("隐患率", "0%")
-        st.info("📭 暂无数据，处理作业票后自动保存到这里。")
+        st.caption("📭 暂无数据")
     else:
         conn = sqlite3.connect(db_path)
         try:
-            rows_db = conn.execute("""
-                SELECT id, ticket_id, station_name, worker_id, check_date,
-                       has_abnormal, approval_opinion, risk_level, created_at
-                FROM hse_fire_work_tickets ORDER BY id DESC
-            """).fetchall()
-        except Exception:
-            rows_db = conn.execute("""
-                SELECT id, ticket_id, station_name, worker_id, check_date,
-                       has_abnormal, '' as approval_opinion, '' as risk_level, created_at
-                FROM hse_fire_work_tickets ORDER BY id DESC
-            """).fetchall()
+            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,approval_opinion,risk_level,created_at FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
+        except:
+            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,'','',created_at FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
 
         total = len(rows_db)
         abn_cnt = sum(1 for r in rows_db if r[5])
 
         sc1, sc2, sc3, sc4 = st.columns(4)
-        with sc1: st.metric("总处理票数", total)
-        with sc2: st.metric("有隐患", abn_cnt)
+        with sc1: st.metric("总票数", total)
+        with sc2: st.metric("隐患", abn_cnt)
         with sc3: st.metric("正常", total - abn_cnt)
         with sc4: st.metric("隐患率", f"{abn_cnt/total*100:.0f}%" if total else "0%")
 
-        # 高频隐患 Top 5
+        # 高频隐患
         issue_counter = {}
         try:
             for (ij,) in conn.execute("SELECT issues_json FROM hse_fire_work_tickets WHERE has_abnormal=1").fetchall():
                 if ij:
                     for item in json.loads(ij):
-                        n = item.get("item_name", "未知")
-                        issue_counter[n] = issue_counter.get(n, 0) + 1
-        except Exception:
-            pass
-
-        if issue_counter:
-            st.markdown("**高频隐患 Top 5：**")
-            for name, count in sorted(issue_counter.items(), key=lambda x: -x[1])[:5]:
-                bar = min(count * 20, 200)
-                st.markdown(f"<div style='margin:2px 0'>{name} <span style='background:#ff4444;display:inline-block;width:{bar}px;height:14px;border-radius:3px;vertical-align:middle'></span> {count}次</div>", unsafe_allow_html=True)
-
+                        n = item.get("item_name", "未知"); issue_counter[n] = issue_counter.get(n, 0) + 1
+        except: pass
         conn.close()
 
-        # 删除密码弹窗
+        if issue_counter:
+            top5 = sorted(issue_counter.items(), key=lambda x: -x[1])[:5]
+            cols = st.columns(len(top5))
+            for i, (name, count) in enumerate(top5):
+                with cols[i]:
+                    st.markdown(metric_card(name, f"{count}次", "#ff4444"), unsafe_allow_html=True)
+
+        # 删除弹窗
         if st.session_state.delete_id:
             @st.dialog("🗑️ 确认删除", width="small")
             def confirm_delete():
-                st.warning(f"删除记录 **#{st.session_state.delete_id}**？此操作不可撤销。")
-                pwd = st.text_input("🔑 输入删除密码", type="password")
+                st.warning(f"删除 **#{st.session_state.delete_id}**？")
+                pwd = st.text_input("密码", type="password")
                 fc1, fc2 = st.columns(2)
                 with fc1:
-                    if st.button("✅ 确认删除", type="primary", use_container_width=True):
+                    if st.button("✅ 确认", type="primary", use_container_width=True):
                         if pwd == _del_pwd:
-                            conn2 = sqlite3.connect(db_path)
-                            conn2.execute("DELETE FROM hse_fire_work_tickets WHERE id=?", (st.session_state.delete_id,))
-                            conn2.commit()
-                            conn2.close()
-                            st.session_state.delete_id = None
-                            st.rerun()
-                        else:
-                            st.error("密码错误")
+                            c2 = sqlite3.connect(db_path)
+                            c2.execute("DELETE FROM hse_fire_work_tickets WHERE id=?", (st.session_state.delete_id,))
+                            c2.commit(); c2.close()
+                            st.session_state.delete_id = None; st.rerun()
+                        else: st.error("密码错误")
                 with fc2:
                     if st.button("❌ 取消", use_container_width=True):
-                        st.session_state.delete_id = None
-                        st.rerun()
+                        st.session_state.delete_id = None; st.rerun()
             confirm_delete()
 
         # 记录列表
-        st.divider()
-        st.markdown(f"**共 {total} 条记录**")
         for row in rows_db:
             rid, ticket, station, worker, date, abnormal, opinion, risk, created = row
             icon = "🚨" if abnormal else "✅"
             badge = f" [{risk}]" if risk else ""
-
-            col_main, col_del = st.columns([9, 1])
-            with col_main:
+            cm, cd = st.columns([9, 1])
+            with cm:
                 with st.expander(f"{icon} #{rid} | {ticket} | {station} | {date}{badge}", expanded=False):
                     ca, cb = st.columns(2)
-                    with ca:
-                        st.markdown(f"**票号:** {ticket}  \n**场站:** {station}  \n**动火人:** {worker}  \n**日期:** {date}")
+                    with ca: st.markdown(f"**票号:** {ticket}  \n**场站:** {station}  \n**动火人:** {worker}  \n**日期:** {date}")
                     with cb:
                         st.markdown(f"**状态:** :{'red' if abnormal else 'green'}[{'有隐患' if abnormal else '正常'}]")
-                        if risk: st.markdown(f"**风险等级:** {risk}")
-                        st.markdown(f"**处理时间:** {created}")
-                        if opinion: st.markdown(f"**审批建议:** {opinion}")
-            with col_del:
-                st.markdown("<div style='padding-top:28px'></div>", unsafe_allow_html=True)
+                        if risk: st.markdown(f"**风险:** {risk}")
+                        st.caption(f"处理时间: {created}")
+                        if opinion: st.caption(f"审批: {opinion}")
+            with cd:
+                st.markdown("<div style='padding-top:20px'></div>", unsafe_allow_html=True)
                 if st.button("🗑️", key=f"del_{rid}", help=f"删除 #{rid}"):
-                    st.session_state.delete_id = rid
-                    st.rerun()
+                    st.session_state.delete_id = rid; st.rerun()
