@@ -335,61 +335,51 @@ class SecurityAgent:
         return data
 
     def _generate_approval(self, data: SecuritySheetData) -> str:
-        """调用 LLM 生成专业审批建议，引用安全标准条文"""
-        # 构建异常摘要
+        """调用 LLM 生成专业审批建议，列出具体异常项"""
+        # 构建异常摘要：逐项列出问题
         issues_desc = ""
         if data.has_abnormal:
-            unimpl = [m for m in data.safety_measures if not m.implemented]
-            conc_high = [v for v in data.gas_concentration if v > 0]
-            parts = []
-            if unimpl:
-                parts.append("未落实的安全措施：" + "; ".join(
-                    f"第{m.measure_id}项「{m.description}」" for m in unimpl[:5]))
-            if conc_high:
-                parts.append(f"可燃气体浓度异常读数：{conc_high}")
-            if data.issues:
-                parts.append("隐患明细：" + "; ".join(
-                    f"{i.item_name}({i.raw_text or '无备注'})" for i in data.issues[:5]))
-            issues_desc = "\n".join(parts)
+            items = []
+            # 未落实措施
+            for m in data.safety_measures:
+                if not m.implemented:
+                    items.append(f"第{m.measure_id}项「{m.description}」未落实")
+            # 浓度异常
+            for i, v in enumerate(data.gas_concentration):
+                if v > 0:
+                    items.append(f"第{i+1}次检测浓度{v}%超标")
+            # 隐患项
+            for issue in data.issues:
+                items.append(f"{issue.item_name}（{issue.raw_text or '异常'}）")
+            issues_desc = "\n".join(f"- {item}" for item in items[:10])
 
         prompt = (
-            "你是牡丹江中燃 HSE 安全审计专家，依据以下国家标准生成动火作业票审批建议：\n\n"
-            "【参考标准】\n"
-            "1. GB 30871-2022《危险化学品企业特殊作业安全规范》\n"
-            "   - 第5.3.2条：动火作业前，应对动火点进行可燃气体浓度检测，浓度应低于爆炸下限(LEL)的20%\n"
-            "   - 第6.4条：动火点10m范围内应清除可燃物，配备消防器材\n"
-            "   - 第6.5条：动火监护人应全程在场监护\n"
-            "   - 第5.1条：动火作业前应办理动火作业票，经审批后方可作业\n"
-            "   - 第5.2条：特级、一级动火作业中断超过30分钟，应重新检测\n"
-            "2. AQ 3022-2008《化学品生产单位动火作业安全规范》\n"
-            "   - 动火作业分级管理（特级/一级/二级）\n"
-            "   - 动火分析合格后方可作业\n"
-            "3. 企业 HSE 管理制度：安全措施逐项落实后方可开工\n\n"
-            "【输出要求】\n"
-            "- 无隐患时：输出【同意作业】+ 简要确认 + 监护要求\n"
-            "- 有隐患时：输出【暂缓作业】+ 逐项列出问题 + 引用对应标准条文 + 风险等级(重大/较大/一般/低风险) + 整改期限建议\n"
-            "- 语气：专业、严谨、可追溯\n"
-            "- 字数：150字以内\n\n"
-            f"【作业票信息】\n"
-            f"票号：{data.ticket_id}\n场站：{data.station_name}\n内容：{data.content}\n"
-            f"动火人：{data.worker_id}\n日期：{data.check_date}\n"
-            f"浓度：{data.gas_concentration}\n措施总数：{len(data.safety_measures)}项\n"
-            f"有异常：{data.has_abnormal}\n"
-            f"{'异常详情：' + chr(10) + issues_desc if issues_desc else ''}"
+            "你是HSE安全审计专家，生成动火作业票审批建议。\n\n"
+            "【标准依据】\n"
+            "- GB 30871-2022 第5.3.2条：浓度低于LEL的20%\n"
+            "- GB 30871-2022 第6.4条：动火点10m内清除可燃物配消防器材\n"
+            "- GB 30871-2022 第6.5条：监护人全程在场\n\n"
+            "【输出格式】\n"
+            "无异常→【同意作业】+简要确认\n"
+            "有异常→【暂缓作业】+逐项列出问题（简写）+风险等级\n"
+            "字数100字以内\n\n"
+            f"票号：{data.ticket_id} 场站：{data.station_name}\n"
+            f"浓度：{data.gas_concentration} 措施：{len(data.safety_measures)}项\n"
+            f"异常：{data.has_abnormal}\n"
+            f"{issues_desc}"
         )
 
         try:
-            print("[Agent Act] 调用 LLM 生成专业审批建议...")
+            print("[Agent Act] 调用 LLM 生成审批建议...")
             response = self.brain.client.chat.completions.create(
                 model=self.brain.model_name,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=300,
+                max_tokens=200,
                 timeout=120,
             )
             opinion = response.choices[0].message.content.strip()
 
-            # 同时让 LLM 判断风险等级
             if data.has_abnormal:
                 data.risk_level = self._assess_risk_level(data)
             else:
@@ -428,13 +418,20 @@ class SecurityAgent:
 
     @staticmethod
     def _generate_approval_template(data: SecuritySheetData) -> str:
-        """LLM 失败时的 fallback 模板"""
+        """LLM 失败时的 fallback 模板，列出具体异常"""
         if not data.has_abnormal:
-            return (f"【同意作业】票号{data.ticket_id}，{data.station_name}动火作业申请。"
-                    f"安全措施已全部落实，浓度合格。依据 GB 30871-2022 第5.1条，建议批准。")
-        issue_names = "、".join(i.item_name for i in data.issues[:3])
-        return (f"【暂缓作业】票号{data.ticket_id}，存在隐患：{issue_names}。"
-                f"依据 GB 30871-2022，请整改后重新提交审批。")
+            return f"【同意作业】票号{data.ticket_id}，安全措施已落实，浓度合格。依据GB 30871-2022第5.1条批准。"
+        items = []
+        for m in data.safety_measures:
+            if not m.implemented:
+                items.append(f"第{m.measure_id}项未落实")
+        for i, v in enumerate(data.gas_concentration):
+            if v > 0:
+                items.append(f"第{i+1}次浓度{v}%超标")
+        for issue in data.issues:
+            items.append(f"{issue.item_name}")
+        detail = "；".join(items[:5]) if items else "存在异常"
+        return f"【暂缓作业】{detail}。依据GB 30871-2022，请整改后重新提交。"
 
     def _act(self, data: SecuritySheetData, ocr_text: str, mem: AgentMemory, image_path: str = ""):
         print("[Agent Act] 执行工具组合...")
