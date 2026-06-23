@@ -355,9 +355,9 @@ with tab2:
     else:
         conn = sqlite3.connect(db_path)
         try:
-            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,approval_opinion,risk_level,created_at FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
+            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,approval_opinion,risk_level,created_at,image_path FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
         except:
-            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,'','',created_at FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
+            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,'','',created_at,'' FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
 
         total = len(rows_db)
         abn_cnt = sum(1 for r in rows_db if r[5])
@@ -407,7 +407,7 @@ with tab2:
 
         # 记录列表
         for row in rows_db:
-            rid, ticket, station, worker, date, abnormal, opinion, risk, created = row
+            rid, ticket, station, worker, date, abnormal, opinion, risk, created, img_path = row
             icon = "🚨" if abnormal else "✅"
             badge_html = f' {badge(risk, "err" if risk=="重大" else ("warn" if risk in ["较大","一般"] else "ok"))}' if risk else ""
 
@@ -421,6 +421,15 @@ with tab2:
                         if risk: st.markdown(f"**风险** {risk}")
                         st.caption(f"处理: {created}")
                         if opinion: st.caption(f"审批: {opinion}")
+                    # 查看原图按钮
+                    if img_path and os.path.exists(img_path):
+                        if st.button("🖼️ 查看原图", key=f"img_{rid}", use_container_width=True):
+                            @st.dialog("原图", width="large")
+                            def show_orig_img(_path=img_path, _name=ticket):
+                                st.image(_path, caption=_name, use_container_width=True)
+                            show_orig_img()
+                    else:
+                        st.caption("原图不可用")
             with cd:
                 st.markdown("<div style='padding-top:18px'></div>", unsafe_allow_html=True)
                 if st.button("🗑️", key=f"del_{rid}", help=f"删除 #{rid}"):

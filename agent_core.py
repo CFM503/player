@@ -167,7 +167,7 @@ class AgentTools:
         return full_text
 
     @staticmethod
-    def save_to_db(data: SecuritySheetData, raw_ocr: str = "") -> bool:
+    def save_to_db(data: SecuritySheetData, raw_ocr: str = "", image_path: str = "") -> bool:
         """写入 SQLite，自动迁移旧表"""
         import sqlite3
         db_path = os.path.join(os.path.dirname(__file__), "security_data.db")
@@ -183,13 +183,13 @@ class AgentTools:
                 safety_measures_json TEXT, has_abnormal INTEGER NOT NULL,
                 issues_json TEXT, completion_time TEXT, approver_name TEXT,
                 approval_opinion TEXT, risk_level TEXT, raw_ocr_text TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                image_path TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
         # 自动迁移：给旧表补列
         existing = {row[1] for row in conn.execute("PRAGMA table_info(hse_fire_work_tickets)").fetchall()}
-        for col, typ in [("approval_opinion", "TEXT"), ("risk_level", "TEXT")]:
+        for col, typ in [("approval_opinion", "TEXT"), ("risk_level", "TEXT"), ("image_path", "TEXT")]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE hse_fire_work_tickets ADD COLUMN {col} {typ}")
                 print(f"[Tool] 旧表迁移：新增列 {col}")
@@ -198,15 +198,15 @@ class AgentTools:
             "INSERT INTO hse_fire_work_tickets "
             "(ticket_id,station_name,content,worker_id,check_date,"
             "gas_concentration_json,safety_measures_json,has_abnormal,"
-            "issues_json,completion_time,approver_name,approval_opinion,risk_level,raw_ocr_text) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "issues_json,completion_time,approver_name,approval_opinion,risk_level,raw_ocr_text,image_path) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (data.ticket_id, data.station_name, data.content, data.worker_id,
              data.check_date, json.dumps(data.gas_concentration, ensure_ascii=False),
              json.dumps([m.model_dump() for m in data.safety_measures], ensure_ascii=False),
              int(data.has_abnormal),
              json.dumps([i.model_dump() for i in data.issues], ensure_ascii=False),
              data.completion_time, data.approver_name, data.approval_opinion,
-             data.risk_level, raw_ocr),
+             data.risk_level, raw_ocr, image_path),
         )
         conn.commit()
         conn.close()
@@ -428,14 +428,14 @@ class SecurityAgent:
         return (f"【暂缓作业】票号{data.ticket_id}，存在隐患：{issue_names}。"
                 f"依据 GB 30871-2022，请整改后重新提交审批。")
 
-    def _act(self, data: SecuritySheetData, ocr_text: str, mem: AgentMemory):
+    def _act(self, data: SecuritySheetData, ocr_text: str, mem: AgentMemory, image_path: str = ""):
         print("[Agent Act] 执行工具组合...")
 
         # 生成审批建议
         data.approval_opinion = self._generate_approval(data)
         print(f"[Agent Act] 审批建议: {data.approval_opinion[:60]}...")
 
-        self.tools.save_to_db(data, raw_ocr=ocr_text)
+        self.tools.save_to_db(data, raw_ocr=ocr_text, image_path=image_path)
 
         if data.has_abnormal:
             for issue in data.issues:
@@ -465,7 +465,7 @@ class SecurityAgent:
         ocr_text = self._perceive(image_path, mem)
         data = self._reason(ocr_text, mem)
         data = self._reflect(ocr_text, data, mem)
-        self._act(data, ocr_text, mem)
+        self._act(data, ocr_text, mem, image_path=image_path)
 
         elapsed = time.time() - t0
         print(f"[Agent] 全流程耗时: {elapsed:.1f}s")
