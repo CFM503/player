@@ -14,100 +14,76 @@ _ver = open(os.path.join(os.path.dirname(__file__), "VERSION"), encoding="utf-8"
 
 st.set_page_config(page_title="安全数字监督员", page_icon="🛡️", layout="wide", initial_sidebar_state="collapsed")
 
-# ---- 全局暗色主题 CSS ----
-st.markdown(f"""
+# ---- 全局 CSS（所有颜色显式指定，不依赖系统主题）----
+st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
 
-:root {{
-    --bg: #0d1117; --card: #161b22; --border: #30363d;
-    --green: #3fb950; --red: #f85149; --yellow: #d29922; --blue: #58a6ff; --cyan: #39d353;
-    --text: #c9d1d9; --dim: #8b949e;
-}}
-
-/* 全局 */
-.stApp {{ background: var(--bg); }}
-.block-container {{ padding: 0.4rem 1rem 0.2rem 1rem; max-width: 100%; }}
-#MainMenu, footer, header {{ display: none !important; }}
-
-/* 侧边栏 */
-section[data-testid="stSidebar"] {{ background: var(--card); border-right: 1px solid var(--border); }}
-section[data-testid="stSidebar"] .block-container {{ padding-top: 0.5rem; }}
+.block-container { padding: 0.4rem 1rem 0.2rem 1rem; max-width: 100%; }
+#MainMenu, footer, header { display: none !important; }
 
 /* Tabs */
-.stTabs [data-baseweb="tab-list"] {{ gap: 0; background: var(--card); border-radius: 6px; padding: 2px; border: 1px solid var(--border); }}
-.stTabs [data-baseweb="tab"] {{ color: var(--dim); font-size: 13px; padding: 6px 16px; border-radius: 4px; }}
-.stTabs [aria-selected="true"] {{ color: var(--text) !important; background: var(--bg) !important; }}
+.stTabs [data-baseweb="tab-list"] { gap: 0; border-radius: 6px; padding: 2px; }
+.stTabs [data-baseweb="tab"] { font-size: 13px; padding: 6px 16px; border-radius: 4px; }
 
-/* 上传区 - 自适应宽度 */
-[data-testid="stFileUploader"], [data-testid="stCameraInput"] {{ padding: 0 !important; margin: 0 !important; }}
-[data-testid="stFileUploader"] section, [data-testid="stCameraInput"] section {{
-    background: var(--card) !important; border: 1px dashed var(--border) !important;
-    border-radius: 6px !important; padding: 4px 8px !important; min-height: 0 !important;
-}}
-/* 上传区 - 统一蓝色按钮外观 */
-[data-testid="stFileUploader"], [data-testid="stCameraInput"] {{ padding: 0 !important; margin: 0 !important; }}
-[data-testid="stFileUploader"] section, [data-testid="stCameraInput"] section {{
+/* 上传区 - 蓝色按钮 */
+[data-testid="stFileUploader"], [data-testid="stCameraInput"] { padding: 0 !important; margin: 0 !important; }
+[data-testid="stFileUploader"] section, [data-testid="stCameraInput"] section {
     background: #007BFF !important; border: none !important;
     border-radius: 8px !important; padding: 8px 16px !important;
     min-height: 40px !important; display: flex !important; align-items: center !important; justify-content: center !important;
-}}
-[data-testid="stFileUploader"] label, [data-testid="stCameraInput"] label {{ color: #fff !important; font-size: 14px !important; font-weight: 500 !important; }}
-[data-testid="stFileUploader"] section svg, [data-testid="stCameraInput"] section svg {{ fill: #fff !important; }}
-[data-testid="stFileUploader"] section p, [data-testid="stCameraInput"] section p {{ color: rgba(255,255,255,0.8) !important; font-size: 12px !important; }}
-[data-testid="stCameraInput"] [data-testid="stImage"] {{ display: none !important; }}
-/* 列间距 */
-[data-testid="stHorizontalBlock"] {{ gap: 6px !important; }}
+}
+[data-testid="stFileUploader"] label, [data-testid="stCameraInput"] label { color: #fff !important; font-size: 14px !important; font-weight: 500 !important; }
+[data-testid="stFileUploader"] section svg, [data-testid="stCameraInput"] section svg { fill: #fff !important; }
+[data-testid="stFileUploader"] section p, [data-testid="stCameraInput"] section p { color: rgba(255,255,255,0.8) !important; font-size: 12px !important; }
+[data-testid="stCameraInput"] [data-testid="stImage"] { display: none !important; }
+[data-testid="stHorizontalBlock"] { gap: 6px !important; }
 
-/* 按钮 - 统一蓝色 */
-.stButton > button {{
+/* 按钮 - 蓝色统一 */
+.stButton > button {
     background: #007BFF !important; color: #fff !important;
     border: none !important; border-radius: 8px !important;
     padding: 8px 16px !important; font-size: 14px !important; font-weight: 500 !important;
     min-height: 40px !important; transition: all 0.15s;
-}}
-.stButton > button:hover {{ background: #0056b3 !important; }}
-.stButton > button:disabled {{ background: #b0d4ff !important; color: #fff !important; }}
-.stButton > button[kind="primary"] {{ background: #007BFF !important; }}
-.stButton > button[kind="primary"]:hover {{ background: #0056b3 !important; }}
+}
+.stButton > button:hover { background: #0056b3 !important; }
+.stButton > button:disabled { background: #b0d4ff !important; color: #fff !important; }
+.stButton > button[kind="primary"] { background: #007BFF !important; }
+.stButton > button[kind="primary"]:hover { background: #0056b3 !important; }
 
-/* 指标卡 */
-.kpi {{ background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; text-align: center; }}
-.kpi-val {{ font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 700; color: var(--blue); line-height: 1.3; }}
-.kpi-lbl {{ font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; }}
+/* KPI 指标卡 - 浅色底，深色字 */
+.kpi { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 8px; padding: 10px 14px; text-align: center; }
+.kpi-val { font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 700; color: #0969da; line-height: 1.3; }
+.kpi-lbl { font-size: 10px; color: #57606a; text-transform: uppercase; letter-spacing: 0.5px; }
 
-/* 状态徽章 */
-.badge {{ display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }}
-.badge-ok {{ background: #0d1117; color: var(--green); border: 1px solid var(--green); }}
-.badge-warn {{ background: #1c1b00; color: var(--yellow); border: 1px solid var(--yellow); }}
-.badge-err {{ background: #1c0d0d; color: var(--red); border: 1px solid var(--red); }}
+/* 状态徽章 - 浅色底，明确文字色 */
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.badge-ok { background: #dafbe1; color: #116329; border: 1px solid #4ac26b; }
+.badge-warn { background: #fff8c5; color: #9a6700; border: 1px solid #e3b341; }
+.badge-err { background: #ffebe9; color: #cf222e; border: 1px solid #ff8182; }
 
-/* 黑客日志面板 */
-.hlog {{
-    background: #0a0e14; border: 1px solid #1a3a1a; border-radius: 6px;
+/* 黑客日志面板 - 独立暗色 */
+.hlog {
+    background: #0d1117; border: 1px solid #1a3a1a; border-radius: 8px;
     padding: 10px 12px; font-family: 'JetBrains Mono', 'Courier New', monospace;
-    font-size: 12px; color: var(--green); line-height: 1.5;
-    overflow-y: auto; box-shadow: inset 0 0 30px rgba(0,255,65,0.03);
-}}
-.hlog .lt {{ color: var(--green); font-weight: bold; border-bottom: 1px solid #1a3a1a; padding-bottom: 3px; margin-bottom: 6px; font-size: 13px; }}
-.hlog .lo {{ color: #39d353; }} .hlog .le {{ color: #f85149; }} .hlog .lk {{ color: #58a6ff; }} .hlog .lw {{ color: #d29922; }}
+    font-size: 12px; color: #3fb950; line-height: 1.5;
+    overflow-y: auto; box-shadow: inset 0 0 30px rgba(0,255,65,0.05);
+}
+.hlog .lt { color: #3fb950; font-weight: bold; border-bottom: 1px solid #1a3a1a; padding-bottom: 3px; margin-bottom: 6px; font-size: 13px; }
+.hlog .lo { color: #39d353; }
+.hlog .le { color: #f85149; }
+.hlog .lk { color: #58a6ff; }
+.hlog .lw { color: #d29922; }
 
-/* 进度条 - 细线，不重叠 */
-.stProgress {{ margin: 0 !important; padding: 0 !important; }}
-.stProgress > div {{ margin: 0 !important; height: 3px !important; border-radius: 2px !important; }}
-.stProgress > div > div {{ background: var(--green) !important; }}
-/* 隐藏 Streamlit 自带的蓝色 spinner 进度条 */
-.stSpinner {{ display: none !important; }}
-/* 图片自适应，hover 放大提示 */
-[data-testid="stImage"] img {{ border-radius: 4px; cursor: zoom-in; }}
-[data-testid="stImage"] img:hover {{ opacity: 0.85; }}
+/* 进度条 */
+.stProgress { margin: 0 !important; padding: 0 !important; }
+.stProgress > div { margin: 0 !important; height: 3px !important; border-radius: 2px !important; }
+.stProgress > div > div { background: #007BFF !important; }
+.stSpinner { display: none !important; }
 
-/* 表格 */
-.stDataFrame {{ border: 1px solid var(--border); border-radius: 6px; }}
-
-/* Expander */
-details {{ background: var(--card); border: 1px solid var(--border); border-radius: 6px; }}
-details summary {{ color: var(--text); font-size: 13px; }}
+/* 图片 */
+[data-testid="stImage"] img { border-radius: 4px; cursor: zoom-in; }
+[data-testid="stImage"] img:hover { opacity: 0.85; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -120,7 +96,7 @@ if "show_camera" not in st.session_state: st.session_state.show_camera = False
 if "upload_done" not in st.session_state: st.session_state.upload_done = False
 
 
-def kpi(label, value, color="var(--blue)"):
+def kpi(label, value, color="#0969da"):
     return f'<div class="kpi"><div class="kpi-val" style="color:{color}">{value}</div><div class="kpi-lbl">{label}</div></div>'
 
 def badge(text, level="ok"):
@@ -237,11 +213,11 @@ with tab1:
                 d = item["data"]
                 c1, c2, c3, c4, c5 = st.columns(5)
                 with c1: st.markdown(kpi("票号", d.ticket_id), unsafe_allow_html=True)
-                with c2: st.markdown(kpi("状态", f"{len(d.issues)}项" if d.has_abnormal else "正常", "var(--red)" if d.has_abnormal else "var(--green)"), unsafe_allow_html=True)
+                with c2: st.markdown(kpi("状态", f"{len(d.issues)}项" if d.has_abnormal else "正常", "#cf222e" if d.has_abnormal else "#116329"), unsafe_allow_html=True)
                 with c3: st.markdown(kpi("措施", f"{len(d.safety_measures)}"), unsafe_allow_html=True)
                 with c4:
                     rl = d.risk_level or "-"
-                    rc = {"重大":"var(--red)","较大":"var(--yellow)","一般":"var(--yellow)","低风险":"var(--green)"}.get(rl, "var(--blue)")
+                    rc = {"重大":"#cf222e","较大":"#9a6700","一般":"#9a6700","低风险":"#116329"}.get(rl, "#0969da")
                     st.markdown(kpi("风险", rl, rc), unsafe_allow_html=True)
                 with c5: st.markdown(kpi("浓度", ", ".join(f"{v}%" for v in d.gas_concentration) or "无"), unsafe_allow_html=True)
                 if d.approval_opinion:
@@ -263,7 +239,7 @@ with tab1:
         for i, f in enumerate(final_files[:5]):
             with thumbs[i]: st.image(f, width=100)
         with thumbs[min(len(final_files), 5)]:
-            st.markdown(f"<div style='text-align:center;padding-top:35px;color:var(--dim);font-size:12px'>{len(final_files)}张</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='text-align:center;padding-top:35px;color:#57606a;font-size:12px'>{len(final_files)}张</div>", unsafe_allow_html=True)
 
     # 开始处理
     if run_clicked and final_files:
@@ -382,11 +358,11 @@ with tab1:
                     # KPI 行
                     c1, c2, c3, c4, c5 = st.columns(5)
                     with c1: st.markdown(kpi("票号", d.ticket_id), unsafe_allow_html=True)
-                    with c2: st.markdown(kpi("状态", f"{len(d.issues)}项" if d.has_abnormal else "正常", "var(--red)" if d.has_abnormal else "var(--green)"), unsafe_allow_html=True)
+                    with c2: st.markdown(kpi("状态", f"{len(d.issues)}项" if d.has_abnormal else "正常", "#cf222e" if d.has_abnormal else "#116329"), unsafe_allow_html=True)
                     with c3: st.markdown(kpi("措施", f"{len(d.safety_measures)}"), unsafe_allow_html=True)
                     with c4:
                         rl = d.risk_level or "-"
-                        rc = {"重大":"var(--red)","较大":"var(--yellow)","一般":"var(--yellow)","低风险":"var(--green)"}.get(rl, "var(--blue)")
+                        rc = {"重大":"#cf222e","较大":"#9a6700","一般":"#9a6700","低风险":"#116329"}.get(rl, "#0969da")
                         st.markdown(kpi("风险", rl, rc), unsafe_allow_html=True)
                     with c5: st.markdown(kpi("浓度", ", ".join(f"{v}%" for v in d.gas_concentration) or "无"), unsafe_allow_html=True)
 
@@ -445,8 +421,8 @@ with tab2:
         # KPI 行
         k1, k2, k3, k4 = st.columns(4)
         with k1: st.markdown(kpi("总票数", total), unsafe_allow_html=True)
-        with k2: st.markdown(kpi("有隐患", abn_cnt, "var(--red)" if abn_cnt else "var(--green)"), unsafe_allow_html=True)
-        with k3: st.markdown(kpi("正常", total - abn_cnt, "var(--green)"), unsafe_allow_html=True)
+        with k2: st.markdown(kpi("有隐患", abn_cnt, "#cf222e" if abn_cnt else "#116329"), unsafe_allow_html=True)
+        with k3: st.markdown(kpi("正常", total - abn_cnt, "#116329"), unsafe_allow_html=True)
         with k4: st.markdown(kpi("隐患率", f"{abn_cnt/total*100:.0f}%" if total else "0%"), unsafe_allow_html=True)
 
         # 高频隐患
@@ -463,7 +439,7 @@ with tab2:
             top5 = sorted(issue_counter.items(), key=lambda x: -x[1])[:5]
             cols = st.columns(len(top5))
             for i, (name, count) in enumerate(top5):
-                with cols[i]: st.markdown(kpi(name, f"{count}次", "var(--red)"), unsafe_allow_html=True)
+                with cols[i]: st.markdown(kpi(name, f"{count}次", "#cf222e"), unsafe_allow_html=True)
 
         # 删除弹窗
         if st.session_state.delete_id:
