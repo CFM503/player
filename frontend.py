@@ -706,7 +706,10 @@ with tab1:
 
             progress.progress(100)
             status_text.caption(f"[{idx+1}/{len(final_files)}] ✅ 完成")
-            img_placeholder.empty()  # 处理完收起预览图
+            # 预览图收进折叠面板，需要时可展开
+            with img_placeholder:
+                with st.expander("🖼️ 查看原图", expanded=False):
+                    st.image(save_path, caption=uploaded.name, use_container_width=True)
 
             # 左栏：结果展示
             with col_r:
@@ -869,8 +872,13 @@ with tab2:
                         st.session_state.delete_id = None; st.rerun()
             confirm_delete()
 
-        # 搜索框
-        search = st.text_input("🔍 搜索票号", placeholder="输入票号模糊查询...", label_visibility="collapsed")
+        # 搜索框（回车或点按钮触发）
+        with st.form("search_form", clear_on_submit=False):
+            sf1, sf2 = st.columns([5, 1])
+            with sf1:
+                search = st.text_input("🔍 搜索票号", placeholder="输入票号模糊查询...", label_visibility="collapsed")
+            with sf2:
+                st.form_submit_button("🔍 搜索", use_container_width=True)
 
         # 记录列表（搜索过滤）
         for row in rows_db:
