@@ -44,6 +44,7 @@ class SecuritySheetData(BaseModel):
     issues: List[HandWrittenIssue] = Field(default=[], description="隐患项明细")
     completion_time: Optional[str] = Field(None, description="完工验收时间")
     approver_name: Optional[str] = Field(None, description="签批人姓名")
+    approval_opinion: Optional[str] = Field(None, description="自动生成的审批建议")
 
 
 # ==========================================
@@ -180,21 +181,22 @@ class AgentTools:
                 check_date TEXT NOT NULL, gas_concentration_json TEXT,
                 safety_measures_json TEXT, has_abnormal INTEGER NOT NULL,
                 issues_json TEXT, completion_time TEXT, approver_name TEXT,
-                raw_ocr_text TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                approval_opinion TEXT, raw_ocr_text TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         conn.execute(
             "INSERT INTO hse_fire_work_tickets "
             "(ticket_id,station_name,content,worker_id,check_date,"
             "gas_concentration_json,safety_measures_json,has_abnormal,"
-            "issues_json,completion_time,approver_name,raw_ocr_text) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "issues_json,completion_time,approver_name,approval_opinion,raw_ocr_text) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (data.ticket_id, data.station_name, data.content, data.worker_id,
              data.check_date, json.dumps(data.gas_concentration, ensure_ascii=False),
              json.dumps([m.model_dump() for m in data.safety_measures], ensure_ascii=False),
              int(data.has_abnormal),
              json.dumps([i.model_dump() for i in data.issues], ensure_ascii=False),
-             data.completion_time, data.approver_name, raw_ocr),
+             data.completion_time, data.approver_name, data.approval_opinion, raw_ocr),
         )
         conn.commit()
         conn.close()
@@ -315,8 +317,38 @@ class SecurityAgent:
         mem.remember("反思", "🔍", "最大重试", "标记高风险", status="error")
         return data
 
+    def _generate_approval(self, data: SecuritySheetData) -> str:
+        """根据结构化数据自动生成审批建议"""
+        if not data.has_abnormal:
+            return (f"【同意作业】票号{data.ticket_id}，{data.station_name}动火作业申请。"
+                    f"经核查：安全措施已全部落实，可燃气体浓度检测合格，动火人{data.worker_id}持证上岗。"
+                    f"建议批准作业，请现场监护人做好全程监护。")
+
+        # 有异常
+        issue_names = "、".join(i.item_name for i in data.issues[:3])
+        unimpl = [m for m in data.safety_measures if not m.implemented]
+        conc_high = [v for v in data.gas_concentration if v > 0]
+
+        reasons = []
+        if unimpl:
+            reasons.append(f"{len(unimpl)}项安全措施未落实（{unimpl[0].description[:20]}等）")
+        if conc_high:
+            reasons.append(f"可燃气体浓度超标（{conc_high}%）")
+        if data.issues:
+            reasons.append(f"存在隐患：{issue_names}")
+
+        reason_text = "；".join(reasons)
+        return (f"【暂缓作业，整改后重审】票号{data.ticket_id}，{data.station_name}动火作业申请。"
+                f"经核查发现以下问题：{reason_text}。"
+                f"请整改到位后重新提交审批。")
+
     def _act(self, data: SecuritySheetData, ocr_text: str, mem: AgentMemory):
         print("[Agent Act] 执行工具组合...")
+
+        # 生成审批建议
+        data.approval_opinion = self._generate_approval(data)
+        print(f"[Agent Act] 审批建议: {data.approval_opinion[:60]}...")
+
         self.tools.save_to_db(data, raw_ocr=ocr_text)
 
         if data.has_abnormal:

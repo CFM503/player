@@ -158,129 +158,222 @@ with st.sidebar:
         """)
 
 
-# ---- 主面板 ----
-uploaded = st.file_uploader(
-    "📷 上传巡检作业票图片",
-    type=["jpg", "jpeg", "png", "bmp"],
-    accept_multiple_files=False,
-    help="手机浏览器可直接唤起摄像头拍摄",
-)
+# ---- 主面板：Tab 切换 ----
+tab_process, tab_history = st.tabs(["📷 处理作业票", "📋 历史记录"])
 
-if not uploaded:
-    st.info("👆 上传作业票照片，Agent 将自主完成：感知 → 推理 → 反思 → 执行")
-    st.stop()
+# ==================== Tab 1: 处理作业票 ====================
+with tab_process:
+    uploaded_files = st.file_uploader(
+        "上传巡检作业票图片（支持多张批量处理）",
+        type=["jpg", "jpeg", "png", "bmp"],
+        accept_multiple_files=True,
+        help="手机浏览器可直接唤起摄像头拍摄",
+    )
 
-# 显示上传图片（紧凑）
-col_img, col_btn = st.columns([3, 1])
-with col_img:
-    st.image(uploaded, caption=f"{uploaded.name} ({uploaded.size/1024:.0f}KB)", width=300)
-with col_btn:
-    st.markdown("<br>", unsafe_allow_html=True)
-    run_btn = st.button("🚀 开始处理", type="primary", use_container_width=True)
+    if not uploaded_files:
+        st.info("👆 上传作业票照片，Agent 将自主完成：感知 → 推理 → 反思 → 执行 → 生成审批建议")
+        st.stop()
 
-if not run_btn:
-    st.stop()
+    st.markdown(f"**已上传 {len(uploaded_files)} 张图片**")
+    run_btn = st.button("🚀 开始批量处理", type="primary", use_container_width=True)
 
-# ---- 执行 ----
-suffix = os.path.splitext(uploaded.name)[1] or ".jpg"
-tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-tmp.write(uploaded.getvalue())
-tmp.close()
-image_path = tmp.name
+    if not run_btn:
+        # 预览图片
+        cols = st.columns(min(len(uploaded_files), 4))
+        for i, f in enumerate(uploaded_files[:4]):
+            with cols[i % 4]:
+                st.image(f, caption=f"{f.name}", width=180)
+        if len(uploaded_files) > 4:
+            st.caption(f"还有 {len(uploaded_files)-4} 张...")
+        st.stop()
 
-raw_logs: List[str] = []
-step_ph = st.empty()
-log_ph = st.empty()
+    # ---- 批量执行 ----
+    from agent_core import SecurityAgent, LLMBrain
 
+    brain = LLMBrain(api_key=api_key, base_url=base_url, model_name=model_name)
+    agent = SecurityAgent(brain=brain)
 
-def render(logs):
-    steps = parse_log_to_steps(logs)
-    with step_ph.container():
-        for i, s in enumerate(steps):
-            icon = {"pending": "⬜", "running": "🔄", "done": "✅", "retry": "🔄", "error": "❌"}.get(s.status, "⬜")
-            bc = {"done": "#1a3a1a", "running": "#3a3a00", "retry": "#3a2a00", "error": "#3a1a1a"}.get(s.status, "#222")
-            st.markdown(f'<div class="step-card" style="border-color:{bc}">', unsafe_allow_html=True)
-            st.markdown(f'<div class="step-header">{icon} {s.emoji} {s.name}</div>', unsafe_allow_html=True)
-            if s.action:
-                st.markdown(f'<div class="step-action">→ {s.action}</div>', unsafe_allow_html=True)
-            for t in s.tools:
-                st.markdown(f'<div class="tool-line">🔧 {t}</div>', unsafe_allow_html=True)
-            for c in s.checks:
-                st.markdown(f'<div class="check-line">{c}</div>', unsafe_allow_html=True)
-            if s.result:
-                cls = {"done": "step-result-ok", "retry": "step-result-retry", "error": "step-result-error"}.get(s.status, "step-result")
-                for rl in s.result.strip().split("\n"):
-                    if rl.strip():
-                        st.markdown(f'<div class="{cls}">{rl.strip()}</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-    with log_ph.expander("📜 原始日志", expanded=False):
-        st.markdown(f'<div class="raw-log">{"<br>".join(logs)}</div>', unsafe_allow_html=True)
+    all_results = []
 
+    for idx, uploaded in enumerate(uploaded_files):
+        st.markdown(f"---\n### 📄 [{idx+1}/{len(uploaded_files)}] {uploaded.name}")
 
-from agent_core import SecurityAgent, LLMBrain
+        suffix = os.path.splitext(uploaded.name)[1] or ".jpg"
+        tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+        tmp.write(uploaded.getvalue())
+        tmp.close()
+        image_path = tmp.name
 
-brain = LLMBrain(api_key=api_key, base_url=base_url, model_name=model_name)
-agent = SecurityAgent(brain=brain)
+        raw_logs: List[str] = []
+        step_ph = st.empty()
+        log_ph = st.empty()
+        result_data = {"text": None, "json": None}
 
-_orig = sys.stdout
-result_data = {"text": None, "json": None}
+        def render(logs):
+            steps = parse_log_to_steps(logs)
+            with step_ph.container():
+                for i, s in enumerate(steps):
+                    icon = {"pending": "⬜", "running": "🔄", "done": "✅", "retry": "🔄", "error": "❌"}.get(s.status, "⬜")
+                    bc = {"done": "#1a3a1a", "running": "#3a3a00", "retry": "#3a2a00", "error": "#3a1a1a"}.get(s.status, "#222")
+                    st.markdown(f'<div class="step-card" style="border-color:{bc}">', unsafe_allow_html=True)
+                    st.markdown(f'<div class="step-header">{icon} {s.emoji} {s.name}</div>', unsafe_allow_html=True)
+                    if s.action:
+                        st.markdown(f'<div class="step-action">→ {s.action}</div>', unsafe_allow_html=True)
+                    for t in s.tools:
+                        st.markdown(f'<div class="tool-line">🔧 {t}</div>', unsafe_allow_html=True)
+                    for c in s.checks:
+                        st.markdown(f'<div class="check-line">{c}</div>', unsafe_allow_html=True)
+                    if s.result:
+                        cls = {"done": "step-result-ok", "retry": "step-result-retry", "error": "step-result-error"}.get(s.status, "step-result")
+                        for rl in s.result.strip().split("\n"):
+                            if rl.strip():
+                                st.markdown(f'<div class="{cls}">{rl.strip()}</div>', unsafe_allow_html=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+            with log_ph.expander("📜 原始日志", expanded=False):
+                st.markdown(f'<div class="raw-log">{"<br>".join(logs)}</div>', unsafe_allow_html=True)
 
+        _orig = sys.stdout
 
-class Capture(io.TextIOBase):
-    def write(self, s):
-        s = s.strip()
-        if s:
-            raw_logs.append(s)
+        class Capture(io.TextIOBase):
+            def write(self, s):
+                s = s.strip()
+                if s:
+                    raw_logs.append(s)
+                    render(raw_logs)
+                return len(s) if s else 0
+            def flush(self):
+                pass
+
+        sys.stdout = Capture()  # type: ignore
+        try:
+            ocr_text, structured = agent.run(image_path)
+            result_data["text"] = ocr_text
+            result_data["json"] = structured
+        except Exception as e:
+            raw_logs.append(f"❌ 出错: {e}")
             render(raw_logs)
-        return len(s) if s else 0
-    def flush(self):
-        pass
+        finally:
+            sys.stdout = _orig
 
+        if os.path.exists(image_path):
+            os.remove(image_path)
 
-sys.stdout = Capture()  # type: ignore
-try:
-    ocr_text, structured = agent.run(image_path)
-    result_data["text"] = ocr_text
-    result_data["json"] = structured
-except Exception as e:
-    raw_logs.append(f"❌ 出错: {e}")
-    render(raw_logs)
-finally:
-    sys.stdout = _orig
+        # 结果卡片
+        if result_data["json"]:
+            d = result_data["json"]
+            all_results.append(d)
 
-if os.path.exists(image_path):
-    os.path.exists(image_path) and os.remove(image_path)
+            # 指标行
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                st.markdown(f'<div class="metric-card"><div class="metric-val">{d.ticket_id}</div><div class="metric-label">票号</div></div>', unsafe_allow_html=True)
+            with c2:
+                color = "#ff4444" if d.has_abnormal else "#00ff41"
+                val = f"{len(d.issues)} 项隐患" if d.has_abnormal else "正常"
+                st.markdown(f'<div class="metric-card"><div class="metric-val" style="color:{color}">{val}</div><div class="metric-label">安全状态</div></div>', unsafe_allow_html=True)
+            with c3:
+                st.markdown(f'<div class="metric-card"><div class="metric-val">{len(d.safety_measures)}</div><div class="metric-label">措施</div></div>', unsafe_allow_html=True)
+            with c4:
+                conc = ", ".join(f"{v}%" for v in d.gas_concentration) if d.gas_concentration else "无数据"
+                st.markdown(f'<div class="metric-card"><div class="metric-val" style="font-size:14px">{conc}</div><div class="metric-label">浓度</div></div>', unsafe_allow_html=True)
 
-# ---- 结果展示 ----
-if result_data["json"]:
-    d = result_data["json"]
-    st.divider()
+            # 审批建议（醒目展示）
+            if d.approval_opinion:
+                if d.has_abnormal:
+                    st.warning(f"**审批建议：** {d.approval_opinion}")
+                else:
+                    st.success(f"**审批建议：** {d.approval_opinion}")
 
-    # 指标卡片
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.markdown(f'<div class="metric-card"><div class="metric-val">{d.ticket_id}</div><div class="metric-label">作业票号</div></div>', unsafe_allow_html=True)
-    with c2:
-        color = "#ff4444" if d.has_abnormal else "#00ff41"
-        val = f"{len(d.issues)} 项" if d.has_abnormal else "正常"
-        st.markdown(f'<div class="metric-card"><div class="metric-val" style="color:{color}">{val}</div><div class="metric-label">安全隐患</div></div>', unsafe_allow_html=True)
-    with c3:
-        st.markdown(f'<div class="metric-card"><div class="metric-val">{len(d.safety_measures)}</div><div class="metric-label">安全措施</div></div>', unsafe_allow_html=True)
-    with c4:
-        conc = ", ".join(f"{v}%" for v in d.gas_concentration) if d.gas_concentration else "无数据"
-        st.markdown(f'<div class="metric-card"><div class="metric-val" style="font-size:16px">{conc}</div><div class="metric-label">气体浓度</div></div>', unsafe_allow_html=True)
+            # 预警状态
+            if d.has_abnormal and d.issues:
+                st.error(f"🚨 **已触发隐患预警** — {len(d.issues)} 项异常已记录，企业微信通知已发送（需配置 WECHAT_WEBHOOK_URL）")
 
-    # 详情
-    tab_json, tab_ocr, tab_issues = st.tabs(["📦 结构化数据", "📝 OCR 原文", f"⚠️ 隐患明细 ({len(d.issues)})"])
+            # 详情 Tabs
+            t1, t2, t3 = st.tabs(["📦 结构化数据", "📝 OCR 原文", f"⚠️ 隐患 ({len(d.issues)})"])
+            with t1:
+                st.json(d.model_dump())
+            with t2:
+                if result_data["text"]:
+                    st.code(result_data["text"], language=None)
+            with t3:
+                if d.issues:
+                    for issue in d.issues:
+                        st.markdown(f"- **{issue.item_name}** — {issue.status}" + (f" ({issue.raw_text})" if issue.raw_text else ""))
+                else:
+                    st.success("无隐患，所有检查项正常。")
 
-    with tab_json:
-        st.json(d.model_dump())
-    with tab_ocr:
-        if result_data["text"]:
-            st.code(result_data["text"], language=None)
-    with tab_issues:
-        if d.issues:
-            for issue in d.issues:
-                st.markdown(f"- **{issue.item_name}** — {issue.status}" + (f" ({issue.raw_text})" if issue.raw_text else ""))
-        else:
-            st.success("无隐患，所有检查项正常。")
+    # 批量汇总
+    if len(all_results) > 1:
+        st.divider()
+        st.markdown(f"### 📊 批量处理汇总（{len(all_results)} 张）")
+        abnormal_count = sum(1 for d in all_results if d.has_abnormal)
+        normal_count = len(all_results) - abnormal_count
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1:
+            st.metric("总处理", len(all_results))
+        with sc2:
+            st.metric("有隐患", abnormal_count, delta=f"-{abnormal_count}" if abnormal_count else None)
+        with sc3:
+            st.metric("正常", normal_count)
+
+        # 汇总表格
+        import pandas as pd
+        rows = []
+        for d in all_results:
+            rows.append({
+                "票号": d.ticket_id, "场站": d.station_name,
+                "动火人": d.worker_id, "日期": d.check_date,
+                "浓度": str(d.gas_concentration), "措施": len(d.safety_measures),
+                "状态": "有隐患" if d.has_abnormal else "正常",
+                "隐患数": len(d.issues),
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+# ==================== Tab 2: 历史记录 ====================
+with tab_history:
+    import sqlite3
+    db_path = os.path.join(os.path.dirname(__file__), "security_data.db")
+
+    if not os.path.exists(db_path):
+        st.info("📭 暂无历史记录，处理作业票后自动保存。")
+        st.stop()
+
+    conn = sqlite3.connect(db_path)
+    try:
+        df = conn.execute("""
+            SELECT id, ticket_id, station_name, worker_id, check_date,
+                   has_abnormal, approval_opinion, created_at
+            FROM hse_fire_work_tickets ORDER BY id DESC
+        """).fetchall()
+    except Exception:
+        # 旧表可能没有 approval_opinion 列
+        df = conn.execute("""
+            SELECT id, ticket_id, station_name, worker_id, check_date,
+                   has_abnormal, '' as approval_opinion, created_at
+            FROM hse_fire_work_tickets ORDER BY id DESC
+        """).fetchall()
+    conn.close()
+
+    if not df:
+        st.info("📭 暂无历史记录。")
+        st.stop()
+
+    st.markdown(f"**共 {len(df)} 条记录**")
+
+    for row in df:
+        rid, ticket, station, worker, date, abnormal, opinion, created = row
+        icon = "🚨" if abnormal else "✅"
+        color = "#ff4444" if abnormal else "#00ff41"
+
+        with st.expander(f"{icon} #{rid} | {ticket} | {station} | {date}", expanded=False):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown(f"**票号:** {ticket}")
+                st.markdown(f"**场站:** {station}")
+                st.markdown(f"**动火人:** {worker}")
+                st.markdown(f"**日期:** {date}")
+            with c2:
+                st.markdown(f"**状态:** :{color}[{'有隐患' if abnormal else '正常'}]")
+                st.markdown(f"**处理时间:** {created}")
+                if opinion:
+                    st.markdown(f"**审批建议:** {opinion}")
