@@ -279,10 +279,12 @@ with tab_process:
 
             # 审批建议（醒目展示）
             if d.approval_opinion:
+                risk_colors = {"重大": "error", "较大": "warning", "一般": "warning", "低风险": "success"}
+                risk_icon = {"重大": "🔴", "较大": "🟡", "一般": "🟡", "低风险": "🟢"}.get(d.risk_level or "", "")
                 if d.has_abnormal:
-                    st.warning(f"**审批建议：** {d.approval_opinion}")
+                    st.warning(f"{risk_icon} **审批建议（风险等级：{d.risk_level or '未评估'}）：** {d.approval_opinion}")
                 else:
-                    st.success(f"**审批建议：** {d.approval_opinion}")
+                    st.success(f"🟢 **审批建议：** {d.approval_opinion}")
 
             # 预警状态
             if d.has_abnormal and d.issues:
@@ -342,30 +344,81 @@ with tab_history:
     try:
         df = conn.execute("""
             SELECT id, ticket_id, station_name, worker_id, check_date,
-                   has_abnormal, approval_opinion, created_at
+                   has_abnormal, approval_opinion, risk_level, created_at
             FROM hse_fire_work_tickets ORDER BY id DESC
         """).fetchall()
     except Exception:
-        # 旧表可能没有 approval_opinion 列
         df = conn.execute("""
             SELECT id, ticket_id, station_name, worker_id, check_date,
-                   has_abnormal, '' as approval_opinion, created_at
+                   has_abnormal, '' as approval_opinion, '' as risk_level, created_at
             FROM hse_fire_work_tickets ORDER BY id DESC
         """).fetchall()
+
+    # 统计数据
+    total = len(df)
+    abnormal_rows = [r for r in df if r[5]]
+    abnormal_count = len(abnormal_rows)
+    normal_count = total - abnormal_count
+    abnormal_rate = f"{abnormal_count/total*100:.0f}%" if total > 0 else "0%"
+
+    # 统计看板
+    st.markdown("#### 📊 安全数据看板")
+    sc1, sc2, sc3, sc4 = st.columns(4)
+    with sc1:
+        st.metric("总处理票数", total)
+    with sc2:
+        st.metric("有隐患", abnormal_count)
+    with sc3:
+        st.metric("正常", normal_count)
+    with sc4:
+        st.metric("隐患率", abnormal_rate)
+
+    # 高频隐患 Top 5
+    import json as _json
+    issue_counter = {}
+    for row in df:
+        if row[5]:  # has_abnormal
+            try:
+                issues = _json.loads(row[7]) if isinstance(row[7], str) else []
+            except Exception:
+                # try issues_json from a different approach
+                issues = []
+            # We need issues_json, but it's not in the SELECT. Let's fetch it separately.
+    # Re-fetch with issues_json for statistics
+    try:
+        issues_rows = conn.execute("""
+            SELECT issues_json FROM hse_fire_work_tickets WHERE has_abnormal = 1
+        """).fetchall()
+        for (issues_json,) in issues_rows:
+            if issues_json:
+                try:
+                    issues_list = _json.loads(issues_json)
+                    for item in issues_list:
+                        name = item.get("item_name", "未知")
+                        issue_counter[name] = issue_counter.get(name, 0) + 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    if issue_counter:
+        st.markdown("**高频隐患 Top 5：**")
+        sorted_issues = sorted(issue_counter.items(), key=lambda x: -x[1])[:5]
+        for name, count in sorted_issues:
+            bar_len = min(count * 20, 200)
+            st.markdown(f"<div style='margin:2px 0'>{name} <span style='background:#ff4444;display:inline-block;width:{bar_len}px;height:14px;border-radius:3px;vertical-align:middle'></span> {count}次</div>", unsafe_allow_html=True)
+
     conn.close()
 
-    if not df:
-        st.info("📭 暂无历史记录。")
-        st.stop()
-
-    st.markdown(f"**共 {len(df)} 条记录**")
+    st.divider()
+    st.markdown(f"**共 {total} 条记录**")
 
     for row in df:
-        rid, ticket, station, worker, date, abnormal, opinion, created = row
+        rid, ticket, station, worker, date, abnormal, opinion, risk, created = row
         icon = "🚨" if abnormal else "✅"
-        color = "#ff4444" if abnormal else "#00ff41"
+        risk_badge = f" [{risk}]" if risk else ""
 
-        with st.expander(f"{icon} #{rid} | {ticket} | {station} | {date}", expanded=False):
+        with st.expander(f"{icon} #{rid} | {ticket} | {station} | {date}{risk_badge}", expanded=False):
             c1, c2 = st.columns(2)
             with c1:
                 st.markdown(f"**票号:** {ticket}")
@@ -373,7 +426,10 @@ with tab_history:
                 st.markdown(f"**动火人:** {worker}")
                 st.markdown(f"**日期:** {date}")
             with c2:
+                color = "red" if abnormal else "green"
                 st.markdown(f"**状态:** :{color}[{'有隐患' if abnormal else '正常'}]")
+                if risk:
+                    st.markdown(f"**风险等级:** {risk}")
                 st.markdown(f"**处理时间:** {created}")
                 if opinion:
                     st.markdown(f"**审批建议:** {opinion}")

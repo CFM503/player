@@ -45,6 +45,7 @@ class SecuritySheetData(BaseModel):
     completion_time: Optional[str] = Field(None, description="完工验收时间")
     approver_name: Optional[str] = Field(None, description="签批人姓名")
     approval_opinion: Optional[str] = Field(None, description="自动生成的审批建议")
+    risk_level: Optional[str] = Field(None, description="风险等级：重大/较大/一般/低风险")
 
 
 # ==========================================
@@ -181,7 +182,7 @@ class AgentTools:
                 check_date TEXT NOT NULL, gas_concentration_json TEXT,
                 safety_measures_json TEXT, has_abnormal INTEGER NOT NULL,
                 issues_json TEXT, completion_time TEXT, approver_name TEXT,
-                approval_opinion TEXT, raw_ocr_text TEXT,
+                approval_opinion TEXT, risk_level TEXT, raw_ocr_text TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -189,14 +190,15 @@ class AgentTools:
             "INSERT INTO hse_fire_work_tickets "
             "(ticket_id,station_name,content,worker_id,check_date,"
             "gas_concentration_json,safety_measures_json,has_abnormal,"
-            "issues_json,completion_time,approver_name,approval_opinion,raw_ocr_text) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "issues_json,completion_time,approver_name,approval_opinion,risk_level,raw_ocr_text) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (data.ticket_id, data.station_name, data.content, data.worker_id,
              data.check_date, json.dumps(data.gas_concentration, ensure_ascii=False),
              json.dumps([m.model_dump() for m in data.safety_measures], ensure_ascii=False),
              int(data.has_abnormal),
              json.dumps([i.model_dump() for i in data.issues], ensure_ascii=False),
-             data.completion_time, data.approver_name, data.approval_opinion, raw_ocr),
+             data.completion_time, data.approver_name, data.approval_opinion,
+             data.risk_level, raw_ocr),
         )
         conn.commit()
         conn.close()
@@ -318,29 +320,105 @@ class SecurityAgent:
         return data
 
     def _generate_approval(self, data: SecuritySheetData) -> str:
-        """根据结构化数据自动生成审批建议"""
-        if not data.has_abnormal:
-            return (f"【同意作业】票号{data.ticket_id}，{data.station_name}动火作业申请。"
-                    f"经核查：安全措施已全部落实，可燃气体浓度检测合格，动火人{data.worker_id}持证上岗。"
-                    f"建议批准作业，请现场监护人做好全程监护。")
+        """调用 LLM 生成专业审批建议，引用安全标准条文"""
+        # 构建异常摘要
+        issues_desc = ""
+        if data.has_abnormal:
+            unimpl = [m for m in data.safety_measures if not m.implemented]
+            conc_high = [v for v in data.gas_concentration if v > 0]
+            parts = []
+            if unimpl:
+                parts.append("未落实的安全措施：" + "; ".join(
+                    f"第{m.measure_id}项「{m.description}」" for m in unimpl[:5]))
+            if conc_high:
+                parts.append(f"可燃气体浓度异常读数：{conc_high}")
+            if data.issues:
+                parts.append("隐患明细：" + "; ".join(
+                    f"{i.item_name}({i.raw_text or '无备注'})" for i in data.issues[:5]))
+            issues_desc = "\n".join(parts)
 
-        # 有异常
-        issue_names = "、".join(i.item_name for i in data.issues[:3])
+        prompt = (
+            "你是牡丹江中燃 HSE 安全审计专家，依据以下国家标准生成动火作业票审批建议：\n\n"
+            "【参考标准】\n"
+            "1. GB 30871-2022《危险化学品企业特殊作业安全规范》\n"
+            "   - 第5.3.2条：动火作业前，应对动火点进行可燃气体浓度检测，浓度应低于爆炸下限(LEL)的20%\n"
+            "   - 第6.4条：动火点10m范围内应清除可燃物，配备消防器材\n"
+            "   - 第6.5条：动火监护人应全程在场监护\n"
+            "   - 第5.1条：动火作业前应办理动火作业票，经审批后方可作业\n"
+            "   - 第5.2条：特级、一级动火作业中断超过30分钟，应重新检测\n"
+            "2. AQ 3022-2008《化学品生产单位动火作业安全规范》\n"
+            "   - 动火作业分级管理（特级/一级/二级）\n"
+            "   - 动火分析合格后方可作业\n"
+            "3. 企业 HSE 管理制度：安全措施逐项落实后方可开工\n\n"
+            "【输出要求】\n"
+            "- 无隐患时：输出【同意作业】+ 简要确认 + 监护要求\n"
+            "- 有隐患时：输出【暂缓作业】+ 逐项列出问题 + 引用对应标准条文 + 风险等级(重大/较大/一般/低风险) + 整改期限建议\n"
+            "- 语气：专业、严谨、可追溯\n"
+            "- 字数：150字以内\n\n"
+            f"【作业票信息】\n"
+            f"票号：{data.ticket_id}\n场站：{data.station_name}\n内容：{data.content}\n"
+            f"动火人：{data.worker_id}\n日期：{data.check_date}\n"
+            f"浓度：{data.gas_concentration}\n措施总数：{len(data.safety_measures)}项\n"
+            f"有异常：{data.has_abnormal}\n"
+            f"{'异常详情：' + chr(10) + issues_desc if issues_desc else ''}"
+        )
+
+        try:
+            print("[Agent Act] 调用 LLM 生成专业审批建议...")
+            response = self.brain.client.chat.completions.create(
+                model=self.brain.model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=300,
+            )
+            opinion = response.choices[0].message.content.strip()
+
+            # 同时让 LLM 判断风险等级
+            if data.has_abnormal:
+                data.risk_level = self._assess_risk_level(data)
+            else:
+                data.risk_level = "低风险"
+
+            return opinion
+        except Exception as e:
+            print(f"[Agent Act] LLM 审批建议生成失败，使用模板: {e}")
+            return self._generate_approval_template(data)
+
+    def _assess_risk_level(self, data: SecuritySheetData) -> str:
+        """根据异常严重程度评估风险等级"""
+        score = 0
         unimpl = [m for m in data.safety_measures if not m.implemented]
         conc_high = [v for v in data.gas_concentration if v > 0]
 
-        reasons = []
-        if unimpl:
-            reasons.append(f"{len(unimpl)}项安全措施未落实（{unimpl[0].description[:20]}等）")
         if conc_high:
-            reasons.append(f"可燃气体浓度超标（{conc_high}%）")
-        if data.issues:
-            reasons.append(f"存在隐患：{issue_names}")
+            max_conc = max(conc_high)
+            if max_conc > 1.0:
+                score += 4  # 重大
+            elif max_conc > 0.5:
+                score += 3
+            elif max_conc > 0:
+                score += 2
 
-        reason_text = "；".join(reasons)
-        return (f"【暂缓作业，整改后重审】票号{data.ticket_id}，{data.station_name}动火作业申请。"
-                f"经核查发现以下问题：{reason_text}。"
-                f"请整改到位后重新提交审批。")
+        score += min(len(unimpl), 3)  # 每项未落实 +1，最多 +3
+        score += min(len(data.issues), 2)
+
+        if score >= 5:
+            return "重大"
+        elif score >= 3:
+            return "较大"
+        elif score >= 1:
+            return "一般"
+        return "低风险"
+
+    @staticmethod
+    def _generate_approval_template(data: SecuritySheetData) -> str:
+        """LLM 失败时的 fallback 模板"""
+        if not data.has_abnormal:
+            return (f"【同意作业】票号{data.ticket_id}，{data.station_name}动火作业申请。"
+                    f"安全措施已全部落实，浓度合格。依据 GB 30871-2022 第5.1条，建议批准。")
+        issue_names = "、".join(i.item_name for i in data.issues[:3])
+        return (f"【暂缓作业】票号{data.ticket_id}，存在隐患：{issue_names}。"
+                f"依据 GB 30871-2022，请整改后重新提交审批。")
 
     def _act(self, data: SecuritySheetData, ocr_text: str, mem: AgentMemory):
         print("[Agent Act] 执行工具组合...")
