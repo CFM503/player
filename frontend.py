@@ -65,7 +65,14 @@ section[data-testid="stSidebar"] {
     max-width: 100%;
     color: var(--text);
 }
-#MainMenu, footer, header { display: none !important; }
+#MainMenu, footer { display: none !important; }
+[data-testid="stDecoration"] { display: none !important; }
+.stAppDeployButton, .stDeployButton { display: none !important; }
+[data-testid="stHeaderActionElements"] { display: none !important; }
+[data-testid="stStatusWidget"] { display: none !important; }
+header {
+    background: transparent !important;
+}
 
 /* 字体全局优化 */
 * {
@@ -150,8 +157,8 @@ section[data-testid="stSidebar"] .stTextInput input {
 }
 
 /* 上传区 (stFileUploader) */
-[data-testid="stFileUploader"], [data-testid="stCameraInput"] { padding: 0 !important; margin: 0 !important; }
-[data-testid="stFileUploader"] section, [data-testid="stCameraInput"] section {
+[data-testid="stFileUploader"] { padding: 0 !important; margin: 0 !important; }
+[data-testid="stFileUploader"] section {
     background: var(--card) !important;
     border: 2px dashed var(--border) !important;
     border-radius: 10px !important;
@@ -163,27 +170,24 @@ section[data-testid="stSidebar"] .stTextInput input {
     transition: all 0.25s ease !important;
     box-shadow: 0 2px 6px rgba(0,0,0,0.01) !important;
 }
-[data-testid="stFileUploader"] section:hover, [data-testid="stCameraInput"] section:hover {
+[data-testid="stFileUploader"] section:hover {
     border-color: var(--blue) !important;
     background: #f8fafc !important;
     box-shadow: 0 4px 12px rgba(0,0,0,0.03) !important;
 }
-[data-testid="stFileUploader"] label, [data-testid="stCameraInput"] label {
+[data-testid="stFileUploader"] label {
     color: var(--text) !important;
     font-size: 14px !important;
     font-weight: 600 !important;
     margin-bottom: 6px !important;
 }
-[data-testid="stFileUploader"] section svg, [data-testid="stCameraInput"] section svg {
+[data-testid="stFileUploader"] section svg {
     fill: var(--blue) !important;
 }
-[data-testid="stFileUploader"] section p, [data-testid="stCameraInput"] section p {
+[data-testid="stFileUploader"] section p {
     color: var(--text-muted) !important;
     font-size: 12px !important;
 }
-
-/* 隐藏自带的相机图片预览 */
-[data-testid="stCameraInput"] [data-testid="stImage"] { display: none !important; }
 [data-testid="stHorizontalBlock"] { gap: 8px !important; }
 
 /* 输入框 / 文本区域 / 选择框 */
@@ -210,6 +214,12 @@ section[data-testid="stSidebar"] .stTextInput input {
     box-shadow: 0 4px 10px rgba(0, 0, 0, 0.03) !important;
     transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
     border-top: 3px solid var(--blue) !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: center !important;
+    align-items: center !important;
+    min-height: 96px !important;
+    box-sizing: border-box !important;
 }
 .kpi:hover {
     transform: translateY(-2px) !important;
@@ -220,6 +230,7 @@ section[data-testid="stSidebar"] .stTextInput input {
     font-size: 22px !important;
     font-weight: 700 !important;
     line-height: 1.2 !important;
+    word-break: break-word !important;
 }
 .kpi-lbl {
     font-size: 11px !important;
@@ -227,6 +238,7 @@ section[data-testid="stSidebar"] .stTextInput input {
     text-transform: uppercase !important;
     letter-spacing: 0.8px !important;
     margin-top: 4px !important;
+    word-break: break-word !important;
 }
 
 /* 状态徽章 */
@@ -270,6 +282,7 @@ div[data-baseweb="notification"] {
     color: #34d399 !important; /* 主文本：高亮经典绿 */
     line-height: 1.6 !important;
     overflow-y: auto !important;
+    max-height: 400px !important;
     box-shadow: inset 0 2px 8px rgba(0,0,0,0.4), 0 4px 12px rgba(16, 185, 129, 0.08) !important;
     position: relative !important;
     margin-top: 28px !important; /* 往下移动，防止与上面的按钮或进度条重叠 */
@@ -437,7 +450,6 @@ if "results" not in st.session_state: st.session_state.results = []
 if "delete_id" not in st.session_state: st.session_state.delete_id = None
 if "pending_files" not in st.session_state: st.session_state.pending_files = None
 if "show_uploader" not in st.session_state: st.session_state.show_uploader = False
-if "show_camera" not in st.session_state: st.session_state.show_camera = False
 if "upload_done" not in st.session_state: st.session_state.upload_done = False
 
 
@@ -492,7 +504,7 @@ with tab1:
     if step == 1:
         guide.markdown("""
         <div class="guide-box">
-            <span class="guide-badge">第 1 步</span> 选择下方 <b>📤 上传</b> 或 <b>📷 拍照</b> 提供作业票照片
+            <span class="guide-badge">第 1 步</span> 选择下方 <b>📤 上传</b> 提供作业票照片
         </div>
         """, unsafe_allow_html=True)
     elif step == 2:
@@ -502,25 +514,17 @@ with tab1:
         </div>
         """, unsafe_allow_html=True)
 
-    # ---- 三个按钮：上传 / 拍照 / 处理 ----
-    c1, c2, c3 = st.columns(3)
+    # ---- 两个按钮：上传 / 处理 ----
+    c1, c2 = st.columns(2)
     with c1:
         show_upload = st.button("📤 上传", use_container_width=True)
     with c2:
-        show_cam = st.button("📷 拍照", use_container_width=True)
-    with c3:
         can_process = st.session_state.get("upload_done") and st.session_state.get("pending_files")
         run_clicked = st.button("⚙️ 处理", type="primary", use_container_width=True, disabled=not can_process)
 
     # 点击按钮切换模式
     if show_upload:
         st.session_state.show_uploader = True
-        st.session_state.show_camera = False
-        st.session_state.upload_done = False
-        st.session_state.pending_files = None
-    if show_cam:
-        st.session_state.show_camera = True
-        st.session_state.show_uploader = False
         st.session_state.upload_done = False
         st.session_state.pending_files = None
 
@@ -543,23 +547,7 @@ with tab1:
         elif picked and st.session_state.get("upload_done"):
             st.success(f"✅ {picked.name}（{picked.size/1024:.0f} KB）")
 
-    # ---- 拍照 ----
-    if st.session_state.get("show_camera"):
-        camera_photo = st.camera_input("拍照上传", label_visibility="collapsed", key="cam_main")
-        if camera_photo and not st.session_state.get("upload_done"):
-            st.session_state.pending_files = [camera_photo]
-            prog_ph = st.empty()
-            status_ph = st.empty()
-            for pct in range(0, 101, 5):
-                prog_ph.progress(pct)
-                status_ph.caption(f"📤 上传中... {camera_photo.name} — {pct}%")
-                time.sleep(0.05)
-            prog_ph.empty()
-            status_ph.success(f"✅ 上传完成 — {camera_photo.name}（{camera_photo.size/1024:.0f} KB）")
-            st.session_state.upload_done = True
-            st.rerun()
-        elif camera_photo and st.session_state.get("upload_done"):
-            st.success(f"📷 {camera_photo.name}（{camera_photo.size/1024:.0f} KB）")
+
 
     # 无文件 + 有历史结果：显示上次结果
     # 合并最终文件
@@ -588,17 +576,17 @@ with tab1:
                 <div class="empty-icon">🛡️</div>
                 <div class="empty-title">上传作业票照片，AI 自动完成全部分析</div>
                 <div class="empty-desc">支持：动火作业票 · 带气作业票 · 临时用电作业票</div>
-                <div class="empty-action">点击上方 <b>📤 上传</b> 选择照片，或 <b>📷 拍照</b> 直接拍摄</div>
+                <div class="empty-action">点击上方 <b>📤 上传</b> 选择照片</div>
             </div>
             """, unsafe_allow_html=True)
 
     # 有文件：预览缩略图
     if final_files and not run_clicked and not st.session_state.get("run_processing"):
-        thumbs = st.columns(min(len(final_files) + 1, 6))
+        thumbs = st.columns(min(len(final_files) + 1, 6), vertical_alignment="center")
         for i, f in enumerate(final_files[:5]):
             with thumbs[i]: st.image(f, width=100)
         with thumbs[min(len(final_files), 5)]:
-            st.markdown(f"<div style='text-align:center;padding-top:35px;color:#57606a;font-size:12px'>{len(final_files)}张</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='text-align:center;color:#57606a;font-size:12px'>{len(final_files)}张</div>", unsafe_allow_html=True)
 
     # 开始处理
     if run_clicked and final_files:
@@ -874,7 +862,7 @@ with tab2:
 
         # 搜索框（回车或点按钮触发）
         with st.form("search_form", clear_on_submit=False):
-            sf1, sf2 = st.columns([5, 1])
+            sf1, sf2 = st.columns([5, 1], vertical_alignment="center")
             with sf1:
                 search = st.text_input("🔍 搜索票号", placeholder="输入票号模糊查询...", label_visibility="collapsed")
             with sf2:
@@ -888,7 +876,7 @@ with tab2:
             icon = "🚨" if abnormal else "✅"
             badge_md = f" | :{'red' if risk=='重大' else ('orange' if risk in ['较大','一般'] else 'green')}[{risk}]" if risk else ""
 
-            cm, cd = st.columns([9, 1])
+            cm, cd = st.columns([9, 1], vertical_alignment="center")
             with cm:
                 with st.expander(f"{icon} #{rid} | {ticket} | {station} | {date}{badge_md}", expanded=False):
                     ca, cb = st.columns(2)
@@ -916,6 +904,5 @@ with tab2:
                     else:
                         st.caption("原图不可用")
             with cd:
-                st.markdown("<div style='padding-top:18px'></div>", unsafe_allow_html=True)
                 if st.button("🗑️", key=f"del_{rid}", help=f"删除 #{rid}"):
                     st.session_state.delete_id = rid; st.rerun()
