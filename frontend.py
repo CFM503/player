@@ -285,7 +285,7 @@ div[data-baseweb="notification"] {
     max-height: 400px !important;
     box-shadow: inset 0 2px 8px rgba(0,0,0,0.4), 0 4px 12px rgba(16, 185, 129, 0.08) !important;
     position: relative !important;
-    margin-top: 28px !important; /* 往下移动，防止与上面的按钮或进度条重叠 */
+    margin-top: 0 !important;
     margin-bottom: 16px !important;
 }
 .hlog::after {
@@ -467,9 +467,24 @@ with st.sidebar:
     st.markdown("---")
 
     # API 配置
-    api_key = st.text_input("API Key", _cfg.get("api_key", ""), type="password")
-    base_url = st.text_input("API URL", _cfg.get("base_url", ""))
-    model_name = st.text_input("模型", _cfg.get("model_name", ""))
+    api_key = st.text_input("API Key", _cfg.get("api_key", "ollama"), type="password")
+    base_url = st.text_input("API URL", _cfg.get("base_url", "http://localhost:11434/v1"))
+    model_name = st.text_input("模型", _cfg.get("model_name", "qwen3.5:0.8b"))
+
+    # OCR 表格识别模式
+    _ocr_modes = {
+        "坐标聚类（默认）": "cluster",
+        "精细网格（列对齐）": "grid",
+        "自适应边框检测": "adaptive",
+        "多方向检测": "multidir",
+    }
+    ocr_mode_label = st.selectbox(
+        "📋 OCR 表格模式",
+        list(_ocr_modes.keys()),
+        index=0,
+        help="坐标聚类：基于文字坐标重建表格行列\n精细网格：X坐标聚类识别列边界，对齐输出\n自适应边框检测：OpenCV检测表格线段，按单元格组织文本\n多方向检测：分离水平/垂直文本分别处理",
+    )
+    ocr_mode = _ocr_modes[ocr_mode_label]
 
     # 设置面板
     st.markdown("---")
@@ -598,7 +613,7 @@ with tab1:
 
         from agent_core import SecurityAgent, LLMBrain
         brain = LLMBrain(api_key=api_key, base_url=base_url, model_name=model_name)
-        agent = SecurityAgent(brain=brain)
+        agent = SecurityAgent(brain=brain, ocr_mode=ocr_mode)
         st.session_state.results = []
 
         # ---- 上传保存进度 ----
@@ -629,21 +644,20 @@ with tab1:
         for idx, uploaded in enumerate(final_files):
             save_path = saved_paths[idx]
 
-            # 分栏：左边结果，右边日志
+            # 进度条 + 状态文字（跨整行，避免与日志面板重叠）
+            status_text = st.empty()
+            progress = st.progress(0)
+            status_text.caption(f"[{idx+1}/{len(final_files)}] {uploaded.name} — 准备中...")
+
+            # 分栏：左边预览图，右边日志
             col_r, col_l = st.columns([3, 2])
 
-            # 左栏：进度条 + 预览图（处理完自动收起）
+            # 左栏：预览图（处理完自动收起）
             with col_r:
-                status_text = st.empty()
-                progress = st.progress(0)
                 img_placeholder = st.empty()
-                status_text.caption(f"[{idx+1}/{len(final_files)}] {uploaded.name} — 准备中...")
                 img_placeholder.image(save_path, caption=uploaded.name, use_container_width=True)
 
             # 右栏：日志面板
-            with col_l:
-                pass  # 日志由 log_ph 占位渲染
-
             log_ph = col_l.empty()
             log_buf = []
 
@@ -651,7 +665,7 @@ with tab1:
                 log_buf.append(line)
                 import html as _h
                 parts = []
-                for l in log_buf[-30:]:
+                for l in log_buf[-150:]:
                     c = ""
                     if "Tool" in l: c = "lo"
                     elif "FAIL" in l or "出错" in l: c = "le"
@@ -660,7 +674,7 @@ with tab1:
                     parts.append(f'<div class="{c}">{_h.escape(l)}</div>')
                 log_ph.markdown(
                     f'<div class="hlog">'
-                    f'<div class="lt">📄 {_h.escape(_name)} | 🤖 AGENT THINKING...</div>'
+                    f'<div class="lt">📄 {_h.escape(_name)} | 🤖 运行日志</div>'
                     f'{"".join(parts)}</div>',
                     unsafe_allow_html=True)
 
@@ -694,6 +708,19 @@ with tab1:
 
             progress.progress(100)
             status_text.caption(f"[{idx+1}/{len(final_files)}] ✅ 完成")
+            
+            # 在日志面板下方增加下载日志按钮
+            with col_l:
+                full_log_str = "\n".join(log_buf)
+                st.download_button(
+                    label="⬇️ 下载运行日志",
+                    data=full_log_str,
+                    file_name=f"run_log_{uploaded.name}_{int(time.time())}.txt",
+                    mime="text/plain",
+                    key=f"log_dl_{idx}",
+                    use_container_width=True
+                )
+
             # 预览图收进折叠面板，需要时可展开
             with img_placeholder:
                 with st.expander("🖼️ 查看原图", expanded=False):
@@ -759,6 +786,7 @@ with tab1:
                     # OCR + 隐患（折叠）
                     if result["ocr"]:
                         with st.expander("📝 OCR 识别原文"):
+                            st.text_area("📄 复制 OCR 原文：", result["ocr"], height=200)
                             ocr_rows = []
                             for line in result["ocr"].strip().split("\n"):
                                 line = line.strip()
@@ -771,6 +799,18 @@ with tab1:
                                     ocr_rows.append({"字段": "", "值": line})
                             if ocr_rows:
                                 st.dataframe(pd.DataFrame(ocr_rows), use_container_width=True, height=min(len(ocr_rows)*28+30, 350))
+
+                    if d.safety_measures:
+                        with st.expander("📋 全量安全措施落实清单", expanded=False):
+                            m_rows = []
+                            for m in d.safety_measures:
+                                status_str = "🟢 已落实" if m.implemented else "🔴 未落实"
+                                m_rows.append({
+                                    "序号": m.measure_id,
+                                    "安全措施内容": m.description,
+                                    "落实状态": status_str
+                                })
+                            st.dataframe(pd.DataFrame(m_rows), use_container_width=True, hide_index=True, height=min(len(m_rows)*35+38, 400))
 
                     if d.issues:
                         with st.expander(f"⚠️ 隐患明细 ({len(d.issues)})", expanded=True):
@@ -810,9 +850,9 @@ with tab2:
     else:
         conn = sqlite3.connect(db_path)
         try:
-            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,approval_opinion,risk_level,created_at,image_path FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
+            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,approval_opinion,risk_level,created_at,image_path,safety_measures_json FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
         except:
-            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,'','',created_at,'' FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
+            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,'','',created_at,'','[]' FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
 
         total = len(rows_db)
         abn_cnt = sum(1 for r in rows_db if r[5])
@@ -870,7 +910,7 @@ with tab2:
 
         # 记录列表（搜索过滤）
         for row in rows_db:
-            rid, ticket, station, worker, date, abnormal, opinion, risk, created, img_path = row
+            rid, ticket, station, worker, date, abnormal, opinion, risk, created, img_path, measures_json = row
             if search and search.lower() not in (ticket or "").lower():
                 continue
             icon = "🚨" if abnormal else "✅"
@@ -886,6 +926,24 @@ with tab2:
                         if risk: st.markdown(f"**风险** {risk}")
                         st.caption(f"处理: {created}")
                         if opinion: st.caption(f"审批: {opinion}")
+                    
+                    # 展现全量安全措施列表
+                    if measures_json:
+                        try:
+                            measures_list = json.loads(measures_json)
+                            if measures_list:
+                                with st.expander("📋 安全措施落实清单"):
+                                    m_rows = []
+                                    for m in measures_list:
+                                        status_str = "🟢 已落实" if m.get("implemented") else "🔴 未落实"
+                                        m_rows.append({
+                                            "序号": m.get("measure_id"),
+                                            "安全措施内容": m.get("description"),
+                                            "落实状态": status_str
+                                        })
+                                    st.dataframe(pd.DataFrame(m_rows), use_container_width=True, hide_index=True, height=200)
+                        except Exception:
+                            pass
                     # 查看原图 + 下载按钮
                     if img_path and os.path.exists(img_path):
                         dc1, dc2 = st.columns(2)
