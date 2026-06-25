@@ -1,8 +1,7 @@
 {
-  "api_key": "你的API Key",
-  "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
-  "model_name": "mimo-v2.5-pro",
-  "delete_password": "123",
-  "wechat_webhook": "",
-  "dingtalk_webhook": ""
+    "api_key": "ollama",
+    "base_url": "http://localhost:11434/v1",
+    "model_name": "qwen3.5:0.8b",
+    "wechat_webhook": "",
+    "dingtalk_webhook": ""
 }

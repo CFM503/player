@@ -829,8 +829,12 @@ class AgentTools:
             return table_html
 
     @staticmethod
-    def _format_table_test(image_path: str, brain=None) -> str:
-        """测试模式：PaddleStructure HTML + 高精度 LLM 三步还原（布局对齐→结构映射→单元格精化）"""
+    def _format_table_test(image_path: str, brain=None, progress_callback=None) -> str:
+        """Test mode: PaddleStructure + LLM 3-step high-precision restore"""
+        def _p(pct, msg):
+            if progress_callback:
+                progress_callback(pct, msg)
+
         import os as _os
         _os.environ.setdefault("FLAGS_download_tool", "wget")
         _os.environ.setdefault("PADDLE_PDX_SOURCE_HOME", "https://paddle-model-ecology.bj.bcebos.com")
@@ -843,34 +847,55 @@ class AgentTools:
             _pi.Config.set_optimization_level = lambda self, lv: _orig_opt(self, 0)
             _pi.Config._patched_for_onednn = True
 
-        print("[Tool] 测试模式：PaddleStructure 表格识别...")
+        # Step 1: load model
+        _p(8, "PaddleStructure load model...")
+        print("[Tool] Test mode: loading PaddleStructure model...")
+        sim_load = _ProgressSim(progress_callback, 8, 20, "PaddleStructure load model", 2, 1.0)
+        sim_load.start()
         try:
             from paddlex import create_pipeline
             pipe = create_pipeline("table_recognition", engine_config={"enable_new_ir": False})
+        except Exception as ex:
+            sim_load.done()
+            print(f"[Tool] Test mode model load failed: {ex}")
+            return ""
+        sim_load.done()
+        print("[Tool] PaddleStructure model loaded.")
+
+        # Step 2: table structure recognition
+        _p(22, "Table structure recognition...")
+        print("[Tool] Test mode: running table structure recognition...")
+        sim_infer = _ProgressSim(progress_callback, 22, 40, "Table recognition", 3, 0.8)
+        sim_infer.start()
+        try:
             result = list(pipe(image_path))
         except Exception as ex:
-            print(f"[Tool] 测试模式 PaddleStructure 识别失败: {ex}")
+            sim_infer.done()
+            print(f"[Tool] Test mode inference failed: {ex}")
             return ""
+        sim_infer.done()
 
         if not result:
-            print("[Tool] 测试模式 PaddleStructure 未检测到表格")
+            print("[Tool] Test mode: no tables detected")
             return ""
 
-        # 合并所有识别到的表格 HTML
         html_dict = result[0].html if hasattr(result[0], "html") else {}
         html_parts = [v for v in html_dict.values() if v]
         if not html_parts:
-            print("[Tool] 测试模式 PaddleStructure 表格 HTML 为空")
+            print("[Tool] Test mode: table HTML is empty")
             return ""
 
         table_html = "\n".join(html_parts)
-        print(f"[Tool] 测试模式 PaddleStructure 识别完成，{len(html_parts)} 个表格。")
+        print(f"[Tool] PaddleStructure done, {len(html_parts)} table(s), {len(table_html)} chars HTML.")
 
-        # 无 LLM 时直接返回 HTML
         if brain is None:
+            _p(50, "Done (no LLM)")
             return table_html
 
-        # 高精度 System Prompt：三步工作流（布局对齐→结构映射→单元格精化）
+        # Step 3: LLM high-precision restore
+        _p(42, "LLM high-precision restore...")
+        print("[Tool] Test mode: LLM high-precision Markdown restore...")
+
         system_prompt = (
             "你是一个高精度的安全生产档案数字化专家。你的核心任务是将 PaddleStructure 提取出的"
             "原始 HTML 表格骨架与 OCR 文本碎片，完美还原为高可读性的 Markdown 格式。\n\n"
@@ -899,7 +924,8 @@ class AgentTools:
 
         user_content = f"请将以下 PaddleStructure 输出的复杂表格数据转换为 Markdown：\n{table_html}"
 
-        print("[Tool] 测试模式 LLM 高精度还原...")
+        sim_llm = _ProgressSim(progress_callback, 42, 48, "LLM high-precision restore", 1, 1.5)
+        sim_llm.start()
         try:
             resp = brain.client.chat.completions.create(
                 model=brain.model_name,
@@ -909,12 +935,16 @@ class AgentTools:
                 ],
                 temperature=0.1,
                 max_tokens=8192,
+                timeout=120,
             )
             md = resp.choices[0].message.content.strip()
-            print(f"[Tool] 测试模式 LLM 还原完成，{len(md)} 字符。")
+            sim_llm.done()
+            _p(50, "Test mode done")
+            print(f"[Tool] Test mode LLM restore done, {len(md)} chars.")
             return md
         except Exception as ex:
-            print(f"[Tool] 测试模式 LLM 还原失败: {ex}，返回原始 HTML")
+            sim_llm.done()
+            print(f"[Tool] Test mode LLM restore failed: {ex}, returning raw HTML")
             return table_html
 
     @staticmethod
@@ -1078,15 +1108,18 @@ class _ProgressSim:
         import time as _t
         while not self._stop and self._cur < self._end - 1:
             self._cur = min(self._cur + self._step, self._end - 1)
-            self._cb(int(self._cur), self._msg)
+            if self._cb:
+                self._cb(int(self._cur), self._msg)
             _t.sleep(self._interval)
 
     def start(self):
-        self._t.start()
+        if self._cb:
+            self._t.start()
 
     def done(self):
         self._stop = True
-        self._cb(int(self._end), self._msg)
+        if self._cb:
+            self._cb(int(self._end), self._msg)
 
 
 class SecurityAgent:

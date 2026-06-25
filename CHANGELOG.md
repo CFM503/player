@@ -1,5 +1,21 @@
 # 更新日志 (CHANGELOG)
 
+## [3.5.0] - 2026-06-25
+
+### 新增
+- **测试模式高精度三步还原**：第 6 种 OCR 模式重构为独立流水线，PaddleStructure 表格识别分三步（模型加载→结构推理→LLM 高精度还原），每步独立进度模拟，LLM 调用增加 `timeout=120` 超时保护。
+- **OCR 进度百分比 + 计时**：`SecurityAgent` 支持 `progress_callback` 回调，`_ProgressSim` 后台线程在阻塞操作期间模拟渐进进度，Web UI 和 CLI 终端同步显示 `[MM:SS]` 时间戳 + 百分比进度条。
+- **CLI 终端日志同步**：`Cap` 类拦截的 Agent 日志同时输出到 CLI stderr，运行 `streamlit run frontend.py` 的终端可实时看到 OCR 处理进度。
+- **依赖版本对照表**：`check_deps.py` 启动时打印版本对照表（当前 vs 要求），显示通过/失败状态，修复命令中 `paddlex` 显示为 `paddlex[ocr]`。
+- **Python 版本前置校验**：`START.bat` 在依赖检查前校验 Python ≥ 3.13，不满足时提示当前版本号并退出。
+- **国内镜像源**：PaddleX 模型下载注入百度 BOS 国内镜像环境变量（`PADDLE_PDX_SOURCE_HOME`、`PADDLEX_PDX_MODEL_SOURCE`）。
+- **配置模板**：新增 `config.example.json` 配置模板文件。
+
+### 变更
+- **`_ProgressSim` 空回调安全处理**：`progress_callback=None` 时不再启动线程，`done()` 安全跳过回调调用。
+- **Streamlit API 更新**：`use_container_width=True` 全部替换为 `width="stretch"`（12 处），消除弃用警告。
+- **`START.bat` 错误提示优化**：表格模型下载失败时提示 `pip install "paddlex[ocr]>=3.7.1"` 安装命令。
+
 ## [3.4.2] - 2026-06-25
 
 ### 新增

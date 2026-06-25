@@ -269,9 +269,13 @@ with tab1:
 
             log_ph = col_l.empty()
             log_buf = []
+            _t0_img = time.time()
 
             def hlog(line, _save_path=save_path, _name=uploaded.name):
-                log_buf.append(line)
+                _dt = time.time() - _t0_img
+                _mm, _ss = divmod(int(_dt), 60)
+                _ts = f"[{_mm:02d}:{_ss:02d}] "
+                log_buf.append(_ts + line)
                 import html as _h
                 parts = []
                 for l in log_buf[-30:]:
@@ -309,8 +313,6 @@ with tab1:
                         print(f"[{_mm:02d}:{_ss:02d}] {s}", file=_orig_err, flush=True)
                     return len(s) if s else 0
                 def flush(self): pass
-
-            _t0_img = time.time()
 
             def prog_cb(pct, msg):
                 progress.progress(pct)
