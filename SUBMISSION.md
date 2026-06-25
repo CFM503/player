@@ -69,14 +69,14 @@
 | 技术 | 版本 | 做了什么 |
 |------|------|---------|
 | **OpenCV** | 4.x | 图像预处理：CLAHE 自适应直方图均衡化消除阴影，自适应阈值二值化锐化文字边缘，让 OCR 在恶劣光照条件下也能准确识别 |
-| **PaddleOCR** | 3.7.0 | 文字识别引擎：使用 ONNX Runtime 推理引擎（替代 PaddlePaddle），识别中文手写体和打印体，自定义坐标排序算法还原阅读顺序 |
+| **PaddleOCR** | 3.7.0 | 文字识别引擎：使用 PaddlePaddle 推理引擎，识别中文手写体和打印体，自定义坐标排序算法还原阅读顺序 |
 | **OpenAI SDK** | 1.x | LLM API 调用：通过 OpenAI 兼容协议接入 mimo-v2.5-pro 模型，将 OCR 原文解析为 21 个字段的结构化 JSON |
 | **Pydantic** | 2.x | 数据建模与校验：定义 SecuritySheetData 等 4 个 Schema，强制类型校验确保 LLM 输出数据质量 |
 | **Streamlit** | 1.33+ | Web 前端框架：构建 PC+手机端自适应 UI，包含上传区、黑客风格日志面板、KPI 指标卡、AI 数据看板 |
 | **SQLite** | 内置 | 数据存储：作业票结构化数据+OCR 原文+审批建议+图片路径，自动迁移旧表 |
 | **Requests** | 2.x | HTTP 通知推送：企业微信和钉钉群机器人 Webhook 消息推送 |
 | **Pandas** | 1.x | 数据分析：隐患统计、高频问题排名、数据表格展示 |
-| **ONNX Runtime** | 1.27+ | PaddleOCR 推理引擎：替代 PaddlePaddle，兼容 Python 3.10~3.14 |
+| **PaddlePaddle** | 3.3+ | PaddleOCR 推理引擎，兼容 Python 3.10~3.14 |
 
 ### 2.4 自研组件
 
@@ -228,7 +228,7 @@ Agent 自主校验 LLM 输出的 4 项指标：
 
 ```bash
 # 安装依赖
-pip install pydantic openai paddleocr opencv-python numpy requests streamlit pandas onnxruntime
+pip install pydantic openai paddleocr opencv-python numpy requests streamlit pandas paddlepaddle -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 配置 config.json（API Key/URL/模型/通知Webhook）
 

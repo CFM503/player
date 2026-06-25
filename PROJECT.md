@@ -9,7 +9,7 @@
 | 手机拍照上传 | 支持手机端调用摄像头拍照，PC端选择文件 | `frontend.py` st.camera_input / st.file_uploader |
 | 上传进度条 | 选择文件后 0%→100% 进度动画，完成后处理按钮才可用 | `frontend.py` |
 | 图像预处理 | OpenCV CLAHE 去阴影 + 自适应二值化，适配一线光照条件 | `agent_core.py` AgentTools.preprocess_image |
-| OCR 文字识别 | PaddleOCR 3.7.0 (ONNX引擎) 识别中文手写/打印体 | `agent_core.py` AgentTools.ocr_tool |
+| OCR 文字识别 | PaddleOCR 3.7.0 (PaddlePaddle) 识别中文手写/打印体 | `agent_core.py` AgentTools.ocr_tool |
 | LLM 语义结构化 | 调用 mimo-v2.5-pro 将 OCR 文本解析为 Pydantic JSON（21个字段） | `agent_core.py` LLMBrain.extract_sheet_json |
 | ReAct Agent 决策链 | 6阶段自主决策：规划→感知→推理→反思→执行→总结 | `agent_core.py` SecurityAgent |
 | 反思校验+自动重试 | 校验票号/浓度/措施一致性，不通过自动让LLM重试（最多2次） | `agent_core.py` SecurityAgent._reflect |
@@ -87,7 +87,7 @@
 ### 必装依赖
 
 ```bash
-pip install pydantic openai paddleocr opencv-python numpy requests streamlit pandas onnxruntime
+pip install pydantic openai paddleocr opencv-python numpy requests streamlit pandas paddlepaddle -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 ### 依赖说明
@@ -102,12 +102,12 @@ pip install pydantic openai paddleocr opencv-python numpy requests streamlit pan
 | `requests` | ≥2.0 | 企业微信 Webhook 推送 |
 | `streamlit` | ≥1.33 | Web UI 前端框架 |
 | `pandas` | ≥1.0 | 数据表格展示 |
-| `onnxruntime` | ≥1.27 | PaddleOCR ONNX 引擎（替代 paddlepaddle） |
+| `paddlepaddle` | ≥3.3 | PaddleOCR 推理引擎 |
 
 ### 一键安装
 
 ```bash
-pip install pydantic openai paddleocr opencv-python numpy requests streamlit pandas onnxruntime
+pip install pydantic openai paddleocr opencv-python numpy requests streamlit pandas paddlepaddle -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 ### 配置

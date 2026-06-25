@@ -3,7 +3,7 @@
 面向场景：巡检工人手机拍照上传 -> 自动去阴影矫正 -> 线上API语义结构化 -> 自动化闭环。
 
 依赖库:
-pip install pydantic openai paddleocr opencv-python numpy requests
+pip install pydantic openai paddleocr opencv-python numpy requests -i https://pypi.tuna.tsinghua.edu.cn/simple
 """
 
 import os
@@ -532,15 +532,26 @@ class AgentTools:
 
     @staticmethod
     def ocr_tool(image_path: str, mode: str = "cluster") -> str:
-        """PaddleOCR 文字识别，支持四种表格处理策略（均基于 onnxruntime，无需 PaddlePaddle）"""
+        """PaddleOCR 文字识别，支持四种表格处理策略（基于 PaddlePaddle）"""
         mode_labels = {
             "cluster": "坐标聚类", "grid": "精细网格",
             "adaptive": "自适应边框检测", "multidir": "多方向检测",
         }
         print(f"[Tool] OCR 模式: {mode_labels.get(mode, mode)}")
 
+        # ---- PaddlePaddle 3.x PIR+OneDNN 兼容补丁 ----
+        # 问题：OneDNN 指令不支持 PIR ArrayAttribute<DoubleAttribute>
+        # 修复：强制禁用 new_ir 并降低优化等级
+        import paddle.inference as _pi
+        if not getattr(_pi.Config, "_patched_for_onednn", False):
+            _orig_new_ir = _pi.Config.enable_new_ir
+            _pi.Config.enable_new_ir = lambda self, v=True: _orig_new_ir(self, False)
+            _orig_opt = _pi.Config.set_optimization_level
+            _pi.Config.set_optimization_level = lambda self, lv: _orig_opt(self, 0)
+            _pi.Config._patched_for_onednn = True
+
         from paddleocr import PaddleOCR
-        ocr = PaddleOCR(lang="ch", engine="onnxruntime")
+        ocr = PaddleOCR(lang="ch")
         entries = AgentTools._ocr_entries_basic(image_path, ocr)
         print(f"[Tool] OCR 完成，识别 {len(entries)} 个文本块。")
         if not entries:
@@ -789,14 +800,36 @@ class AgentTools:
     @staticmethod
     def send_wechat_alert(detail: str, receiver: str = "安全负责人") -> bool:
         """企业微信 Webhook 预警"""
-        webhook = os.environ.get("WECHAT_WEBHOOK_URL", "")
+        cfg = load_config()
+        webhook = cfg.get("wechat_webhook", "")
         print(f"[Tool] 向 {receiver} 推送企业微信预警...")
         if not webhook:
-            print("[Tool] 未配置 WECHAT_WEBHOOK_URL，跳过实际发送。")
+            print("[Tool] 未配置企业微信 Webhook，跳过实际发送。")
             return True
         import requests
         payload = {"msgtype": "markdown", "markdown": {"content": f"### 安全隐患警报\n> {receiver}\n> {detail}"}}
-        return requests.post(webhook, json=payload, timeout=10).status_code == 200
+        try:
+            return requests.post(webhook, json=payload, timeout=10).status_code == 200
+        except Exception as e:
+            print(f"[Tool] 企业微信推送失败: {e}")
+            return False
+
+    @staticmethod
+    def send_dingtalk_alert(detail: str, receiver: str = "安全负责人") -> bool:
+        """钉钉 Webhook 预警"""
+        cfg = load_config()
+        webhook = cfg.get("dingtalk_webhook", "")
+        print(f"[Tool] 向 {receiver} 推送钉钉预警...")
+        if not webhook:
+            print("[Tool] 未配置钉钉 Webhook，跳过实际发送。")
+            return True
+        import requests
+        payload = {"msgtype": "text", "text": {"content": f"【安全隐患警报】\n接收人: {receiver}\n{detail}"}}
+        try:
+            return requests.post(webhook, json=payload, timeout=10).status_code == 200
+        except Exception as e:
+            print(f"[Tool] 钉钉推送失败: {e}")
+            return False
 
 
 # ==========================================
@@ -1012,6 +1045,13 @@ class SecurityAgent:
     def _act(self, data: SecuritySheetData, ocr_text: str, mem: AgentMemory, image_path: str = ""):
         print("[Agent Act] 执行工具组合...")
 
+        # 检查通知渠道配置
+        cfg = load_config()
+        if not cfg.get("dingtalk_webhook"):
+            print("[Agent Act] ⚠️ 钉钉 Webhook 未配置，跳过钉钉推送。")
+        if not cfg.get("wechat_webhook"):
+            print("[Agent Act] ⚠️ 企业微信 Webhook 未配置，跳过微信推送。")
+
         # 天气检查
         weather = self.tools.check_weather_tool("牡丹江")
         if weather.get("issues"):
@@ -1030,7 +1070,8 @@ class SecurityAgent:
                        f"隐患:{issue.item_name}({issue.raw_text or '无备注'}) "
                        f"浓度:{data.gas_concentration} 签批:{data.approver_name or '未知'}")
                 self.tools.send_wechat_alert(msg)
-            summary = "SQLite + 企业微信预警 (共2个工具)"
+                self.tools.send_dingtalk_alert(msg)
+            summary = "SQLite + 企业微信/钉钉预警 (共3个工具)"
         else:
             summary = "SQLite (无隐患，跳过预警)"
 

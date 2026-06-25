@@ -4,6 +4,7 @@
 """
 
 import io, sys, os, time, json
+import check_deps  # noqa: F401 — 启动时强制校验依赖版本，不通过则退出
 import streamlit.components.v1 as _components
 import streamlit as st
 import pandas as pd

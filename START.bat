@@ -27,7 +27,7 @@ call :check requests requests
 call :check paddleocr paddleocr
 call :check openai openai
 call :check pandas pandas
-call :check onnxruntime onnxruntime
+call :check paddle paddlepaddle
 
 echo.
 if !MISSING! GTR 0 (
@@ -39,10 +39,10 @@ if !MISSING! GTR 0 (
         exit /b 1
     )
     echo.
-    pip install !MISSING_LIST!
+    pip install !MISSING_LIST! -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
     if errorlevel 1 (
         echo.
-        python -c "print('[ERROR] Install failed. Run manually:'); print('  pip install !MISSING_LIST!')"
+        python -c "print('[ERROR] Install failed. Run manually:'); print('  pip install !MISSING_LIST! -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn')"
         pause
         exit /b 1
     )
@@ -54,10 +54,10 @@ if !MISSING! GTR 0 (
 
 echo.
 python -c "print('=' * 46); print('  Model Check'); print('=' * 46); print()"
-python -c "import sys; sys.exit(0 if __import__('os').path.isdir(__import__('os').path.expanduser(r'~\.paddlex\official_models\PP-OCRv6_medium_det_onnx')) else 1)" >nul 2>&1
+python -c "import sys; sys.exit(0 if __import__('os').path.isdir(__import__('os').path.expanduser(r'~\.paddlex\official_models\PP-OCRv6_medium_det')) else 1)" >nul 2>&1
 if errorlevel 1 (
     python -c "print('  PaddleOCR models not cached. Downloading...')"
-    python -c "from paddleocr import PaddleOCR; PaddleOCR(lang='ch', engine='onnxruntime')" >nul 2>&1
+    python -c "import paddle.inference as pi; orig=pi.Config.enable_new_ir; pi.Config.enable_new_ir=lambda s,v=True:orig(s,False); orig2=pi.Config.set_optimization_level; pi.Config.set_optimization_level=lambda s,l:orig2(s,0); from paddleocr import PaddleOCR; PaddleOCR(lang='ch')" >nul 2>&1
     if errorlevel 1 (
         python -c "print('[ERROR] Model download failed. Check network and retry.')"
         pause

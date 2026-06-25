@@ -115,7 +115,7 @@
 |------|------|------|
 | 前端 | Streamlit | Web UI，支持 PC + 手机端 |
 | 图像处理 | OpenCV (CLAHE) | 自适应去阴影、二值化 |
-| 文字识别 | PaddleOCR 3.7.0 (ONNX) | 中文手写体/打印体识别 |
+| 文字识别 | PaddleOCR 3.7.0 (PaddlePaddle) | 中文手写体/打印体识别 |
 | 语义理解 | mimo-v2.5-pro (OpenAI 兼容) | OCR 文本→结构化 JSON |
 | 数据存储 | SQLite | 作业票数据沉淀 |
 | 通知推送 | 企业微信 Webhook | 隐患自动预警 |
@@ -128,7 +128,7 @@
 
 ```bash
 # 1. 安装依赖
-pip install pydantic openai paddleocr opencv-python numpy requests streamlit onnxruntime
+pip install pydantic openai paddleocr opencv-python numpy requests streamlit paddlepaddle -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 2. 配置 API（编辑 config.json）
 {

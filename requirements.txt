@@ -1,0 +1,10 @@
+# Python 3.13+ required
+pydantic>=2.13.4
+streamlit>=1.58.0
+opencv-python>=4.13.0.92
+paddleocr>=3.7.0
+openai>=2.44.0
+numpy>=2.3.5,<2.4
+pandas>=3.0.3
+paddlepaddle>=3.3.1
+requests>=2.34.2

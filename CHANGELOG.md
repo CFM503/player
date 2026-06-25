@@ -1,5 +1,24 @@
 # 更新日志 (CHANGELOG)
 
+## [3.3.5] - 2026-06-25
+
+### 新增
+- **启动依赖版本检查**：新增 `check_deps.py`，程序启动时强制校验 Python 3.13+ 及全部第三方依赖为最新版本，不满足则打印诊断信息并阻止启动。Streamlit 多进程通过环境变量防重复输出。
+- **运行日志钉钉推送**：agent `_act()` 阶段新增钉钉 Webhook 自动推送（与企业微信并列），未配置时在运行日志窗口打印 ⚠️ 警告提示。
+- **requirements.txt**：新增依赖声明文件，支持 `pip install --upgrade -r requirements.txt` 一键升级。
+- **国内镜像安装**：所有 `pip install` 命令统一使用清华镜像源 `pypi.tuna.tsinghua.edu.cn`。
+
+### 变更
+- **OCR 引擎切换**：从 onnxruntime 切换为 PaddlePaddle 推理引擎，全项目 8 处更新（agent_core / check_deps / requirements / START.bat / 文档）。
+- **numpy 版本锁定**：从 1.26.4 升级至 2.3.5（满足 paddlex `>=1.24,<2.4` 约束）。
+- **依赖全量升级**：pydantic 2.13.4、opencv-python 4.13.0.92、openai 2.44.0、pandas 3.0.3、paddlepaddle 3.3.1、requests 2.34.2。
+- **企业微信推送改为 config.json 读取**：`send_wechat_alert()` 从环境变量 `WECHAT_WEBHOOK_URL` 改为读取 `config.json` 的 `wechat_webhook` 字段，与前端侧边栏设置统一。
+- **企业微信/钉钉推送增加异常捕获**：网络错误时打印失败日志而非抛出异常。
+
+### 修复
+- **PaddlePaddle PIR+OneDNN 兼容**：修复 `ConvertPirAttribute2RuntimeAttribute not support [pir::ArrayAttribute<pir::DoubleAttribute>]` 错误，通过强制禁用 `enable_new_ir` 并降低优化等级。
+- **START.bat paddle 导入名**：`import paddlepaddle` 修正为 `import paddle`。
+
 ## [3.3.4] - 2026-06-25
 
 ### 修复
@@ -22,7 +41,7 @@
 ### 优化
 - **OCR 表格结构化输出**：`ocr_tool` 输出格式从扁平文本升级为表格结构化文本（`|` 分隔行列），末尾附带纯文本版本供下游正则兜底匹配。
 - **日志面板与进度条布局修复**：将 `status_text` 和 `progress` 移至分栏上方独立占行，解决 `.hlog` 日志面板与 `stCaptionContainer` 的视觉重叠问题。
-- **OCR 引擎统一**：所有模式均基于 `PaddleOCR(engine="onnxruntime")`，无需安装 PaddlePaddle 框架。
+- **OCR 引擎统一**：所有模式均基于 `PaddleOCR(lang="ch")`，使用 PaddlePaddle 推理引擎。
 
 ## [3.3.2] - 2026-06-24
 
