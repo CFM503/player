@@ -22,6 +22,11 @@ _DEPS = [
     ("pandas",         "pandas",         "3.0.3"),
     ("paddlepaddle",   "paddle",         "3.3.1"),
     ("requests",       "requests",       "2.34.2"),
+    # paddlex[ocr] 精确表格识别依赖
+    ("paddlex",        "paddlex",        "3.7.1"),
+    ("scikit-learn",   "sklearn",        "1.9.0"),
+    ("tiktoken",       "tiktoken",       "0.13.0"),
+    ("sentencepiece",  "sentencepiece",  "0.2.1"),
 ]
 
 

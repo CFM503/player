@@ -531,11 +531,12 @@ class AgentTools:
         return entries
 
     @staticmethod
-    def ocr_tool(image_path: str, mode: str = "cluster") -> str:
-        """PaddleOCR 文字识别，支持四种表格处理策略（基于 PaddlePaddle）"""
+    def ocr_tool(image_path: str, mode: str = "cluster", brain=None) -> str:
+        """PaddleOCR 文字识别，支持五种表格处理策略（基于 PaddlePaddle）"""
         mode_labels = {
             "cluster": "坐标聚类", "grid": "精细网格",
             "adaptive": "自适应边框检测", "multidir": "多方向检测",
+            "precise": "精确表格识别",
         }
         print(f"[Tool] OCR 模式: {mode_labels.get(mode, mode)}")
 
@@ -549,6 +550,15 @@ class AgentTools:
             _orig_opt = _pi.Config.set_optimization_level
             _pi.Config.set_optimization_level = lambda self, lv: _orig_opt(self, 0)
             _pi.Config._patched_for_onednn = True
+
+        # 精确表格识别走独立流水线（含布局检测+表格结构+OCR），不走基础 OCR
+        if mode == "precise":
+            table_text = AgentTools._format_table_precise(image_path, brain)
+            if not table_text:
+                print("[Tool] 精确识别无结果，回退坐标聚类。")
+                mode = "cluster"
+            else:
+                return table_text
 
         from paddleocr import PaddleOCR
         ocr = PaddleOCR(lang="ch")
@@ -707,6 +717,75 @@ class AgentTools:
                 col.sort(key=lambda e: e["y"])
                 result_parts.append("↕ " + " ".join(e["text"] for e in col))
         return "\n".join(result_parts) if result_parts else AgentTools._format_table(entries)
+
+    @staticmethod
+    def _format_table_precise(image_path: str, brain=None) -> str:
+        """精确表格识别：PaddleStructure 表格结构识别 + LLM Markdown 还原"""
+        import paddle.inference as _pi
+        if not getattr(_pi.Config, "_patched_for_onednn", False):
+            _orig_new_ir = _pi.Config.enable_new_ir
+            _pi.Config.enable_new_ir = lambda self, v=True: _orig_new_ir(self, False)
+            _orig_opt = _pi.Config.set_optimization_level
+            _pi.Config.set_optimization_level = lambda self, lv: _orig_opt(self, 0)
+            _pi.Config._patched_for_onednn = True
+
+        print("[Tool] PaddleStructure 表格识别...")
+        try:
+            from paddlex import create_pipeline
+            pipe = create_pipeline("table_recognition", engine_config={"enable_new_ir": False})
+            result = list(pipe(image_path))
+        except Exception as ex:
+            print(f"[Tool] PaddleStructure 识别失败: {ex}，回退坐标聚类")
+            return ""
+
+        if not result:
+            print("[Tool] PaddleStructure 未检测到表格，回退坐标聚类")
+            return ""
+
+        # 合并所有识别到的表格 HTML
+        html_dict = result[0].html if hasattr(result[0], "html") else {}
+        html_parts = [v for v in html_dict.values() if v]
+        if not html_parts:
+            print("[Tool] PaddleStructure 表格 HTML 为空，回退坐标聚类")
+            return ""
+
+        table_html = "\n".join(html_parts)
+        print(f"[Tool] PaddleStructure 表格识别完成，{len(html_parts)} 个表格。")
+
+        # 无 LLM 时直接返回 HTML
+        if brain is None:
+            return table_html
+
+        # LLM 将 HTML 转换为标准 Markdown 表格
+        print("[Tool] LLM 精排 Markdown 表格...")
+        system_prompt = (
+            "你是一个专业的安全生产档案数字化专家，专门负责将包含 PaddleStructure 识别出的"
+            "结构化数据（HTML）与 OCR 文字的原始日志，转换成排版精美、便于检索的 Markdown 表格。\n\n"
+            "规则：\n"
+            "1. 严格比对原始表格的行列关系，使用 Markdown 标准语法（| Column |）还原表格。"
+            "合并单元格可在不破坏大结构的前提下进行合理拆分或用合并话术表达。\n"
+            "2. 识别到的手写签名直接保留名字，并在括号中注明（手写），如：张三（手写）。\n"
+            "3. 复选框和检查项中的勾选状态（✓、X、—）必须精准填入对应的 Markdown 单元格中。\n"
+            "4. 作业基本信息使用加粗键值对或小型表格呈现；核心安全检查大表需保留分类表头。\n"
+            "5. 仅根据提供的 HTML 进行还原，不要编造、猜测任何未显示的文字或检查结果。\n\n"
+            "输出要求：直接输出最终的 Markdown 文本，不要包含任何前言、解释或分析。"
+        )
+        try:
+            resp = brain.client.chat.completions.create(
+                model=brain.model_name,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"请将以下 PaddleStructure 识别的 HTML 表格转换为 Markdown：\n\n{table_html}"},
+                ],
+                temperature=0.1,
+                max_tokens=4096,
+            )
+            md = resp.choices[0].message.content.strip()
+            print(f"[Tool] LLM 精排完成，{len(md)} 字符。")
+            return md
+        except Exception as ex:
+            print(f"[Tool] LLM 精排失败: {ex}，返回原始 HTML")
+            return table_html
 
     @staticmethod
     def check_weather_tool(city: str = "牡丹江") -> dict:
@@ -875,7 +954,7 @@ class SecurityAgent:
 
     def _perceive(self, image_path: str, mem: AgentMemory) -> str:
         print("[Agent Perceive] OpenCV + PaddleOCR 感知...")
-        text = self.tools.ocr_tool(image_path, mode=self.ocr_mode)
+        text = self.tools.ocr_tool(image_path, mode=self.ocr_mode, brain=self.brain)
         n = len(text.strip().split("\n"))
         summary = f"提取 {n} 行文本"
         print(f"[Agent Perceive] {summary}")

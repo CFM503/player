@@ -63,9 +63,23 @@ if errorlevel 1 (
         pause
         exit /b 1
     )
-    python -c "print('  Models downloaded and cached.')"
+    python -c "print('  PaddleOCR models downloaded.')"
 ) else (
     python -c "print('  [OK] PaddleOCR models cached.')"
+)
+
+python -c "import sys; sys.exit(0 if __import__('os').path.isdir(__import__('os').path.expanduser(r'~\.paddlex\official_models\SLANet_plus')) else 1)" >nul 2>&1
+if errorlevel 1 (
+    python -c "print('  Table recognition models not cached. Downloading...')"
+    python -c "import paddle.inference as pi; orig=pi.Config.enable_new_ir; pi.Config.enable_new_ir=lambda s,v=True:orig(s,False); orig2=pi.Config.set_optimization_level; pi.Config.set_optimization_level=lambda s,l:orig2(s,0); from paddlex import create_pipeline; create_pipeline('table_recognition', engine_config={'enable_new_ir': False})" >nul 2>&1
+    if errorlevel 1 (
+        python -c "print('[ERROR] Table model download failed. Check network and retry.')"
+        pause
+        exit /b 1
+    )
+    python -c "print('  Table recognition models downloaded.')"
+) else (
+    python -c "print('  [OK] Table recognition models cached.')"
 )
 
 echo.

@@ -5,7 +5,6 @@
 
 import io, sys, os, time, json
 import check_deps  # noqa: F401 — 启动时强制校验依赖版本，不通过则退出
-import streamlit.components.v1 as _components
 import streamlit as st
 import pandas as pd
 from styles import CUSTOM_CSS
@@ -25,8 +24,7 @@ st.set_page_config(page_title="安全数字监督员", page_icon="🛡️", layo
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 # ---- 强制展开侧边栏：清除 localStorage + 自动点击展开按钮 ----
-# st.markdown 的 <script> 不会被 Streamlit 执行，必须用 components.v1.html()
-_components.html("""
+st.html("""
 <script>
 (function() {
     // 1. 清除所有侧边栏相关 localStorage 缓存
@@ -54,7 +52,7 @@ _components.html("""
     }, 300);
 })();
 </script>
-""", height=0)
+""", unsafe_allow_javascript=True)
 
 # ---- Session State ----
 if "results" not in st.session_state: st.session_state.results = []
@@ -81,12 +79,13 @@ with st.sidebar:
         "精细网格（列对齐）": "grid",
         "自适应边框检测": "adaptive",
         "多方向检测": "multidir",
+        "精确表格识别（PaddleStructure）": "precise",
     }
     ocr_mode_label = st.selectbox(
         "📋 OCR 表格模式",
         list(_ocr_modes.keys()),
         index=0,
-        help="坐标聚类：基于文字坐标重建表格行列\n精细网格：X坐标聚类识别列边界，对齐输出\n自适应边框检测：OpenCV检测表格线段，按单元格组织文本\n多方向检测：分离水平/垂直文本分别处理",
+        help="坐标聚类：基于文字坐标重建表格行列\n精细网格：X坐标聚类识别列边界，对齐输出\n自适应边框检测：OpenCV检测表格线段，按单元格组织文本\n多方向检测：分离水平/垂直文本分别处理\n精确表格识别：PaddleStructure表格结构识别 + LLM Markdown还原",
     )
     ocr_mode = _ocr_modes[ocr_mode_label]
 

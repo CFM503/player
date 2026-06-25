@@ -1,5 +1,14 @@
 # 更新日志 (CHANGELOG)
 
+## [3.4.0] - 2026-06-25
+
+### 新增
+- **精确表格识别模式**：新增第 5 种 OCR 表格模式 `精确表格识别（PaddleStructure）`，基于 PaddleX `table_recognition` 流水线（PP-DocLayout-L 版面检测 + SLANet_plus 表格结构识别 + PP-OCRv4_server 文字识别），输出带 colspan/rowspan 的 HTML 后由 LLM 精排为标准 Markdown 表格，支持合并单元格、手写签名、勾选状态还原。
+- **精确模式启动预检**：`check_deps.py` 新增 `paddlex`、`scikit-learn`、`tiktoken`、`sentencepiece` 依赖校验；`START.bat` 新增表格识别模型（`SLANet_plus`）缓存检查与自动下载。
+
+### 变更
+- **Streamlit API 更新**：`st.components.v1.html()` 已废弃，替换为 `st.html(unsafe_allow_javascript=True)`。
+
 ## [3.3.5] - 2026-06-25
 
 ### 新增
