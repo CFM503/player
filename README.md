@@ -2,7 +2,7 @@
 
 > 中燃集团 AI 创新创意大赛 · 赛道三（AI 龙虾专项赛）  
 > 选题方向：**流程自动化与审批助手**  
-> 版本：v3.3.3
+> 版本：v3.4.0
 
 ---
 
@@ -18,14 +18,14 @@
 | 隐患识别 | 人工逐项核对，易遗漏 | AI 自动校验21项安全措施 |
 | 审批意见 | 凭经验，无标准引用 | LLM 自动生成，引用 GB 30871 |
 | 数据统计 | Excel 手动汇总 | 实时看板，隐患率/高频问题自动排名 |
-| 预警响应 | 发现隐患后人工通知 | 检测到异常即刻推送企业微信 |
+| 预警响应 | 发现隐患后人工通知 | 检测到异常即刻推送企业微信/钉钉 |
 
 ---
 
 ## 二、系统架构
 
 ```
-手机拍照 ──→ OpenCV 去阴影 ──→ PaddleOCR 文字识别
+手机拍照 ──→ OpenCV 去阴影 ──→ PaddleOCR/PaddleStructure 文字识别
                                       │
                                       ▼
                               LLM 语义结构化
@@ -43,7 +43,7 @@
                                       │
                           ┌───────────┼───────────┐
                           ▼           ▼           ▼
-                    企业微信预警   SQLite沉淀   审批建议生成
+                   企业微信/钉钉预警  SQLite沉淀  审批建议生成
                                    ↓
                               AI 数据看板
 ```
@@ -74,6 +74,12 @@
 
 ### 3.2 AI 智能结构化
 - PaddleOCR 识别手写/打印文字，自动按坐标排序还原阅读顺序
+- **五种 OCR 表格识别模式**：
+  - 坐标聚类（默认）：基于文字坐标 Y 间隙分行、X 排序
+  - 精细网格：X 坐标聚类识别列边界，按列对齐输出
+  - 自适应边框检测：OpenCV 形态学运算检测表格线段，按单元格组织文本
+  - 多方向检测：分离水平/垂直文本，分别聚类处理
+  - **精确表格识别**：PaddleStructure 表格结构识别 + LLM Markdown 精排，支持合并单元格和手写签名还原
 - LLM 将 OCR 文本解析为结构化 JSON（票号、场站、动火人、浓度、安全措施等21个字段）
 - Pydantic Schema 强类型校验，确保数据质量
 
@@ -92,10 +98,11 @@
 | 一般 | 存在隐患但不严重 | 🟡 |
 | 低风险 | 全部正常 | 🟢 |
 
-### 3.5 企业微信预警
-- 检测到隐患自动推送企业微信 Webhook
+### 3.5 企业微信/钉钉预警
+- 检测到隐患自动推送企业微信 + 钉钉 Webhook
 - 包含票号、场站、隐患明细、浓度、签批人信息
-- 配置 `WECHAT_WEBHOOK_URL` 环境变量即可启用
+- 在侧边栏"通知设置"中配置 Webhook 地址即可启用
+- 未配置时运行日志窗口自动打印 ⚠️ 警告提示
 
 ### 3.6 AI 数据看板
 - 总处理票数 / 有隐患数 / 正常数 / 隐患率 四栏实时统计
@@ -107,44 +114,60 @@
 - 绿色终端风格，进度条跟随各阶段推进
 - 用户可感知 Agent 正在工作，而非"卡住了"
 
+### 3.8 启动依赖版本强制校验
+- 程序启动时自动检查 Python 3.13+ 及全部第三方依赖版本
+- 版本不满足则打印诊断信息（含一键升级命令）并阻止启动
+- Streamlit 多进程环境通过环境变量防重复校验输出
+
+### 3.9 国内镜像一键安装
+- 所有 `pip install` 命令统一使用清华镜像源，国内网络零障碍
+- `START.bat` 自动检测缺失包并提示安装，模型缓存缺失时自动下载
+
 ---
 
 ## 四、技术栈
 
 | 组件 | 技术 | 用途 |
 |------|------|------|
-| 前端 | Streamlit | Web UI，支持 PC + 手机端 |
-| 图像处理 | OpenCV (CLAHE) | 自适应去阴影、二值化 |
-| 文字识别 | PaddleOCR 3.7.0 (PaddlePaddle) | 中文手写体/打印体识别 |
-| 语义理解 | mimo-v2.5-pro (OpenAI 兼容) | OCR 文本→结构化 JSON |
-| 数据存储 | SQLite | 作业票数据沉淀 |
-| 通知推送 | 企业微信 Webhook | 隐患自动预警 |
-| 数据校验 | Pydantic | Schema 强类型校验 |
+| 前端 | Streamlit 1.58+ | Web UI，支持 PC + 手机端 |
+| 图像处理 | OpenCV 4.13 (CLAHE) | 自适应去阴影、二值化 |
+| 文字识别 | PaddleOCR 3.7.0 (PaddlePaddle 3.3) | 中文手写体/打印体识别 |
+| 表格结构识别 | PaddleX TableRecognition (SLANet_plus) | 精确表格结构还原，合并单元格支持 |
+| 版面检测 | PP-DocLayout-L | 文档版面分析，定位表格区域 |
+| 语义理解 | mimo-v2.5-pro (OpenAI 兼容) | OCR 文本→结构化 JSON + Markdown 精排 |
+| 数据校验 | Pydantic 2.13 | Schema 强类型校验 |
 | Agent 框架 | 自研 ReAct | 六阶段自主决策+反思重试 |
+| 数据存储 | SQLite | 作业票数据沉淀 |
+| 数据分析 | Pandas 3.0 | 隐患统计、高频问题排名 |
+| 通知推送 | 企业微信 + 钉钉 Webhook | 隐患自动预警（双通道） |
+| 依赖管理 | check_deps.py + requirements.txt | 启动版本校验 + 国内镜像一键安装 |
+| 推理引擎 | PaddlePaddle 3.3 | PaddleOCR/PaddleX 模型推理 |
 
 ---
 
 ## 五、快速启动
 
 ```bash
-# 1. 安装依赖
-pip install pydantic openai paddleocr opencv-python numpy requests streamlit paddlepaddle -i https://pypi.tuna.tsinghua.edu.cn/simple
+# 1. 安装依赖（国内镜像，自动检查版本）
+pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 2. 配置 API（编辑 config.json）
 {
   "api_key": "你的API Key",
   "base_url": "https://api.example.com/v1",
   "model_name": "你的模型名称",
-  "delete_password": "123"
+  "delete_password": "123",
+  "wechat_webhook": "企业微信机器人Webhook地址",
+  "dingtalk_webhook": "钉钉机器人Webhook地址"
 }
 
-# 3. 启动
+# 3. 启动（自动检查依赖版本 + 模型缓存）
 START.bat
 # 或
 streamlit run frontend.py
 ```
 
-手机端浏览器访问 Streamlit 地址即可拍照使用。
+> 首次启动会自动下载 PaddleOCR 和 PaddleStructure 模型（约 400MB），请保持网络畅通。
 
 ---
 
@@ -203,24 +226,53 @@ streamlit run frontend.py
 
 ---
 
-## 八、项目结构
+## 八、软件特点
+
+### 自主决策，而非简单流水线
+传统 OCR→模板匹配是"死流程"，本系统的 ReAct Agent 能自主判断每一步结果是否正确，发现异常自动重试，实现真正的智能决策。
+
+### 五种 OCR 模式，适配各种作业票
+从简单的坐标聚类到基于深度学习的精确表格结构识别（PaddleStructure），五种模式覆盖手写体、打印体、有边框、无边框、竖排文字等各类场景。
+
+### 端到端闭环，一个系统搞定
+拍照→识别→结构化→标准校验→审批建议→隐患预警→数据沉淀→AI看板，全流程无需人工介入。
+
+### 双通道即时预警
+企业微信 + 钉钉双通道 Webhook 推送，检测到隐患即刻通知安全负责人。
+
+### 启动即校验，零配置陷阱
+程序启动自动检查 Python 版本和全部依赖版本，不满足即报错并给出一键升级命令，杜绝"跑不起来"的困扰。
+
+### 国内网络零障碍
+所有 pip 安装命令默认使用清华镜像源，模型下载走国内 CDN，告别网络问题。
+
+---
+
+## 九、项目结构
 
 ```
 player/
 ├── agent_core.py      # Agent 核心引擎（Schema/LLM/工具集/ReAct循环）
 ├── frontend.py        # Streamlit Web UI（处理+看板+黑客日志）
-├── config.json        # API 配置（key/url/model/删除密码）
-├── START.bat          # 一键启动脚本
+├── components.py      # 可复用 UI 组件库
+├── styles.py          # 自定义 CSS 主题
+├── check_deps.py      # 启动依赖版本校验
+├── config.json        # API 配置（key/url/model/通知webhook）
+├── config.example.json # 配置模板
+├── requirements.txt   # 依赖声明（含版本约束）
+├── START.bat          # 一键启动脚本（依赖检查+模型预下载+启动）
 ├── VERSION            # 版本号
+├── CHANGELOG.md       # 更新日志
+├── PROJECT.md         # 项目详细说明
 ├── games.md           # 赛道三合规分析
 ├── test_e2e.py        # 端到端测试脚本
 ├── security_data.db   # SQLite 数据库（运行时生成）
-└── upload/            # 测试图片
+└── uploads/           # 测试图片
 ```
 
 ---
 
-## 九、联系方式
+## 十、联系方式
 
 - 项目地址：https://github.com/CFM503/player
 - 参赛赛道：赛道三（AI 龙虾专项赛）

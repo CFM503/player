@@ -1,5 +1,11 @@
 # 更新日志 (CHANGELOG)
 
+## [3.4.1] - 2026-06-25
+
+### 文档
+- **README 全面更新**：版本号升至 v3.4.0，新增"软件特点"章节（自主决策、五种 OCR 模式、端到端闭环、双通道预警、启动校验、国内镜像），技术栈表格补充 PaddleStructure/SLANet_plus/PP-DocLayout-L/Pandas/双通道通知/依赖管理/推理引擎，快速启动更新为 requirements.txt + config.json 新格式，项目结构补充 check_deps.py/requirements.txt/components.py/styles.py。
+- **CHANGELOG 补充**：v3.4.0 补充企业微信/钉钉推送改为 config.json 读取及异常捕获修复记录。
+
 ## [3.4.0] - 2026-06-25
 
 ### 新增
@@ -8,6 +14,10 @@
 
 ### 变更
 - **Streamlit API 更新**：`st.components.v1.html()` 已废弃，替换为 `st.html(unsafe_allow_javascript=True)`。
+
+### 修复
+- **企业微信/钉钉推送改为 config.json 读取**：`send_wechat_alert()` 从环境变量改为读取 `config.json`，与前端侧边栏通知设置统一。
+- **企业微信/钉钉推送增加异常捕获**：网络错误时打印失败日志而非抛出异常。
 
 ## [3.3.5] - 2026-06-25
 
