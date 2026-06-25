@@ -1,5 +1,15 @@
 # 更新日志 (CHANGELOG)
 
+## [3.3.4] - 2026-06-25
+
+### 修复
+- **侧边栏折叠与展开功能兼容性修复**：
+  - 修复了在 Streamlit 1.58+ 中侧边栏折叠后，左上角展开按钮不显示且无法正常展起的兼容性问题。
+  - **原因**：Streamlit 1.58 把侧边栏展开按钮更名为了 `stExpandSidebarButton` 且移入了顶部工具栏 `header [data-testid="stToolbar"]`。而我们先前的 CSS 直接 `display: none` 隐藏了整个工具栏，从而让展开按钮一同被销毁了。
+  - **解决**：改写 [styles.py](file:///d:/SOFT/AI/github/player/styles.py) 使工具栏框架显示并设为不阻挡页面点击的 `pointer-events: none`，利用 CSS 精准隐藏工具栏内非侧边栏控制器的多余按钮；将展开按钮 CSS 样式及 [frontend.py](file:///d:/SOFT/AI/github/player/frontend.py) 的 JS 辅助点击选择器均从 `stSidebarCollapsedControl` 升级为新的 `stExpandSidebarButton`。
+- **恢复侧边栏 OCR 表格模式选择**：
+  - 修复了此前在重构中意外遗失的 `📋 OCR 表格模式` 侧边栏选择器，恢复了其渲染并将选中的模式传递给 `SecurityAgent` 以保证各 OCR 识别策略正常运转。
+
 ## [3.3.3] - 2026-06-24
 
 ### 新增

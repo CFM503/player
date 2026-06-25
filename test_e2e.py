@@ -7,7 +7,7 @@ os.environ["PYTHONIOENCODING"] = "utf-8"
 
 from agent_core import SecurityAgent, LLMBrain, AgentTools
 
-UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "upload")
+UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 images = sorted(glob.glob(os.path.join(UPLOAD_DIR, "*.png")) + glob.glob(os.path.join(UPLOAD_DIR, "*.jpg")))
 
 print(f"=== 安全数字监督员 Agent 端到端测试 ===")

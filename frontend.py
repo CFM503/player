@@ -3,9 +3,15 @@
 启动: streamlit run frontend.py
 """
 
-import io, sys, os, re, time, json
+import io, sys, os, time, json
+import streamlit.components.v1 as _components
 import streamlit as st
 import pandas as pd
+from styles import CUSTOM_CSS
+from components import (
+    badge, render_kpi_row, render_ticket_kpis,
+    render_notification_btn, render_record_badge,
+)
 
 # ---- 配置 ----
 _cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
@@ -14,436 +20,40 @@ _ver = open(os.path.join(os.path.dirname(__file__), "VERSION"), encoding="utf-8"
 
 st.set_page_config(page_title="安全数字监督员", page_icon="🛡️", layout="wide", initial_sidebar_state="expanded")
 
-# ---- 自定义主题（柔和暗色，不刺眼，所有颜色显式）----
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
+# ---- 自定义主题 ----
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-/* 配色方案 (普通浅中性色系，柔和且保护视力，不跟随系统) */
-:root {
-    --bg: #f4f6fa;          /* 主背景 - 浅灰蓝，非常平缓舒适 */
-    --sidebar: #eaedf4;     /* 侧边栏 - 略深灰蓝 */
-    --card: #ffffff;        /* 卡片背景 - 纯白 */
-    --border: #dbe1ec;      /* 边框线 - 低对比度浅灰 */
-    --text: #2d3243;        /* 主文字 - 深蓝灰，降低黑白对比，更柔和 */
-    --text-muted: #5f6679;  /* 次要文字 */
-    --blue: #3b82f6;        /* 主色调/按钮蓝 - 经典柔和蓝 */
-    --blue-hover: #2563eb;
-    --green: #10b981;       /* 正常绿 */
-    --green-bg: #e6f7f0;
-    --red: #ef4444;         /* 隐患红 */
-    --red-bg: #fee2e2;
-    --yellow: #f59e0b;      /* 警告黄 */
-    --yellow-bg: #fef3c7;
-}
+# ---- 强制展开侧边栏：清除 localStorage + 自动点击展开按钮 ----
+# st.markdown 的 <script> 不会被 Streamlit 执行，必须用 components.v1.html()
+_components.html("""
+<script>
+(function() {
+    // 1. 清除所有侧边栏相关 localStorage 缓存
+    try {
+        Object.keys(localStorage).forEach(function(k) {
+            if (k.toLowerCase().indexOf('sidebar') !== -1) {
+                localStorage.removeItem(k);
+            }
+        });
+    } catch(e) {}
 
-/* 全局覆盖，强制不跟随系统暗色模式 */
-html, body, [data-testid="stAppViewContainer"] {
-    background-color: var(--bg) !important;
-    color: var(--text) !important;
-    color-scheme: light !important;
-    overflow: hidden !important; /* 隐藏浏览器视口及外层容器滚动条，防止双滚动条 */
-}
-
-/* 仅在 Streamlit 实际的内容滚动容器上强制启用垂直滚动条轨道，锁定排版宽度，彻底杜绝闪烁和抖动 */
-.main, [data-testid="stMain"] {
-    overflow-y: scroll !important;
-    overflow-x: hidden !important;
-}
-
-/* 侧边栏允许其内容超出时正常垂直滚动 */
-section[data-testid="stSidebar"] {
-    overflow-y: auto !important;
-}
-
-.stApp {
-    background: var(--bg) !important;
-}
-.stApp > header { background: transparent !important; }
-.block-container {
-    padding: 0.5rem 1.2rem 0.3rem 1.2rem;
-    max-width: 100%;
-    color: var(--text);
-}
-#MainMenu, footer { display: none !important; }
-[data-testid="stDecoration"] { display: none !important; }
-.stAppDeployButton, .stDeployButton { display: none !important; }
-[data-testid="stHeaderActionElements"] { display: none !important; }
-[data-testid="stStatusWidget"] { display: none !important; }
-header {
-    background: transparent !important;
-}
-
-/* 字体全局优化 */
-* {
-    font-family: 'Inter', sans-serif;
-}
-
-/* 侧边栏样式 */
-section[data-testid="stSidebar"] {
-    background: var(--sidebar) !important;
-    border-right: 1px solid var(--border) !important;
-}
-section[data-testid="stSidebar"] .block-container {
-    padding-top: 0.6rem;
-    color: var(--text);
-}
-section[data-testid="stSidebar"] label {
-    color: var(--text-muted) !important;
-    font-size: 12px !important;
-    font-weight: 500 !important;
-}
-section[data-testid="stSidebar"] .stTextInput input {
-    background: var(--card) !important;
-    color: var(--text) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 8px !important;
-}
-
-/* Tabs 选项卡 */
-.stTabs [data-baseweb="tab-list"] {
-    gap: 4px;
-    background: var(--sidebar);
-    border-radius: 10px;
-    padding: 4px;
-    border: 1px solid var(--border);
-}
-.stTabs [data-baseweb="tab"] {
-    color: var(--text-muted) !important;
-    font-size: 13px !important;
-    padding: 8px 20px !important;
-    border-radius: 8px !important;
-    background: transparent !important;
-    transition: all 0.2s ease !important;
-}
-.stTabs [aria-selected="true"] {
-    color: var(--text) !important;
-    background: var(--card) !important;
-    font-weight: 600 !important;
-    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05) !important;
-}
-
-/* 按钮样式（上传 / 拍照 / 处理 / 下载） */
-.stButton > button, .stDownloadButton > button {
-    background: var(--blue) !important;
-    color: #ffffff !important;
-    border: none !important;
-    border-radius: 8px !important;
-    padding: 8px 16px !important;
-    font-size: 14px !important;
-    font-weight: 600 !important;
-    min-height: 40px !important;
-    transition: background-color 0.2s ease, box-shadow 0.2s ease !important;
-    box-shadow: 0 2px 6px rgba(59, 130, 246, 0.15) !important;
-}
-.stButton > button:hover, .stDownloadButton > button:hover {
-    background: var(--blue-hover) !important;
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25) !important;
-}
-.stButton > button:active, .stDownloadButton > button:active {
-    box-shadow: 0 1px 3px rgba(59, 130, 246, 0.1) !important;
-}
-.stButton > button:disabled, .stDownloadButton > button:disabled {
-    background: #e2e8f0 !important;
-    color: #94a3b8 !important;
-    box-shadow: none !important;
-    cursor: not-allowed !important;
-}
-.stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] {
-    background: linear-gradient(135deg, var(--blue) 0%, #4f46e5 100%) !important;
-}
-.stButton > button[kind="primary"]:hover, .stDownloadButton > button[kind="primary"]:hover {
-    background: linear-gradient(135deg, var(--blue-hover) 0%, #4338ca 100%) !important;
-}
-
-/* 上传区 (stFileUploader) */
-[data-testid="stFileUploader"] { padding: 0 !important; margin: 0 !important; }
-[data-testid="stFileUploader"] section {
-    background: var(--card) !important;
-    border: 2px dashed var(--border) !important;
-    border-radius: 10px !important;
-    padding: 16px !important;
-    min-height: 80px !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    transition: all 0.25s ease !important;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.01) !important;
-}
-[data-testid="stFileUploader"] section:hover {
-    border-color: var(--blue) !important;
-    background: #f8fafc !important;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.03) !important;
-}
-[data-testid="stFileUploader"] label {
-    color: var(--text) !important;
-    font-size: 14px !important;
-    font-weight: 600 !important;
-    margin-bottom: 6px !important;
-}
-[data-testid="stFileUploader"] section svg {
-    fill: var(--blue) !important;
-}
-[data-testid="stFileUploader"] section p {
-    color: var(--text-muted) !important;
-    font-size: 12px !important;
-}
-[data-testid="stHorizontalBlock"] { gap: 8px !important; }
-
-/* 输入框 / 文本区域 / 选择框 */
-.stTextInput input, .stTextArea textarea, .stSelectbox [data-baseweb="select"] {
-    background: var(--card) !important;
-    color: var(--text) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 8px !important;
-    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.02) !important;
-    transition: border-color 0.2s, box-shadow 0.2s !important;
-}
-.stTextInput input:focus, .stTextArea textarea:focus {
-    border-color: var(--blue) !important;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15) !important;
-}
-
-/* KPI 指标卡 */
-.kpi {
-    background: var(--card) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 10px !important;
-    padding: 12px 14px !important;
-    text-align: center !important;
-    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.03) !important;
-    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
-    border-top: 3px solid var(--blue) !important;
-    display: flex !important;
-    flex-direction: column !important;
-    justify-content: center !important;
-    align-items: center !important;
-    min-height: 96px !important;
-    box-sizing: border-box !important;
-}
-.kpi:hover {
-    transform: translateY(-2px) !important;
-    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.06) !important;
-}
-.kpi-val {
-    font-family: 'JetBrains Mono', monospace !important;
-    font-size: 22px !important;
-    font-weight: 700 !important;
-    line-height: 1.2 !important;
-    word-break: break-word !important;
-}
-.kpi-lbl {
-    font-size: 11px !important;
-    color: var(--text-muted) !important;
-    text-transform: uppercase !important;
-    letter-spacing: 0.8px !important;
-    margin-top: 4px !important;
-    word-break: break-word !important;
-}
-
-/* 状态徽章 */
-.badge {
-    display: inline-block;
-    padding: 3px 10px;
-    border-radius: 12px;
-    font-size: 11px;
-    font-weight: 600;
-    text-align: center;
-}
-.badge-ok { background: var(--green-bg); color: var(--green) !important; border: 1px solid #a7f3d0; }
-.badge-warn { background: var(--yellow-bg); color: var(--yellow) !important; border: 1px solid #fde68a; }
-.badge-err { background: var(--red-bg); color: var(--red) !important; border: 1px solid #fecaca; }
-
-/* 提示框 - 保留 Streamlit 浅色原生警示色，仅美化圆角和阴影 */
-.stAlert {
-    border-radius: 10px !important;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03) !important;
-}
-/* 防止全局文字颜色覆盖警示框内部的文字颜色 */
-div[data-testid="stAlert"] .stMarkdown, 
-div[data-testid="stAlert"] .stMarkdown p, 
-div[data-testid="stAlert"] .stMarkdown span {
-    color: inherit !important;
-}
-div[data-baseweb="notification"] {
-    border-radius: 10px !important;
-}
-
-/* 护眼黑客风格日志面板 */
-.hlog, .hlog * {
-    font-family: 'JetBrains Mono', monospace !important;
-    font-size: 12px !important;
-}
-.hlog {
-    background: #090d16 !important; /* 更深的黑蓝背景，大幅提高对比度 */
-    border: 1px solid #10b981 !important; /* 绿色边框 */
-    border-radius: 10px !important;
-    padding: 14px !important;
-    color: #34d399 !important; /* 主文本：高亮经典绿 */
-    line-height: 1.6 !important;
-    overflow-y: auto !important;
-    max-height: 400px !important;
-    box-shadow: inset 0 2px 8px rgba(0,0,0,0.4), 0 4px 12px rgba(16, 185, 129, 0.08) !important;
-    position: relative !important;
-    margin-top: 0 !important;
-    margin-bottom: 16px !important;
-}
-.hlog::after {
-    content: " " !important;
-    display: block !important;
-    position: absolute !important;
-    top: 0; left: 0; bottom: 0; right: 0 !important;
-    background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%) !important;
-    z-index: 2 !important;
-    background-size: 100% 2px !important;
-    pointer-events: none !important;
-}
-.stMarkdown .hlog div {
-    color: #34d399 !important; /* 默认未分类日志行：高亮经典绿 */
-}
-.stMarkdown .hlog div.lt {
-    color: #10b981 !important; /* 头部标题：亮绿 */
-    font-weight: 700 !important;
-    border-bottom: 1px solid #1f2937 !important;
-    padding-bottom: 6px !important;
-    margin-bottom: 10px !important;
-    font-size: 13px !important;
-}
-.stMarkdown .hlog div.lo { color: #a7f3d0 !important; } /* 工具输出：淡绿 */
-.stMarkdown .hlog div.le { color: #f87171 !important; font-weight: bold !important; } /* 错误：红色高亮 */
-.stMarkdown .hlog div.lk { color: #34d399 !important; font-weight: bold !important; } /* 完成/通过：经典绿 */
-.stMarkdown .hlog div.lw { color: #fbbf24 !important; font-weight: bold !important; } /* 警告：黄色 */
-
-/* 进度条 */
-.stProgress { margin: 8px 0 !important; padding: 0 !important; }
-.stProgress > div { height: 6px !important; border-radius: 3px !important; background: #e2e8f0 !important; overflow: hidden; }
-.stProgress > div > div {
-    background: linear-gradient(90deg, var(--blue) 0%, #6366f1 100%) !important;
-    transition: width 0.3s ease-out !important;
-}
-.stSpinner { display: none !important; }
-
-/* 图片 */
-[data-testid="stImage"] img {
-    border-radius: 8px;
-    cursor: zoom-in;
-    transition: all 0.25s ease;
-}
-[data-testid="stImage"] img:hover {
-    opacity: 0.95;
-    transform: scale(1.01);
-}
-
-/* 折叠面板 (st.expander) */
-details {
-    background: var(--card) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 10px !important;
-    padding: 8px 12px !important;
-    margin-bottom: 12px !important;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.01) !important;
-}
-details summary {
-    color: var(--text) !important;
-    font-size: 13.5px !important;
-    font-weight: 500 !important;
-}
-details[open] {
-    border-color: var(--blue) !important;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.03) !important;
-}
-
-/* 数据表格 */
-.stDataFrame { border-radius: 10px !important; overflow: hidden !important; }
-[data-testid="stDataFrame"] {
-    border: 1px solid var(--border) !important;
-    border-radius: 10px !important;
-    background-color: var(--card) !important;
-}
-
-/* 文字及排版覆盖 */
-.stMarkdown, .stMarkdown p, .stMarkdown div, .stMarkdown span, .stMarkdown strong {
-    color: var(--text) !important;
-}
-h1, h2, h3, h4, h5, h6 {
-    color: var(--text) !important;
-    font-weight: 700 !important;
-}
-.stCaption { color: var(--text-muted) !important; }
-
-/* 引导步骤条 */
-.guide-box {
-    background: #eff6ff;
-    border-left: 4px solid var(--blue);
-    border-radius: 0 10px 10px 0;
-    padding: 12px 16px;
-    margin-bottom: 12px;
-    color: var(--text);
-    font-size: 14px;
-    box-shadow: 0 2px 6px rgba(59, 130, 246, 0.05);
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-.guide-badge {
-    background: var(--blue);
-    color: white !important;
-    padding: 2px 8px;
-    border-radius: 6px;
-    font-size: 12px;
-    font-weight: 600;
-}
-
-/* 空白提示页 */
-.empty-state {
-    text-align: center;
-    padding: 40px 20px;
-    background: var(--card);
-    border-radius: 12px;
-    border: 1px solid var(--border);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.02);
-    margin-top: 16px;
-    animation: fadeInUp 0.5s ease-out;
-}
-.empty-icon {
-    font-size: 48px;
-    margin-bottom: 14px;
-    filter: drop-shadow(0 4px 6px rgba(0,0,0,0.05));
-}
-.empty-title {
-    font-size: 16px;
-    color: var(--text);
-    font-weight: 600;
-    margin-bottom: 8px;
-}
-.empty-desc {
-    font-size: 13px;
-    color: var(--text-muted);
-    margin-bottom: 12px;
-}
-.empty-action {
-    font-size: 12px;
-    color: var(--text-muted);
-}
-
-/* 对话框 / 确认弹窗 */
-div[role="dialog"] {
-    background: var(--card) !important;
-    border-radius: 12px !important;
-    border: 1px solid var(--border) !important;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.08) !important;
-}
-div[role="dialog"] p, div[role="dialog"] h1, div[role="dialog"] h2, div[role="dialog"] h3 {
-    color: var(--text) !important;
-}
-
-/* 动效：上滑淡入 */
-@keyframes fadeInUp {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-</style>
-""", unsafe_allow_html=True)
+    // 2. 如果侧边栏仍处于折叠态，找到展开按钮并点击
+    function tryExpand() {
+        var root = window.parent.document;
+        var btn = root.querySelector('[data-testid="stExpandSidebarButton"]');
+        if (btn) {
+            btn.click();
+            return true;
+        }
+        return false;
+    }
+    // 等 Streamlit DOM 渲染完再执行
+    setTimeout(function() {
+        if (!tryExpand()) setTimeout(tryExpand, 500);
+    }, 300);
+})();
+</script>
+""", height=0)
 
 # ---- Session State ----
 if "results" not in st.session_state: st.session_state.results = []
@@ -453,13 +63,6 @@ if "show_uploader" not in st.session_state: st.session_state.show_uploader = Fal
 if "upload_done" not in st.session_state: st.session_state.upload_done = False
 
 
-def kpi(label, value, color="var(--blue)"):
-    return f'<div class="kpi"><div class="kpi-val" style="color:{color}">{value}</div><div class="kpi-lbl">{label}</div></div>'
-
-def badge(text, level="ok"):
-    return f'<span class="badge badge-{level}">{text}</span>'
-
-
 # ---- 侧边栏 ----
 with st.sidebar:
     st.markdown(f"**🛡️ 安全数字监督员** `v{_ver}`")
@@ -467,9 +70,9 @@ with st.sidebar:
     st.markdown("---")
 
     # API 配置
-    api_key = st.text_input("API Key", _cfg.get("api_key", "ollama"), type="password")
-    base_url = st.text_input("API URL", _cfg.get("base_url", "http://localhost:11434/v1"))
-    model_name = st.text_input("模型", _cfg.get("model_name", "qwen3.5:0.8b"))
+    api_key = st.text_input("API Key", _cfg.get("api_key", ""), type="password")
+    base_url = st.text_input("API URL", _cfg.get("base_url", ""))
+    model_name = st.text_input("模型", _cfg.get("model_name", ""))
 
     # OCR 表格识别模式
     _ocr_modes = {
@@ -498,7 +101,26 @@ with st.sidebar:
                 json.dump(_cfg, f, ensure_ascii=False, indent=2)
             st.success("已保存")
 
-# ---- 主面板 ----
+# ---- 主面板：Hero 横幅 ----
+_status_ok = bool(api_key)
+st.markdown(f"""
+<div class="hero-banner">
+    <div class="hero-left">
+        <div class="hero-icon">🛡️</div>
+        <div>
+            <div class="hero-title">安全数字监督员</div>
+            <div class="hero-sub">牡丹江中燃 · HSE AI Agent 安全监控系统</div>
+        </div>
+    </div>
+    <div class="hero-right">
+        <span class="hero-pill {'pill-ok' if _status_ok else 'pill-warn'}">
+            <span class="pill-dot"></span>{'AI 引擎已就绪' if _status_ok else '请配置 API Key'}
+        </span>
+        <span class="hero-pill pill-version">v{_ver}</span>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
 tab1, tab2 = st.tabs(["📷 处理作业票", "📊 AI 看板"])
 
 
@@ -512,14 +134,12 @@ with tab1:
     step = 1
     if st.session_state.get("upload_done") and st.session_state.get("pending_files"):
         step = 2
-    if st.session_state.get("run_processing"):
-        step = 3
 
     guide = st.empty()
     if step == 1:
         guide.markdown("""
         <div class="guide-box">
-            <span class="guide-badge">第 1 步</span> 选择下方 <b>📤 上传</b> 提供作业票照片
+            <span class="guide-badge">第 1 步</span> 点击下方 <b>📤 上传</b> 提供作业票照片
         </div>
         """, unsafe_allow_html=True)
     elif step == 2:
@@ -535,7 +155,7 @@ with tab1:
         show_upload = st.button("📤 上传", use_container_width=True)
     with c2:
         can_process = st.session_state.get("upload_done") and st.session_state.get("pending_files")
-        run_clicked = st.button("⚙️ 处理", type="primary", use_container_width=True, disabled=not can_process)
+        run_clicked = st.button("⚙️ 处理", use_container_width=True, disabled=not can_process)
 
     # 点击按钮切换模式
     if show_upload:
@@ -562,8 +182,6 @@ with tab1:
         elif picked and st.session_state.get("upload_done"):
             st.success(f"✅ {picked.name}（{picked.size/1024:.0f} KB）")
 
-
-
     # 无文件 + 有历史结果：显示上次结果
     # 合并最终文件
     final_files = st.session_state.get("pending_files") or []
@@ -573,35 +191,24 @@ with tab1:
             st.markdown("**上次处理结果**")
             for item in st.session_state.results:
                 d = item["data"]
-                c1, c2, c3, c4, c5 = st.columns(5)
-                with c1: st.markdown(kpi("票号", d.ticket_id), unsafe_allow_html=True)
-                with c2: st.markdown(kpi("状态", f"{len(d.issues)}项" if d.has_abnormal else "正常", "#ef4444" if d.has_abnormal else "#10b981"), unsafe_allow_html=True)
-                with c3: st.markdown(kpi("措施", f"{len(d.safety_measures)}"), unsafe_allow_html=True)
-                with c4:
-                    rl = d.risk_level or "-"
-                    rc = {"重大":"#ef4444","较大":"#f59e0b","一般":"#f59e0b","低风险":"#10b981"}.get(rl, "#3b82f6")
-                    st.markdown(kpi("风险", rl, rc), unsafe_allow_html=True)
-                with c5: st.markdown(kpi("浓度", ", ".join(f"{v}%" for v in d.gas_concentration) or "无"), unsafe_allow_html=True)
-                if d.approval_opinion:
-                    ic = {"重大":"🔴","较大":"🟡","一般":"🟡","低风险":"🟢"}.get(d.risk_level or "", "")
-                    (st.warning if d.has_abnormal else st.success)(f"{ic} {d.approval_opinion}")
+                render_ticket_kpis(d)
         else:
             st.markdown("""
             <div class="empty-state">
                 <div class="empty-icon">🛡️</div>
                 <div class="empty-title">上传作业票照片，AI 自动完成全部分析</div>
                 <div class="empty-desc">支持：动火作业票 · 带气作业票 · 临时用电作业票</div>
-                <div class="empty-action">点击上方 <b>📤 上传</b> 选择照片</div>
+                <div class="empty-action">点击上方 <b>📤 上传</b> 选择照片开始分析</div>
             </div>
             """, unsafe_allow_html=True)
 
     # 有文件：预览缩略图
     if final_files and not run_clicked and not st.session_state.get("run_processing"):
-        thumbs = st.columns(min(len(final_files) + 1, 6), vertical_alignment="center")
+        thumbs = st.columns(min(len(final_files) + 1, 6))
         for i, f in enumerate(final_files[:5]):
             with thumbs[i]: st.image(f, width=100)
         with thumbs[min(len(final_files), 5)]:
-            st.markdown(f"<div style='text-align:center;color:#57606a;font-size:12px'>{len(final_files)}张</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='text-align:center;padding-top:35px;color:#69707f;font-size:12px'>{len(final_files)}张</div>", unsafe_allow_html=True)
 
     # 开始处理
     if run_clicked and final_files:
@@ -644,20 +251,21 @@ with tab1:
         for idx, uploaded in enumerate(final_files):
             save_path = saved_paths[idx]
 
-            # 进度条 + 状态文字（跨整行，避免与日志面板重叠）
-            status_text = st.empty()
-            progress = st.progress(0)
-            status_text.caption(f"[{idx+1}/{len(final_files)}] {uploaded.name} — 准备中...")
-
-            # 分栏：左边预览图，右边日志
+            # 分栏：左边结果，右边日志
             col_r, col_l = st.columns([3, 2])
 
-            # 左栏：预览图（处理完自动收起）
+            # 左栏：进度条 + 预览图（处理完自动收起）
             with col_r:
+                status_text = st.empty()
+                progress = st.progress(0)
                 img_placeholder = st.empty()
+                status_text.caption(f"[{idx+1}/{len(final_files)}] {uploaded.name} — 准备中...")
                 img_placeholder.image(save_path, caption=uploaded.name, use_container_width=True)
 
             # 右栏：日志面板
+            with col_l:
+                pass  # 日志由 log_ph 占位渲染
+
             log_ph = col_l.empty()
             log_buf = []
 
@@ -665,7 +273,7 @@ with tab1:
                 log_buf.append(line)
                 import html as _h
                 parts = []
-                for l in log_buf[-150:]:
+                for l in log_buf[-30:]:
                     c = ""
                     if "Tool" in l: c = "lo"
                     elif "FAIL" in l or "出错" in l: c = "le"
@@ -674,7 +282,7 @@ with tab1:
                     parts.append(f'<div class="{c}">{_h.escape(l)}</div>')
                 log_ph.markdown(
                     f'<div class="hlog">'
-                    f'<div class="lt">📄 {_h.escape(_name)} | 🤖 运行日志</div>'
+                    f'<div class="lt">📄 {_h.escape(_name)} | 🤖 AGENT THINKING...</div>'
                     f'{"".join(parts)}</div>',
                     unsafe_allow_html=True)
 
@@ -708,19 +316,6 @@ with tab1:
 
             progress.progress(100)
             status_text.caption(f"[{idx+1}/{len(final_files)}] ✅ 完成")
-            
-            # 在日志面板下方增加下载日志按钮
-            with col_l:
-                full_log_str = "\n".join(log_buf)
-                st.download_button(
-                    label="⬇️ 下载运行日志",
-                    data=full_log_str,
-                    file_name=f"run_log_{uploaded.name}_{int(time.time())}.txt",
-                    mime="text/plain",
-                    key=f"log_dl_{idx}",
-                    use_container_width=True
-                )
-
             # 预览图收进折叠面板，需要时可展开
             with img_placeholder:
                 with st.expander("🖼️ 查看原图", expanded=False):
@@ -732,61 +327,23 @@ with tab1:
                     d = result["data"]
                     st.session_state.results.append(result)
 
-                    # KPI 行
-                    c1, c2, c3, c4, c5 = st.columns(5)
-                    with c1: st.markdown(kpi("票号", d.ticket_id), unsafe_allow_html=True)
-                    with c2: st.markdown(kpi("状态", f"{len(d.issues)}项" if d.has_abnormal else "正常", "#cf222e" if d.has_abnormal else "#116329"), unsafe_allow_html=True)
-                    with c3: st.markdown(kpi("措施", f"{len(d.safety_measures)}"), unsafe_allow_html=True)
-                    with c4:
-                        rl = d.risk_level or "-"
-                        rc = {"重大":"#cf222e","较大":"#9a6700","一般":"#9a6700","低风险":"#116329"}.get(rl, "#0969da")
-                        st.markdown(kpi("风险", rl, rc), unsafe_allow_html=True)
-                    with c5: st.markdown(kpi("浓度", ", ".join(f"{v}%" for v in d.gas_concentration) or "无"), unsafe_allow_html=True)
-
-                    # 审批建议
-                    if d.approval_opinion:
-                        ic = {"重大":"🔴","较大":"🟡","一般":"🟡","低风险":"🟢"}.get(d.risk_level or "", "")
-                        (st.warning if d.has_abnormal else st.success)(f"{ic} {d.approval_opinion}")
+                    # KPI 行 + 审批建议
+                    render_ticket_kpis(d)
 
                     # 通知推送
                     nc1, nc2 = st.columns(2)
                     with nc1:
-                        dt_url = _cfg.get("dingtalk_webhook", "")
-                        if not dt_url:
-                            st.button("📱 发送钉钉", key=f"dt_{idx}", use_container_width=True, disabled=True, help="请在侧边栏通知设置中配置钉钉 Webhook")
-                            st.caption("⚠️ 未配置钉钉 Webhook，请在左侧边栏设置")
-                        elif st.button("📱 发送钉钉", key=f"dt_{idx}", use_container_width=True):
-                            import requests as _req
-                            msg = f"【安全数字监督员】\n票号: {d.ticket_id}\n场站: {d.station_name}\n状态: {'有隐患' if d.has_abnormal else '正常'}\n风险: {d.risk_level or '-'}\n审批: {d.approval_opinion or '-'}"
-                            try:
-                                _resp = _req.post(dt_url, json={"msgtype": "text", "text": {"content": msg}}, timeout=10)
-                                if _resp.status_code == 200:
-                                    st.success("✅ 钉钉发送成功")
-                                else:
-                                    st.error(f"发送失败: {_resp.status_code}")
-                            except Exception as e:
-                                st.error(f"发送失败: {e}")
+                        def _dt_fmt(d):
+                            return ("text", f"【安全数字监督员】\n票号: {d.ticket_id}\n场站: {d.station_name}\n状态: {'有隐患' if d.has_abnormal else '正常'}\n风险: {d.risk_level or '-'}\n审批: {d.approval_opinion or '-'}")
+                        render_notification_btn("钉钉", "📱", "dingtalk_webhook", _dt_fmt, d, idx, _cfg)
                     with nc2:
-                        wx_url = _cfg.get("wechat_webhook", "")
-                        if not wx_url:
-                            st.button("💬 发送微信", key=f"wx_{idx}", use_container_width=True, disabled=True, help="请在侧边栏通知设置中配置微信 Webhook")
-                            st.caption("⚠️ 未配置微信 Webhook，请在左侧边栏设置")
-                        elif st.button("💬 发送微信", key=f"wx_{idx}", use_container_width=True):
-                            import requests as _req
-                            msg = f"**【安全数字监督员】**\n> 票号: {d.ticket_id}\n> 场站: {d.station_name}\n> 状态: {'有隐患' if d.has_abnormal else '正常'}\n> 风险: {d.risk_level or '-'}\n> 审批: {d.approval_opinion or '-'}"
-                            try:
-                                _resp = _req.post(wx_url, json={"msgtype": "markdown", "markdown": {"content": msg}}, timeout=10)
-                                if _resp.status_code == 200:
-                                    st.success("✅ 微信发送成功")
-                                else:
-                                    st.error(f"发送失败: {_resp.status_code}")
-                            except Exception as e:
-                                st.error(f"发送失败: {e}")
+                        def _wx_fmt(d):
+                            return ("markdown", f"**【安全数字监督员】**\n> 票号: {d.ticket_id}\n> 场站: {d.station_name}\n> 状态: {'有隐患' if d.has_abnormal else '正常'}\n> 风险: {d.risk_level or '-'}\n> 审批: {d.approval_opinion or '-'}")
+                        render_notification_btn("微信", "💬", "wechat_webhook", _wx_fmt, d, idx, _cfg)
 
                     # OCR + 隐患（折叠）
                     if result["ocr"]:
                         with st.expander("📝 OCR 识别原文"):
-                            st.text_area("📄 复制 OCR 原文：", result["ocr"], height=200)
                             ocr_rows = []
                             for line in result["ocr"].strip().split("\n"):
                                 line = line.strip()
@@ -799,18 +356,6 @@ with tab1:
                                     ocr_rows.append({"字段": "", "值": line})
                             if ocr_rows:
                                 st.dataframe(pd.DataFrame(ocr_rows), use_container_width=True, height=min(len(ocr_rows)*28+30, 350))
-
-                    if d.safety_measures:
-                        with st.expander("📋 全量安全措施落实清单", expanded=False):
-                            m_rows = []
-                            for m in d.safety_measures:
-                                status_str = "🟢 已落实" if m.implemented else "🔴 未落实"
-                                m_rows.append({
-                                    "序号": m.measure_id,
-                                    "安全措施内容": m.description,
-                                    "落实状态": status_str
-                                })
-                            st.dataframe(pd.DataFrame(m_rows), use_container_width=True, hide_index=True, height=min(len(m_rows)*35+38, 400))
 
                     if d.issues:
                         with st.expander(f"⚠️ 隐患明细 ({len(d.issues)})", expanded=True):
@@ -850,19 +395,20 @@ with tab2:
     else:
         conn = sqlite3.connect(db_path)
         try:
-            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,approval_opinion,risk_level,created_at,image_path,safety_measures_json FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
-        except:
-            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,'','',created_at,'','[]' FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
+            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,approval_opinion,risk_level,created_at,image_path FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
+        except Exception:
+            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,'','',created_at,'' FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
 
         total = len(rows_db)
         abn_cnt = sum(1 for r in rows_db if r[5])
 
         # KPI 行
-        k1, k2, k3, k4 = st.columns(4)
-        with k1: st.markdown(kpi("总票数", total), unsafe_allow_html=True)
-        with k2: st.markdown(kpi("有隐患", abn_cnt, "#ef4444" if abn_cnt else "#10b981"), unsafe_allow_html=True)
-        with k3: st.markdown(kpi("正常", total - abn_cnt, "#10b981"), unsafe_allow_html=True)
-        with k4: st.markdown(kpi("隐患率", f"{abn_cnt/total*100:.0f}%" if total else "0%"), unsafe_allow_html=True)
+        render_kpi_row([
+            ("总票数", str(total), ""),
+            ("有隐患", str(abn_cnt), "#d6131c" if abn_cnt else "#059669"),
+            ("正常", str(total - abn_cnt), "#059669"),
+            ("隐患率", f"{abn_cnt/total*100:.0f}%" if total else "0%", ""),
+        ])
 
         # 高频隐患
         issue_counter = {}
@@ -871,14 +417,12 @@ with tab2:
                 if ij:
                     for item in json.loads(ij):
                         n = item.get("item_name", "未知"); issue_counter[n] = issue_counter.get(n, 0) + 1
-        except: pass
+        except Exception: pass
         conn.close()
 
         if issue_counter:
             top5 = sorted(issue_counter.items(), key=lambda x: -x[1])[:5]
-            cols = st.columns(len(top5))
-            for i, (name, count) in enumerate(top5):
-                with cols[i]: st.markdown(kpi(name, f"{count}次", "#ef4444"), unsafe_allow_html=True)
+            render_kpi_row([(name, f"{count}次", "#d6131c") for name, count in top5])
 
         # 删除弹窗
         if st.session_state.delete_id:
@@ -902,7 +446,7 @@ with tab2:
 
         # 搜索框（回车或点按钮触发）
         with st.form("search_form", clear_on_submit=False):
-            sf1, sf2 = st.columns([5, 1], vertical_alignment="center")
+            sf1, sf2 = st.columns([5, 1])
             with sf1:
                 search = st.text_input("🔍 搜索票号", placeholder="输入票号模糊查询...", label_visibility="collapsed")
             with sf2:
@@ -910,13 +454,13 @@ with tab2:
 
         # 记录列表（搜索过滤）
         for row in rows_db:
-            rid, ticket, station, worker, date, abnormal, opinion, risk, created, img_path, measures_json = row
+            rid, ticket, station, worker, date, abnormal, opinion, risk, created, img_path = row
             if search and search.lower() not in (ticket or "").lower():
                 continue
             icon = "🚨" if abnormal else "✅"
-            badge_md = f" | :{'red' if risk=='重大' else ('orange' if risk in ['较大','一般'] else 'green')}[{risk}]" if risk else ""
+            badge_md = render_record_badge(risk, abnormal)
 
-            cm, cd = st.columns([9, 1], vertical_alignment="center")
+            cm, cd = st.columns([9, 1])
             with cm:
                 with st.expander(f"{icon} #{rid} | {ticket} | {station} | {date}{badge_md}", expanded=False):
                     ca, cb = st.columns(2)
@@ -926,24 +470,6 @@ with tab2:
                         if risk: st.markdown(f"**风险** {risk}")
                         st.caption(f"处理: {created}")
                         if opinion: st.caption(f"审批: {opinion}")
-                    
-                    # 展现全量安全措施列表
-                    if measures_json:
-                        try:
-                            measures_list = json.loads(measures_json)
-                            if measures_list:
-                                with st.expander("📋 安全措施落实清单"):
-                                    m_rows = []
-                                    for m in measures_list:
-                                        status_str = "🟢 已落实" if m.get("implemented") else "🔴 未落实"
-                                        m_rows.append({
-                                            "序号": m.get("measure_id"),
-                                            "安全措施内容": m.get("description"),
-                                            "落实状态": status_str
-                                        })
-                                    st.dataframe(pd.DataFrame(m_rows), use_container_width=True, hide_index=True, height=200)
-                        except Exception:
-                            pass
                     # 查看原图 + 下载按钮
                     if img_path and os.path.exists(img_path):
                         dc1, dc2 = st.columns(2)
@@ -962,5 +488,6 @@ with tab2:
                     else:
                         st.caption("原图不可用")
             with cd:
+                st.markdown("<div style='padding-top:18px'></div>", unsafe_allow_html=True)
                 if st.button("🗑️", key=f"del_{rid}", help=f"删除 #{rid}"):
                     st.session_state.delete_id = rid; st.rerun()
