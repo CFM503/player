@@ -12,6 +12,9 @@ import time
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 
+# ---- 全局配置 ----
+HEARTBEAT_INTERVAL = 30  # 阻塞操作心跳间隔（秒），设为 0 禁用心跳
+
 
 import re
 import sys
@@ -558,30 +561,20 @@ class AgentTools:
 
         # 精确表格识别走独立流水线
         if mode == "precise":
-            _prog(10, "PaddleStructure 加载模型")
-            sim = _ProgressSim(progress_callback, 10, 30, "PaddleStructure 加载模型", 2, 0.8)
-            sim.start()
             table_text = AgentTools._format_table_precise(image_path, brain)
-            sim.done()
             if not table_text:
                 print("[Tool] 精确识别无结果，回退坐标聚类。")
                 mode = "cluster"
             else:
-                _prog(52, "精确识别完成")
                 return table_text
 
         # 测试模式
         if mode == "test":
-            _prog(10, "PaddleStructure 加载模型")
-            sim = _ProgressSim(progress_callback, 10, 30, "PaddleStructure 加载模型", 2, 0.8)
-            sim.start()
-            table_text = AgentTools._format_table_test(image_path, brain)
-            sim.done()
+            table_text = AgentTools._format_table_test(image_path, brain, progress_callback=progress_callback)
             if not table_text:
                 print("[Tool] 测试模式无结果，回退坐标聚类。")
                 mode = "cluster"
             else:
-                _prog(52, "测试模式识别完成")
                 return table_text
 
         # 基础 OCR 模式
@@ -1106,15 +1099,21 @@ class _ProgressSim:
 
     def _run(self):
         import time as _t
+        t0 = _t.time()
+        next_hb = HEARTBEAT_INTERVAL
         while not self._stop and self._cur < self._end - 1:
             self._cur = min(self._cur + self._step, self._end - 1)
             if self._cb:
                 self._cb(int(self._cur), self._msg)
+            if HEARTBEAT_INTERVAL > 0:
+                elapsed = _t.time() - t0
+                if elapsed >= next_hb:
+                    print(f"  ... {self._msg} ({int(elapsed)}s)")
+                    next_hb += HEARTBEAT_INTERVAL
             _t.sleep(self._interval)
 
     def start(self):
-        if self._cb:
-            self._t.start()
+        self._t.start()
 
     def done(self):
         self._stop = True

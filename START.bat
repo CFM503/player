@@ -93,7 +93,7 @@ if errorlevel 1 (
 
 echo.
 python -c "print('=' * 46); print('  Starting...'); print('=' * 46); print()"
-python -m streamlit run frontend.py
+python run.py
 pause
 exit /b 0
 
