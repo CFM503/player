@@ -80,6 +80,7 @@ with st.sidebar:
         "自适应边框检测": "adaptive",
         "多方向检测": "multidir",
         "精确表格识别（PaddleStructure）": "precise",
+        "测试模式": "test",
     }
     ocr_mode_label = st.selectbox(
         "📋 OCR 表格模式",
@@ -218,7 +219,7 @@ with tab1:
     if st.session_state.get("run_processing") and final_files:
         st.session_state.run_processing = False
 
-        from agent_core import SecurityAgent, LLMBrain
+        from agent_core import SecurityAgent, LLMBrain, AgentTools
         brain = LLMBrain(api_key=api_key, base_url=base_url, model_name=model_name)
         agent = SecurityAgent(brain=brain, ocr_mode=ocr_mode)
         st.session_state.results = []
@@ -344,18 +345,12 @@ with tab1:
                     # OCR + 隐患（折叠）
                     if result["ocr"]:
                         with st.expander("📝 OCR 识别原文"):
-                            ocr_rows = []
-                            for line in result["ocr"].strip().split("\n"):
-                                line = line.strip()
-                                if not line: continue
-                                if "：" in line:
-                                    p = line.split("：", 1); ocr_rows.append({"字段": p[0].strip(), "值": p[1].strip()})
-                                elif ":" in line and line.index(":") > 0:
-                                    p = line.split(":", 1); ocr_rows.append({"字段": p[0].strip(), "值": p[1].strip()})
-                                else:
-                                    ocr_rows.append({"字段": "", "值": line})
-                            if ocr_rows:
-                                st.dataframe(pd.DataFrame(ocr_rows), use_container_width=True, height=min(len(ocr_rows)*28+30, 350))
+                            # 原始 OCR 文本（未经加工）
+                            raw = getattr(AgentTools, "_last_ocr_raw", "")
+                            if raw:
+                                st.code(raw, language=None, line_numbers=True)
+                            else:
+                                st.text(result["ocr"].split("\n---\n")[-1] if "\n---\n" in result["ocr"] else result["ocr"])
 
                     if d.issues:
                         with st.expander(f"⚠️ 隐患明细 ({len(d.issues)})", expanded=True):

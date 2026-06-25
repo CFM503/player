@@ -16,6 +16,9 @@ from pydantic import BaseModel, Field
 import re
 import sys
 
+# ---- 全局常量 ----
+OCR_TEXT_MAX_CHARS = 4000  # 发送给 LLM 的 OCR 文本最大字符数，过长会截断以避免推理超时
+
 
 def safe_write(stream, text: str):
     if not stream or not text:
@@ -405,9 +408,9 @@ class LLMBrain:
         )
 
         # 截断过长 OCR 文本，避免 API 超时（保留前 2000 字符，通常包含票头+关键信息）
-        if len(ocr_text) > 2000:
-            print(f"[LLM Log] OCR 文本 {len(ocr_text)} 字符，截断至 2000 字符以加速推理")
-            ocr_text = ocr_text[:2000]
+        if len(ocr_text) > OCR_TEXT_MAX_CHARS:
+            print(f"[LLM Log] OCR 文本 {len(ocr_text)} 字符，截断至 {OCR_TEXT_MAX_CHARS} 字符以加速推理")
+            ocr_text = ocr_text[:OCR_TEXT_MAX_CHARS]
 
         print(f"[LLM Log] 发送请求中，请等待...")
         response = self.client.chat.completions.create(
@@ -536,7 +539,7 @@ class AgentTools:
         mode_labels = {
             "cluster": "坐标聚类", "grid": "精细网格",
             "adaptive": "自适应边框检测", "multidir": "多方向检测",
-            "precise": "精确表格识别",
+            "precise": "精确表格识别", "test": "测试模式",
         }
         print(f"[Tool] OCR 模式: {mode_labels.get(mode, mode)}")
 
@@ -552,7 +555,7 @@ class AgentTools:
             _pi.Config._patched_for_onednn = True
 
         # 精确表格识别走独立流水线（含布局检测+表格结构+OCR），不走基础 OCR
-        if mode == "precise":
+        if mode in ("precise", "test"):
             table_text = AgentTools._format_table_precise(image_path, brain)
             if not table_text:
                 print("[Tool] 精确识别无结果，回退坐标聚类。")
@@ -577,6 +580,7 @@ class AgentTools:
             table_text = AgentTools._format_table(entries)
 
         flat_text = "\n".join(e["text"] for e in sorted(entries, key=lambda e: (e["y"] // 15, e["x"])))
+        AgentTools._last_ocr_raw = flat_text
         return f"{table_text}\n---\n{flat_text}"
 
     @staticmethod
