@@ -1,5 +1,15 @@
 # 更新日志 (CHANGELOG)
 
+## [3.5.1] - 2026-06-25
+
+### 修复
+- **test/precise 模式 `progress_callback` 未传递**：`ocr_tool` 调用 `_format_table_test` 时漏传 `progress_callback`，导致内部所有进度回调和 UI 更新失效，用户看到进度条卡住不动。同时去掉 `ocr_tool` 中 `precise`/`test` 模式多余的外层 `_ProgressSim` 包装。
+- **Web UI 日志面板无时间戳**：`hlog()` 函数新增 `[MM:SS]` 前缀，Web UI 日志面板和 CLI 终端同步显示计时。
+- **Windows Ctrl+C 无效**：`START.bat` 改用 `run.py` 启动，通过 `subprocess.Popen` + `KeyboardInterrupt` 处理正确终止 Streamlit 进程。
+
+### 变更
+- **心跳间隔参数化**：文件头新增 `HEARTBEAT_INTERVAL = 30` 全局配置，阻塞操作期间每 N 秒打印一条存活消息，设为 0 禁用心跳。`_ProgressSim.start()` 始终启动线程，`callback=None` 时仅打印心跳不更新 UI。
+
 ## [3.5.0] - 2026-06-25
 
 ### 新增
