@@ -290,6 +290,7 @@ with tab1:
             hlog(f">>> 收到任务: {uploaded.name}")
 
             _orig = sys.stdout
+            _orig_err = sys.stderr
             result = {"ocr": None, "data": None}
             _sp = {"Plan":10,"Perceive":25,"Reason":50,"Reflect":70,"Act":85,"Report":98}
             _sc = {"Plan":"规划","Perceive":"感知","Reason":"推理","Reflect":"反思","Act":"执行","Report":"总结"}
@@ -303,12 +304,23 @@ with tab1:
                             if f"Agent {k}" in s:
                                 progress.progress(p)
                                 status_text.caption(f"[{idx+1}/{len(final_files)}] {_sc[k]}...")
+                        _dt = time.time() - _t0_img
+                        _mm, _ss = divmod(int(_dt), 60)
+                        print(f"[{_mm:02d}:{_ss:02d}] {s}", file=_orig_err, flush=True)
                     return len(s) if s else 0
                 def flush(self): pass
 
+            _t0_img = time.time()
+
+            def prog_cb(pct, msg):
+                progress.progress(pct)
+                _dt = time.time() - _t0_img
+                _mm, _ss = divmod(int(_dt), 60)
+                status_text.caption(f"[{idx+1}/{len(final_files)}] {msg} ({pct}%) {_mm:02d}:{_ss:02d}")
+
             sys.stdout = Cap()
             try:
-                ocr_text, structured = agent.run(save_path)
+                ocr_text, structured = agent.run(save_path, progress_callback=prog_cb)
                 result["ocr"], result["data"] = ocr_text, structured
             except Exception as e:
                 hlog(f"❌ {e}")

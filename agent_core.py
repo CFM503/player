@@ -534,8 +534,12 @@ class AgentTools:
         return entries
 
     @staticmethod
-    def ocr_tool(image_path: str, mode: str = "cluster", brain=None) -> str:
+    def ocr_tool(image_path: str, mode: str = "cluster", brain=None, progress_callback=None) -> str:
         """PaddleOCR 文字识别，支持五种表格处理策略（基于 PaddlePaddle）"""
+        def _prog(pct, msg):
+            if progress_callback:
+                progress_callback(pct, msg)
+
         mode_labels = {
             "cluster": "坐标聚类", "grid": "精细网格",
             "adaptive": "自适应边框检测", "multidir": "多方向检测",
@@ -544,8 +548,6 @@ class AgentTools:
         print(f"[Tool] OCR 模式: {mode_labels.get(mode, mode)}")
 
         # ---- PaddlePaddle 3.x PIR+OneDNN 兼容补丁 ----
-        # 问题：OneDNN 指令不支持 PIR ArrayAttribute<DoubleAttribute>
-        # 修复：强制禁用 new_ir 并降低优化等级
         import paddle.inference as _pi
         if not getattr(_pi.Config, "_patched_for_onednn", False):
             _orig_new_ir = _pi.Config.enable_new_ir
@@ -554,31 +556,53 @@ class AgentTools:
             _pi.Config.set_optimization_level = lambda self, lv: _orig_opt(self, 0)
             _pi.Config._patched_for_onednn = True
 
-        # 精确表格识别走独立流水线（含布局检测+表格结构+OCR），不走基础 OCR
+        # 精确表格识别走独立流水线
         if mode == "precise":
+            _prog(10, "PaddleStructure 加载模型")
+            sim = _ProgressSim(progress_callback, 10, 30, "PaddleStructure 加载模型", 2, 0.8)
+            sim.start()
             table_text = AgentTools._format_table_precise(image_path, brain)
+            sim.done()
             if not table_text:
                 print("[Tool] 精确识别无结果，回退坐标聚类。")
                 mode = "cluster"
             else:
+                _prog(52, "精确识别完成")
                 return table_text
 
-        # 测试模式：PaddleStructure + 高精度三步 LLM 还原
+        # 测试模式
         if mode == "test":
+            _prog(10, "PaddleStructure 加载模型")
+            sim = _ProgressSim(progress_callback, 10, 30, "PaddleStructure 加载模型", 2, 0.8)
+            sim.start()
             table_text = AgentTools._format_table_test(image_path, brain)
+            sim.done()
             if not table_text:
                 print("[Tool] 测试模式无结果，回退坐标聚类。")
                 mode = "cluster"
             else:
+                _prog(52, "测试模式识别完成")
                 return table_text
 
+        # 基础 OCR 模式
         from paddleocr import PaddleOCR
+        _prog(10, "PaddleOCR 加载模型")
+        sim_load = _ProgressSim(progress_callback, 10, 18, "PaddleOCR 加载模型", 2, 0.8)
+        sim_load.start()
         ocr = PaddleOCR(lang="ch")
+        sim_load.done()
+
+        _prog(20, "OCR 文字识别中")
+        sim_ocr = _ProgressSim(progress_callback, 20, 50, "OCR 文字识别中", 3, 0.6)
+        sim_ocr.start()
         entries = AgentTools._ocr_entries_basic(image_path, ocr)
+        sim_ocr.done()
+
         print(f"[Tool] OCR 完成，识别 {len(entries)} 个文本块。")
         if not entries:
             raise RuntimeError(f"OCR 未能识别任何文字: {image_path}")
 
+        _prog(52, "表格格式化")
         if mode == "grid":
             table_text = AgentTools._format_table_grid(entries)
         elif mode == "adaptive":
@@ -1036,6 +1060,35 @@ class AgentMemory:
 # 5. Agent ReAct 编排器
 # ==========================================
 
+class _ProgressSim:
+    """阻塞操作期间的模拟渐进进度（后台线程）"""
+    def __init__(self, callback, start_pct, end_pct, msg, step=1, interval=0.5):
+        self._cb = callback
+        self._start = start_pct
+        self._end = end_pct
+        self._cur = float(start_pct)
+        self._step = step
+        self._interval = interval
+        self._stop = False
+        self._msg = msg
+        import threading as _th
+        self._t = _th.Thread(target=self._run, daemon=True)
+
+    def _run(self):
+        import time as _t
+        while not self._stop and self._cur < self._end - 1:
+            self._cur = min(self._cur + self._step, self._end - 1)
+            self._cb(int(self._cur), self._msg)
+            _t.sleep(self._interval)
+
+    def start(self):
+        self._t.start()
+
+    def done(self):
+        self._stop = True
+        self._cb(int(self._end), self._msg)
+
+
 class SecurityAgent:
     """
     ReAct 智能体：Plan -> Perceive -> Reason -> Reflect -> Act -> Report
@@ -1043,10 +1096,11 @@ class SecurityAgent:
 
     MAX_REFLECT_RETRIES = 2
 
-    def __init__(self, brain: LLMBrain, ocr_mode: str = "cluster"):
+    def __init__(self, brain: LLMBrain, ocr_mode: str = "cluster", progress_callback=None):
         self.brain = brain
         self.tools = AgentTools()
         self.ocr_mode = ocr_mode
+        self._progress = progress_callback
 
     def _plan(self, image_path: str, mem: AgentMemory):
         print("[Agent Plan] 收到作业票照片，制定执行计划...")
@@ -1059,8 +1113,10 @@ class SecurityAgent:
         mem.remember("规划", "📋", "制定5步执行计划", plan)
 
     def _perceive(self, image_path: str, mem: AgentMemory) -> str:
+        prog = self._progress
+        if prog: prog(5, "图像预处理")
         print("[Agent Perceive] OpenCV + PaddleOCR 感知...")
-        text = self.tools.ocr_tool(image_path, mode=self.ocr_mode, brain=self.brain)
+        text = self.tools.ocr_tool(image_path, mode=self.ocr_mode, brain=self.brain, progress_callback=prog)
         n = len(text.strip().split("\n"))
         summary = f"提取 {n} 行文本"
         print(f"[Agent Perceive] {summary}")
@@ -1069,7 +1125,10 @@ class SecurityAgent:
 
     def _reason(self, ocr_text: str, mem: AgentMemory) -> SecuritySheetData:
         print("[Agent Reason] LLM 语义分析...")
+        sim = _ProgressSim(self._progress, 55, 80, "LLM 语义分析中", 2, 1.0)
+        sim.start()
         data = self.brain.extract_sheet_json(ocr_text)
+        sim.done()
         summary = (f"票号={data.ticket_id} | 场站={data.station_name} | "
                    f"浓度={data.gas_concentration} | 措施={len(data.safety_measures)}项 | "
                    f"异常={data.has_abnormal}")
@@ -1269,22 +1328,30 @@ class SecurityAgent:
         print(f"[Agent Report] ===== {len(mem.steps)} 阶段完成 =====")
         mem.remember("总结", "📊", "输出决策链报告", f"{len(mem.steps)}阶段完成")
 
-    def run(self, image_path: str, ocr_mode: str = None):
+    def run(self, image_path: str, ocr_mode: str = None, progress_callback=None):
         """运行完整 ReAct 循环，返回 (ocr_text, structured_data)"""
         if ocr_mode:
             self.ocr_mode = ocr_mode
+        prog = progress_callback or self._progress
         mem = AgentMemory()
         t0 = time.time()
 
+        if prog: prog(0, "开始处理")
         self._plan(image_path, mem)
+        if prog: prog(3, "感知阶段")
         ocr_text = self._perceive(image_path, mem)
+        if prog: prog(55, "推理阶段")
         data = self._reason(ocr_text, mem)
+        if prog: prog(82, "反思阶段")
         data = self._reflect(ocr_text, data, mem)
+        if prog: prog(90, "执行阶段")
         self._act(data, ocr_text, mem, image_path=image_path)
+        if prog: prog(98, "生成报告")
 
         elapsed = time.time() - t0
         print(f"[Agent] 全流程耗时: {elapsed:.1f}s")
         self._report(mem)
+        if prog: prog(100, "完成")
         return ocr_text, data
 
 
