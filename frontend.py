@@ -80,13 +80,13 @@ with st.sidebar:
         "自适应边框检测": "adaptive",
         "多方向检测": "multidir",
         "精确表格识别（PaddleStructure）": "precise",
-        "测试模式": "test",
+        "测试模式（高精度三步还原）": "test",
     }
     ocr_mode_label = st.selectbox(
         "📋 OCR 表格模式",
         list(_ocr_modes.keys()),
         index=0,
-        help="坐标聚类：基于文字坐标重建表格行列\n精细网格：X坐标聚类识别列边界，对齐输出\n自适应边框检测：OpenCV检测表格线段，按单元格组织文本\n多方向检测：分离水平/垂直文本分别处理\n精确表格识别：PaddleStructure表格结构识别 + LLM Markdown还原",
+        help="坐标聚类：基于文字坐标重建表格行列\n精细网格：X坐标聚类识别列边界，对齐输出\n自适应边框检测：OpenCV检测表格线段，按单元格组织文本\n多方向检测：分离水平/垂直文本分别处理\n精确表格识别：PaddleStructure表格结构识别 + LLM Markdown还原\n测试模式：PaddleStructure + 高精度三步LLM还原（布局对齐→结构映射→单元格精化）",
     )
     ocr_mode = _ocr_modes[ocr_mode_label]
 
@@ -95,7 +95,7 @@ with st.sidebar:
     with st.expander("⚙️ 通知设置", expanded=False):
         wechat_webhook = st.text_input("企业微信 Webhook", _cfg.get("wechat_webhook", ""), type="password", help="企业微信群机器人 Webhook 地址")
         dingtalk_webhook = st.text_input("钉钉 Webhook", _cfg.get("dingtalk_webhook", ""), type="password", help="钉钉群机器人 Webhook 地址")
-        if st.button("💾 保存设置", use_container_width=True):
+        if st.button("💾 保存设置", width="stretch"):
             _cfg["wechat_webhook"] = wechat_webhook
             _cfg["dingtalk_webhook"] = dingtalk_webhook
             with open(_cfg_path, "w", encoding="utf-8") as f:
@@ -153,10 +153,10 @@ with tab1:
     # ---- 两个按钮：上传 / 处理 ----
     c1, c2 = st.columns(2)
     with c1:
-        show_upload = st.button("📤 上传", use_container_width=True)
+        show_upload = st.button("📤 上传", width="stretch")
     with c2:
         can_process = st.session_state.get("upload_done") and st.session_state.get("pending_files")
-        run_clicked = st.button("⚙️ 处理", use_container_width=True, disabled=not can_process)
+        run_clicked = st.button("⚙️ 处理", width="stretch", disabled=not can_process)
 
     # 点击按钮切换模式
     if show_upload:
@@ -261,7 +261,7 @@ with tab1:
                 progress = st.progress(0)
                 img_placeholder = st.empty()
                 status_text.caption(f"[{idx+1}/{len(final_files)}] {uploaded.name} — 准备中...")
-                img_placeholder.image(save_path, caption=uploaded.name, use_container_width=True)
+                img_placeholder.image(save_path, caption=uploaded.name, width="stretch")
 
             # 右栏：日志面板
             with col_l:
@@ -320,7 +320,7 @@ with tab1:
             # 预览图收进折叠面板，需要时可展开
             with img_placeholder:
                 with st.expander("🖼️ 查看原图", expanded=False):
-                    st.image(save_path, caption=uploaded.name, use_container_width=True)
+                    st.image(save_path, caption=uploaded.name, width="stretch")
 
             # 左栏：结果展示
             with col_r:
@@ -376,7 +376,7 @@ with tab1:
             abn = sum(1 for r in st.session_state.results if r["data"].has_abnormal)
             st.markdown(f"**📊 汇总** {len(st.session_state.results)}张 {badge('正常'+str(len(st.session_state.results)-abn), 'ok')} {badge('隐患'+str(abn), 'err' if abn else 'ok')}", unsafe_allow_html=True)
             rows = [{"票号": r["data"].ticket_id, "场站": r["data"].station_name, "状态": "有隐患" if r["data"].has_abnormal else "正常", "风险": r["data"].risk_level or "-"} for r in st.session_state.results]
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, height=min(len(rows)*28+30, 200))
+            st.dataframe(pd.DataFrame(rows), width="stretch", height=min(len(rows)*28+30, 200))
 
 
 # ==================== Tab 2: AI 看板 ====================
@@ -427,7 +427,7 @@ with tab2:
                 pwd = st.text_input("密码", type="password")
                 fc1, fc2 = st.columns(2)
                 with fc1:
-                    if st.button("✅ 确认", type="primary", use_container_width=True):
+                    if st.button("✅ 确认", type="primary", width="stretch"):
                         if pwd == _del_pwd:
                             c2 = sqlite3.connect(db_path)
                             c2.execute("DELETE FROM hse_fire_work_tickets WHERE id=?", (st.session_state.delete_id,))
@@ -435,7 +435,7 @@ with tab2:
                             st.session_state.delete_id = None; st.rerun()
                         else: st.error("密码错误")
                 with fc2:
-                    if st.button("❌ 取消", use_container_width=True):
+                    if st.button("❌ 取消", width="stretch"):
                         st.session_state.delete_id = None; st.rerun()
             confirm_delete()
 
@@ -445,7 +445,7 @@ with tab2:
             with sf1:
                 search = st.text_input("🔍 搜索票号", placeholder="输入票号模糊查询...", label_visibility="collapsed")
             with sf2:
-                st.form_submit_button("🔍 搜索", use_container_width=True)
+                st.form_submit_button("🔍 搜索", width="stretch")
 
         # 记录列表（搜索过滤）
         for row in rows_db:
@@ -469,17 +469,17 @@ with tab2:
                     if img_path and os.path.exists(img_path):
                         dc1, dc2 = st.columns(2)
                         with dc1:
-                            if st.button("🖼️ 查看原图", key=f"img_{rid}", use_container_width=True):
+                            if st.button("🖼️ 查看原图", key=f"img_{rid}", width="stretch"):
                                 @st.dialog("原图", width="large")
                                 def show_orig_img(_path=img_path, _name=ticket):
-                                    st.image(_path, caption=_name, use_container_width=True)
+                                    st.image(_path, caption=_name, width="stretch")
                                 show_orig_img()
                         with dc2:
                             ext = os.path.splitext(img_path)[1] or ".png"
                             dl_name = f"{ticket or f'作业票_{rid}'}{ext}"
                             with open(img_path, "rb") as f:
                                 img_bytes = f.read()
-                            st.download_button("⬇️ 下载原图", data=img_bytes, file_name=dl_name, mime="image/png", key=f"dl_{rid}", use_container_width=True)
+                            st.download_button("⬇️ 下载原图", data=img_bytes, file_name=dl_name, mime="image/png", key=f"dl_{rid}", width="stretch")
                     else:
                         st.caption("原图不可用")
             with cd:

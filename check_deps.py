@@ -1,5 +1,5 @@
 """
-启动依赖版本检查 — 强制要求 Python 3.13+ 及所有第三方依赖为最新版本。
+启动依赖版本检查 — 强制要求 Python 3.13+ 及所有第三方依赖为指定最低版本。
 在 frontend.py 顶部 import 即可生效。
 """
 
@@ -10,23 +10,22 @@ import importlib.metadata as _meta
 # ---- Python 版本要求 ----
 _PY_MIN = (3, 13, 0)
 
-# ---- 第三方依赖: (pip包名, import名, 最低版本) ----
-# 版本号 = PyPI 上 Python 3.13 最新稳定版 (2026-06-25 查询)
+# ---- 第三方依赖: (pip包名, import名, 最低版本, 安装名) ----
 _DEPS = [
-    ("pydantic",       "pydantic",       "2.13.4"),
-    ("streamlit",      "streamlit",      "1.58.0"),
-    ("opencv-python",  "cv2",            "4.13.0.92"),
-    ("paddleocr",      "paddleocr",      "3.7.0"),
-    ("openai",         "openai",         "2.44.0"),
-    ("numpy",          "numpy",          "2.3.5"),
-    ("pandas",         "pandas",         "3.0.3"),
-    ("paddlepaddle",   "paddle",         "3.3.1"),
-    ("requests",       "requests",       "2.34.2"),
+    ("pydantic",       "pydantic",       "2.13.4",       "pydantic"),
+    ("streamlit",      "streamlit",      "1.58.0",       "streamlit"),
+    ("opencv-python",  "cv2",            "4.13.0.92",    "opencv-python"),
+    ("paddleocr",      "paddleocr",      "3.7.0",        "paddleocr"),
+    ("openai",         "openai",         "2.44.0",       "openai"),
+    ("numpy",          "numpy",          "2.3.5",        "numpy"),
+    ("pandas",         "pandas",         "3.0.3",        "pandas"),
+    ("paddlepaddle",   "paddle",         "3.3.1",        "paddlepaddle"),
+    ("requests",       "requests",       "2.34.2",       "requests"),
     # paddlex[ocr] 精确表格识别依赖
-    ("paddlex",        "paddlex",        "3.7.1"),
-    ("scikit-learn",   "sklearn",        "1.9.0"),
-    ("tiktoken",       "tiktoken",       "0.13.0"),
-    ("sentencepiece",  "sentencepiece",  "0.2.1"),
+    ("paddlex",        "paddlex",        "3.7.1",        "paddlex[ocr]"),
+    ("scikit-learn",   "sklearn",        "1.9.0",        "scikit-learn"),
+    ("tiktoken",       "tiktoken",       "0.13.0",       "tiktoken"),
+    ("sentencepiece",  "sentencepiece",  "0.2.1",        "sentencepiece"),
 ]
 
 
@@ -39,49 +38,76 @@ def _ver_tuple(v: str) -> tuple:
     return tuple(parts)
 
 
+def _ver_str(t: tuple) -> str:
+    """(3, 13, 0) -> '3.13.0'"""
+    return ".".join(map(str, t[:3]))
+
+
 def check_dependencies():
     """检查所有依赖版本，不满足则打印诊断并强制退出。"""
 
     errors: list[str] = []
+    details: list[tuple[str, str, str, bool]] = []  # (name, installed, required, ok)
 
     # 1) Python 版本
-    if sys.version_info < _PY_MIN:
-        cur = ".".join(map(str, sys.version_info[:3]))
-        need = ".".join(map(str, _PY_MIN))
-        errors.append(f"Python {need}+ required, got {cur}")
+    py_cur = sys.version_info[:3]
+    py_ok = py_cur >= _PY_MIN
+    details.append((
+        "Python",
+        _ver_str(py_cur),
+        _ver_str(_PY_MIN),
+        py_ok,
+    ))
+    if not py_ok:
+        errors.append(f"Python {_ver_str(_PY_MIN)}+ required, got {_ver_str(py_cur)}")
 
     # 2) 第三方包
-    for pip_name, import_name, min_ver in _DEPS:
+    for pip_name, import_name, min_ver, install_name in _DEPS:
         try:
             installed = _meta.version(pip_name)
         except _meta.PackageNotFoundError:
-            errors.append(f"{pip_name} not installed (need >= {min_ver})")
+            details.append((install_name, "未安装", min_ver, False))
+            errors.append(f"{install_name} not installed (need >= {min_ver})")
             continue
-        if _ver_tuple(installed) < _ver_tuple(min_ver):
-            errors.append(
-                f"{pip_name} {installed} is outdated (need >= {min_ver})"
-            )
+        ok = _ver_tuple(installed) >= _ver_tuple(min_ver)
+        details.append((install_name, installed, min_ver, ok))
+        if not ok:
+            errors.append(f"{install_name} {installed} is outdated (need >= {min_ver})")
+
+    # ---- 打印版本对照表 ----
+    print()
+    print("=" * 60)
+    print("  Security Supervisor - Startup Check")
+    print("=" * 60)
+    print()
+    print(f"  {'项目':<20} {'当前版本':<16} {'要求版本':<12} {'状态'}")
+    print(f"  {'─' * 20} {'─' * 16} {'─' * 12} {'─' * 6}")
+    for name, installed, required, ok in details:
+        status = "OK" if ok else "FAIL"
+        print(f"  {name:<20} {installed:<16} {required:<12} {status}")
+    print()
 
     if not errors:
+        print("  All checks passed.")
+        print("=" * 60)
+        print()
         return  # 全部通过
 
     # ---- 打印诊断信息 ----
-    print()
-    print("=" * 56)
-    print("  Dependency check FAILED")
-    print("=" * 56)
-    for e in errors:
-        print(f"  [X] {e}")
+    failed = len(errors)
+    passed = len(details) - failed
+    print(f"  Result: {passed}/{len(details)} passed, {failed} FAILED")
+    print("=" * 60)
     print()
     _MIRROR = "-i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn"
     print("  Fix with:")
     print(f"    pip install --upgrade {_MIRROR} \\")
-    pkgs = [f"      {d[0]}>={d[2]}" for d in _DEPS]
+    pkgs = [f"      {d[3]}>={d[2]}" for d in _DEPS]
     print(" \\\n".join(pkgs))
     print()
     print("  Or run:")
     print(f"    pip install --upgrade {_MIRROR} -r requirements.txt")
-    print("=" * 56)
+    print("=" * 60)
     print()
     sys.exit(1)
 

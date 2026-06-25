@@ -555,10 +555,19 @@ class AgentTools:
             _pi.Config._patched_for_onednn = True
 
         # 精确表格识别走独立流水线（含布局检测+表格结构+OCR），不走基础 OCR
-        if mode in ("precise", "test"):
+        if mode == "precise":
             table_text = AgentTools._format_table_precise(image_path, brain)
             if not table_text:
                 print("[Tool] 精确识别无结果，回退坐标聚类。")
+                mode = "cluster"
+            else:
+                return table_text
+
+        # 测试模式：PaddleStructure + 高精度三步 LLM 还原
+        if mode == "test":
+            table_text = AgentTools._format_table_test(image_path, brain)
+            if not table_text:
+                print("[Tool] 测试模式无结果，回退坐标聚类。")
                 mode = "cluster"
             else:
                 return table_text
@@ -725,6 +734,10 @@ class AgentTools:
     @staticmethod
     def _format_table_precise(image_path: str, brain=None) -> str:
         """精确表格识别：PaddleStructure 表格结构识别 + LLM Markdown 还原"""
+        import os as _os
+        _os.environ.setdefault("FLAGS_download_tool", "wget")
+        _os.environ.setdefault("PADDLE_PDX_SOURCE_HOME", "https://paddle-model-ecology.bj.bcebos.com")
+        _os.environ.setdefault("PADDLEX_PDX_MODEL_SOURCE", "https://paddle-model-ecology.bj.bcebos.com")
         import paddle.inference as _pi
         if not getattr(_pi.Config, "_patched_for_onednn", False):
             _orig_new_ir = _pi.Config.enable_new_ir
@@ -789,6 +802,95 @@ class AgentTools:
             return md
         except Exception as ex:
             print(f"[Tool] LLM 精排失败: {ex}，返回原始 HTML")
+            return table_html
+
+    @staticmethod
+    def _format_table_test(image_path: str, brain=None) -> str:
+        """测试模式：PaddleStructure HTML + 高精度 LLM 三步还原（布局对齐→结构映射→单元格精化）"""
+        import os as _os
+        _os.environ.setdefault("FLAGS_download_tool", "wget")
+        _os.environ.setdefault("PADDLE_PDX_SOURCE_HOME", "https://paddle-model-ecology.bj.bcebos.com")
+        _os.environ.setdefault("PADDLEX_PDX_MODEL_SOURCE", "https://paddle-model-ecology.bj.bcebos.com")
+        import paddle.inference as _pi
+        if not getattr(_pi.Config, "_patched_for_onednn", False):
+            _orig_new_ir = _pi.Config.enable_new_ir
+            _pi.Config.enable_new_ir = lambda self, v=True: _orig_new_ir(self, False)
+            _orig_opt = _pi.Config.set_optimization_level
+            _pi.Config.set_optimization_level = lambda self, lv: _orig_opt(self, 0)
+            _pi.Config._patched_for_onednn = True
+
+        print("[Tool] 测试模式：PaddleStructure 表格识别...")
+        try:
+            from paddlex import create_pipeline
+            pipe = create_pipeline("table_recognition", engine_config={"enable_new_ir": False})
+            result = list(pipe(image_path))
+        except Exception as ex:
+            print(f"[Tool] 测试模式 PaddleStructure 识别失败: {ex}")
+            return ""
+
+        if not result:
+            print("[Tool] 测试模式 PaddleStructure 未检测到表格")
+            return ""
+
+        # 合并所有识别到的表格 HTML
+        html_dict = result[0].html if hasattr(result[0], "html") else {}
+        html_parts = [v for v in html_dict.values() if v]
+        if not html_parts:
+            print("[Tool] 测试模式 PaddleStructure 表格 HTML 为空")
+            return ""
+
+        table_html = "\n".join(html_parts)
+        print(f"[Tool] 测试模式 PaddleStructure 识别完成，{len(html_parts)} 个表格。")
+
+        # 无 LLM 时直接返回 HTML
+        if brain is None:
+            return table_html
+
+        # 高精度 System Prompt：三步工作流（布局对齐→结构映射→单元格精化）
+        system_prompt = (
+            "你是一个高精度的安全生产档案数字化专家。你的核心任务是将 PaddleStructure 提取出的"
+            "原始 HTML 表格骨架与 OCR 文本碎片，完美还原为高可读性的 Markdown 格式。\n\n"
+            "# Workflow（底层三步骤）\n"
+            "1. 布局结构对齐 (Layout Alignment)：识别输入数据中的区域划分"
+            "（如：基本信息区、核心检查大表、底部签批区），保持各区域的上下独立性。\n"
+            "2. 复杂网络映射 (Structure Mapping)：严格遵循原始 HTML 中的 rowspan 和 colspan"
+            "（合并单元格）逻辑，利用 Markdown 标准语法（|）将行与列精准对齐。\n"
+            "3. 单元格内容精化 (Cell Refining)：将 OCR 文本（含手写体和符号）填入对应格子。\n\n"
+            "# Formatting Rules\n"
+            "1. 复杂合并单元格处理：\n"
+            "   - 纵向合并（如“人、物、环、管”）：首行填入该类别名称（加粗），"
+            "后续被合并的行在对应单元格保持空白，切勿错位。\n"
+            "   - 横向合并：通过重复文本或用“—”符号连接，确保整张大表的总列数保持绝对一致。\n"
+            "2. 符号与手写体强校验：\n"
+            "   - 手写体名字统一转化为：“姓名（手写）”格式。\n"
+            "   - 检查状态符号（如“✓”、“X”、“—”）必须精准填入对应的列中，"
+            "若无符号则填入“—”（不适用），绝对不能留空或错位。\n"
+            "3. 关键信息区保留：\n"
+            "   - 顶部的“作业票编号”、“作业内容”等非表格主体信息，使用加粗键值对或小型单行表呈现。\n"
+            "   - 底部的“签批栏”需独立成表，将手写签名与对应的日期合并在同一个单元格内。\n\n"
+            "# Constraints\n"
+            "- 严格基于输入的 HTML 和 OCR 数据进行还原，禁止脑补、禁止删除任何一行检查项、禁止编造数据。\n"
+            "- 仅输出最终的 Markdown 文本，不要包含任何前后缀、解释或分析。"
+        )
+
+        user_content = f"请将以下 PaddleStructure 输出的复杂表格数据转换为 Markdown：\n{table_html}"
+
+        print("[Tool] 测试模式 LLM 高精度还原...")
+        try:
+            resp = brain.client.chat.completions.create(
+                model=brain.model_name,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                temperature=0.1,
+                max_tokens=8192,
+            )
+            md = resp.choices[0].message.content.strip()
+            print(f"[Tool] 测试模式 LLM 还原完成，{len(md)} 字符。")
+            return md
+        except Exception as ex:
+            print(f"[Tool] 测试模式 LLM 还原失败: {ex}，返回原始 HTML")
             return table_html
 
     @staticmethod

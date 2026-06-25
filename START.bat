@@ -15,6 +15,14 @@ if errorlevel 1 (
 for /f "tokens=*" %%v in ('python --version 2^>^&1') do python -c "print('Python: %%v')"
 echo.
 
+:: Verify Python version >= 3.13
+python -c "import sys; sys.exit(0 if sys.version_info >= (3, 13) else 1)" >nul 2>&1
+if errorlevel 1 (
+    python -c "import sys; v=sys.version_info; print(f'[ERROR] Python 3.13+ required, got {v.major}.{v.minor}.{v.micro}. Please upgrade.')"
+    pause
+    exit /b 1
+)
+
 :: Check each dependency via Python
 set MISSING=0
 set MISSING_LIST=
@@ -54,10 +62,11 @@ if !MISSING! GTR 0 (
 
 echo.
 python -c "print('=' * 46); print('  Model Check'); print('=' * 46); print()"
+
 python -c "import sys; sys.exit(0 if __import__('os').path.isdir(__import__('os').path.expanduser(r'~\.paddlex\official_models\PP-OCRv6_medium_det')) else 1)" >nul 2>&1
 if errorlevel 1 (
     python -c "print('  PaddleOCR models not cached. Downloading...')"
-    python -c "import paddle.inference as pi; orig=pi.Config.enable_new_ir; pi.Config.enable_new_ir=lambda s,v=True:orig(s,False); orig2=pi.Config.set_optimization_level; pi.Config.set_optimization_level=lambda s,l:orig2(s,0); from paddleocr import PaddleOCR; PaddleOCR(lang='ch')" >nul 2>&1
+    python -c "import os; os.environ['FLAGS_download_tool']='wget'; os.environ['PADDLE_PDX_SOURCE_HOME']='https://paddle-model-ecology.bj.bcebos.com'; os.environ['PADDLEX_PDX_MODEL_SOURCE']='https://paddle-model-ecology.bj.bcebos.com'; import paddle.inference as pi; orig=pi.Config.enable_new_ir; pi.Config.enable_new_ir=lambda s,v=True:orig(s,False); orig2=pi.Config.set_optimization_level; pi.Config.set_optimization_level=lambda s,l:orig2(s,0); from paddleocr import PaddleOCR; PaddleOCR(lang='ch')" >nul 2>&1
     if errorlevel 1 (
         python -c "print('[ERROR] Model download failed. Check network and retry.')"
         pause
@@ -71,9 +80,9 @@ if errorlevel 1 (
 python -c "import sys; sys.exit(0 if __import__('os').path.isdir(__import__('os').path.expanduser(r'~\.paddlex\official_models\SLANet_plus')) else 1)" >nul 2>&1
 if errorlevel 1 (
     python -c "print('  Table recognition models not cached. Downloading...')"
-    python -c "import paddle.inference as pi; orig=pi.Config.enable_new_ir; pi.Config.enable_new_ir=lambda s,v=True:orig(s,False); orig2=pi.Config.set_optimization_level; pi.Config.set_optimization_level=lambda s,l:orig2(s,0); from paddlex import create_pipeline; create_pipeline('table_recognition', engine_config={'enable_new_ir': False})" >nul 2>&1
+    python -c "import os; os.environ['FLAGS_download_tool']='wget'; os.environ['PADDLE_PDX_SOURCE_HOME']='https://paddle-model-ecology.bj.bcebos.com'; os.environ['PADDLEX_PDX_MODEL_SOURCE']='https://paddle-model-ecology.bj.bcebos.com'; import paddle.inference as pi; orig=pi.Config.enable_new_ir; pi.Config.enable_new_ir=lambda s,v=True:orig(s,False); orig2=pi.Config.set_optimization_level; pi.Config.set_optimization_level=lambda s,l:orig2(s,0); from paddlex import create_pipeline; create_pipeline('table_recognition', engine_config={'enable_new_ir': False})"
     if errorlevel 1 (
-        python -c "print('[ERROR] Table model download failed. Check network and retry.')"
+        python -c "print('[ERROR] Table model download failed. Run: pip install \"paddlex[ocr]>=3.7.1\" -i https://pypi.tuna.tsinghua.edu.cn/simple')"
         pause
         exit /b 1
     )
