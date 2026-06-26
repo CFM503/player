@@ -890,6 +890,17 @@ class AgentTools:
         table_html = "\n".join(html_parts)
         print(f"[Tool] PaddleStructure done, {len(html_parts)} table(s), {len(table_html)} chars HTML.")
 
+        # Step 2.5: PaddleOCR 补充识别（含 √/×），按坐标合并到 PaddleX HTML
+        _p(40, "OCR merge: filling symbols...")
+        print("[Tool] OCR merge: running PaddleOCR for symbol supplement...")
+        try:
+            from paddleocr import PaddleOCR
+            ocr = PaddleOCR(lang="ch")
+            ocr_entries = AgentTools._ocr_entries_basic(image_path, ocr)
+            table_html = AgentTools._merge_ocr_into_html(table_html, ocr_entries, image_path)
+        except Exception as ex:
+            print(f"[Tool] OCR merge failed: {ex}, using PaddleX result only")
+
         if brain is None:
             _p(50, "Done (no LLM)")
             return table_html
@@ -924,7 +935,11 @@ class AgentTools:
             "- 仅输出最终的 Markdown 文本，不要包含任何前后缀、解释或分析。"
         )
 
-        user_content = f"请将以下 PaddleStructure 输出的复杂表格数据转换为 Markdown：\n{table_html}"
+        user_content = (
+            "请将以下表格数据转换为 Markdown。数据来源：PaddleStructure 表格结构识别 + PaddleOCR 文字补充"
+            "（已按坐标合并，含手写符号如 ✓/× 等）：\n"
+            f"{table_html}"
+        )
 
         sim_llm = _ProgressSim(progress_callback, 42, 48, "LLM high-precision restore", 1, 1.5)
         sim_llm.start()
@@ -948,6 +963,113 @@ class AgentTools:
             sim_llm.done()
             print(f"[Tool] Test mode LLM restore failed: {ex}, returning raw HTML")
             return table_html
+
+    @staticmethod
+    def _merge_ocr_into_html(table_html: str, ocr_entries: list, image_path: str) -> str:
+        """将 PaddleOCR 检测到的文本（含 √/×）按坐标填入 PaddleX HTML 的空单元格"""
+        import cv2
+        import re
+
+        if not ocr_entries or not table_html:
+            return table_html
+
+        # 解析图片尺寸
+        img = cv2.imread(image_path)
+        if img is None:
+            return table_html
+        img_h, img_w = img.shape[:2]
+
+        # 解析 HTML 为 grid（二维列表）
+        grid = []
+        for tr_match in re.finditer(r"<tr[^>]*>(.*?)</tr>", table_html, re.DOTALL):
+            row = []
+            for td_match in re.finditer(r"<td[^>]*>(.*?)</td>", tr_match.group(1), re.DOTALL):
+                attrs = td_match.group(0).split(">")[0]  # <td colspan="2" rowspan="3"
+                cs = 1
+                rs = 1
+                m_cs = re.search(r'colspan="(\d+)"', attrs)
+                m_rs = re.search(r'rowspan="(\d+)"', attrs)
+                if m_cs:
+                    cs = int(m_cs.group(1))
+                if m_rs:
+                    rs = int(m_rs.group(1))
+                text = re.sub(r"<[^>]+>", "", td_match.group(1)).strip()
+                row.append({"text": text, "cs": cs, "rs": rs})
+            if row:
+                grid.append(row)
+
+        if not grid:
+            return table_html
+
+        n_rows = len(grid)
+        max_cols = max(sum(c["cs"] for c in row) for row in grid)
+        if n_rows == 0 or max_cols == 0:
+            return table_html
+
+        # 估算单元格的像素坐标范围
+        cell_h = img_h / n_rows
+        cell_w = img_w / max_cols
+
+        symbol_re = re.compile(r"[✓√×X✗✘]")
+
+        # 填充空单元格
+        filled = 0
+        placed = set()
+        for r, row in enumerate(grid):
+            col_offset = 0
+            for c, cell in enumerate(row):
+                if cell["text"]:
+                    col_offset += cell["cs"]
+                    continue
+
+                # 估算该单元格在图片中的坐标范围
+                y1 = r * cell_h
+                y2 = (r + cell["rs"]) * cell_h
+                x1 = col_offset * cell_w
+                x2 = (col_offset + cell["cs"]) * cell_w
+
+                # 找落在该区域内的 OCR 条目
+                best_entry = None
+                best_dist = float("inf")
+                for i, entry in enumerate(ocr_entries):
+                    if i in placed:
+                        continue
+                    ey, ex = entry["y"], entry["x"] + entry.get("w", 0) / 2
+                    if y1 <= ey <= y2 and x1 <= ex <= x2:
+                        has_sym = bool(symbol_re.search(entry["text"]))
+                        dist = abs(ey - (y1 + y2) / 2) + abs(ex - (x1 + x2) / 2)
+                        score = (0 if has_sym else 10000) + dist
+                        if score < best_dist:
+                            best_dist = score
+                            best_entry = (i, entry)
+
+                if best_entry:
+                    idx, entry = best_entry
+                    cell["text"] = entry["text"]
+                    placed.add(idx)
+                    filled += 1
+
+                col_offset += cell["cs"]
+
+        if filled == 0:
+            return table_html
+
+        print(f"[Tool] OCR merge: 补充了 {filled} 个空单元格")
+
+        # 重建 HTML
+        parts = ["<table>"]
+        for row in grid:
+            parts.append("<tr>")
+            for cell in row:
+                attrs = ""
+                if cell["cs"] > 1:
+                    attrs += f' colspan="{cell["cs"]}"'
+                if cell["rs"] > 1:
+                    attrs += f' rowspan="{cell["rs"]}"'
+                parts.append(f"<td{attrs}>{cell['text']}</td>")
+            parts.append("</tr>")
+        parts.append("</table>")
+        return "".join(parts)
 
     @staticmethod
     def check_weather_tool(city: str = "牡丹江") -> dict:
