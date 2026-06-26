@@ -76,17 +76,14 @@ with st.sidebar:
     # OCR 表格识别模式
     _ocr_modes = {
         "坐标聚类（默认）": "cluster",
-        "精细网格（列对齐）": "grid",
         "自适应边框检测": "adaptive",
-        "多方向检测": "multidir",
         "坐标聚类（精确增强）": "precise",
-        "测试模式（高精度三步还原）": "test",
     }
     ocr_mode_label = st.selectbox(
         "📋 OCR 表格模式",
         list(_ocr_modes.keys()),
         index=0,
-        help="坐标聚类：基于文字坐标重建表格行列\n精细网格：X坐标聚类识别列边界，对齐输出\n自适应边框检测：OpenCV检测表格线段，按单元格组织文本\n多方向检测：分离水平/垂直文本分别处理\n精确表格识别：PaddleStructure表格结构识别 + LLM Markdown还原\n测试模式：PaddleStructure + 高精度三步LLM还原（布局对齐→结构映射→单元格精化）",
+        help="坐标聚类：基于文字坐标重建表格行列\n自适应边框检测：OpenCV检测表格线段，按单元格组织文本\n精确增强：OpenCV边框检测+PaddleOCR，输出HTML",
     )
     ocr_mode = _ocr_modes[ocr_mode_label]
 

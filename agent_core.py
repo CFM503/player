@@ -640,9 +640,9 @@ class AgentTools:
                 progress_callback(pct, msg)
 
         mode_labels = {
-            "cluster": "坐标聚类", "grid": "精细网格",
-            "adaptive": "自适应边框检测", "multidir": "多方向检测",
-            "precise": "精确表格识别", "test": "测试模式",
+            "cluster": "坐标聚类",
+            "adaptive": "自适应边框检测",
+            "precise": "精确增强",
         }
         print(f"[Tool] OCR 模式: {mode_labels.get(mode, mode)} | 引擎: {engine}")
 
@@ -668,12 +668,8 @@ class AgentTools:
             if not entries:
                 raise RuntimeError(f"Surya-OCR 未能识别任何文字: {image_path}")
             _prog(52, "表格格式化")
-            if mode == "grid":
-                return AgentTools._format_table_grid(entries)
-            elif mode == "adaptive":
+            if mode == "adaptive":
                 return AgentTools._format_table_adaptive(image_path, entries)
-            elif mode == "multidir":
-                return AgentTools._format_table_multidir(entries)
             else:
                 return AgentTools._format_table(entries)
 
@@ -696,16 +692,6 @@ class AgentTools:
                 AgentTools._last_ocr_raw = ""  # 清除旧 raw，让前端走 HTML 渲染
                 return table_text
 
-        # 测试模式
-        if mode == "test":
-            table_text = AgentTools._format_table_test(image_path, brain, progress_callback=progress_callback)
-            if not table_text:
-                print("[Tool] 测试模式无结果，回退坐标聚类。")
-                mode = "cluster"
-            else:
-                AgentTools._last_ocr_raw = ""
-                return table_text
-
         # 基础 OCR 模式
         from paddleocr import PaddleOCR
         _prog(10, "PaddleOCR 加载模型")
@@ -725,12 +711,8 @@ class AgentTools:
             raise RuntimeError(f"OCR 未能识别任何文字: {image_path}")
 
         _prog(52, "表格格式化")
-        if mode == "grid":
-            table_text = AgentTools._format_table_grid(entries)
-        elif mode == "adaptive":
+        if mode == "adaptive":
             table_text = AgentTools._format_table_adaptive(image_path, entries)
-        elif mode == "multidir":
-            table_text = AgentTools._format_table_multidir(entries)
         else:
             table_text = AgentTools._format_table(entries)
 
@@ -738,42 +720,6 @@ class AgentTools:
         AgentTools._last_ocr_raw = flat_text
         return f"{table_text}\n---\n{flat_text}"
 
-    @staticmethod
-    def _format_table_grid(entries):
-        """精细网格：X 坐标聚类识别列边界，对齐输出"""
-        if not entries:
-            return ""
-        entries_sorted = sorted(entries, key=lambda e: e["y"])
-        # 按 Y 分行
-        rows = []
-        current_row = [entries_sorted[0]]
-        for prev, cur in zip(entries_sorted, entries_sorted[1:]):
-            gap = cur["y"] - prev["y"]
-            row_h = max(prev["h"], cur["h"])
-            if gap > row_h * 0.6:
-                rows.append(current_row)
-                current_row = [cur]
-            else:
-                current_row.append(cur)
-        rows.append(current_row)
-        # 聚类所有 X 坐标找列边界
-        all_x = sorted(set(round(e["x"] / 20) * 20 for e in entries))
-        col_positions = []
-        for x in all_x:
-            if not col_positions or x - col_positions[-1] > 30:
-                col_positions.append(x)
-        # 将每行文本映射到列
-        lines = []
-        for row in rows:
-            row.sort(key=lambda e: e["x"])
-            cols = {}
-            for e in row:
-                col_idx = min(range(len(col_positions)), key=lambda i: abs(col_positions[i] - e["x"]))
-                cols[col_idx] = e["text"]
-            max_col = max(cols.keys()) if cols else 0
-            line_parts = [cols.get(i, "") for i in range(max_col + 1)]
-            lines.append(" | ".join(p for p in line_parts if p))
-        return "\n".join(lines)
 
     @staticmethod
     def _format_table_adaptive(image_path, entries):
@@ -845,37 +791,6 @@ class AgentTools:
             print(f"[Tool] 边框检测异常: {ex}，回退坐标聚类")
             return AgentTools._format_table(entries)
 
-    @staticmethod
-    def _format_table_multidir(entries):
-        """多方向检测：分离水平/垂直文本，分别处理后合并"""
-        if not entries:
-            return ""
-        h_entries, v_entries = [], []
-        for e in entries:
-            w = e.get("w", 0)
-            h_val = e["h"]
-            if w > 0 and h_val > w * 2:
-                v_entries.append(e)
-            else:
-                h_entries.append(e)
-        result_parts = []
-        if h_entries:
-            result_parts.append(AgentTools._format_table(h_entries))
-        if v_entries:
-            v_sorted = sorted(v_entries, key=lambda e: e["x"])
-            v_lines = []
-            current_col = [v_sorted[0]]
-            for prev, cur in zip(v_sorted, v_sorted[1:]):
-                if cur["x"] - prev["x"] > max(prev["h"], cur["h"]) * 0.8:
-                    v_lines.append(current_col)
-                    current_col = [cur]
-                else:
-                    current_col.append(cur)
-            v_lines.append(current_col)
-            for col in v_lines:
-                col.sort(key=lambda e: e["y"])
-                result_parts.append("↕ " + " ".join(e["text"] for e in col))
-        return "\n".join(result_parts) if result_parts else AgentTools._format_table(entries)
 
     @staticmethod
     def _format_table_precise(image_path: str, brain=None) -> str:
@@ -970,139 +885,6 @@ class AgentTools:
         return table_html
 
     @staticmethod
-    def _format_table_test(image_path: str, brain=None, progress_callback=None) -> str:
-        """Test mode: PaddleStructure + LLM 3-step high-precision restore"""
-        def _p(pct, msg):
-            if progress_callback:
-                progress_callback(pct, msg)
-
-        import os as _os
-        _os.environ.setdefault("FLAGS_download_tool", "wget")
-        _os.environ.setdefault("PADDLE_PDX_SOURCE_HOME", "https://paddle-model-ecology.bj.bcebos.com")
-        _os.environ.setdefault("PADDLEX_PDX_MODEL_SOURCE", "https://paddle-model-ecology.bj.bcebos.com")
-        _os.environ.setdefault("FLAGS_use_gpu", "0")  # 强制 CPU，避免 GPU 初始化卡顿
-
-        # Step 1: load model
-        _p(8, "PaddleStructure load model...")
-        print("[Tool] Test mode: loading PaddleStructure model...")
-        sim_load = _ProgressSim(progress_callback, 8, 20, "PaddleStructure load model", 2, 1.0)
-        sim_load.start()
-        try:
-            from paddlex import create_pipeline
-            pipe = create_pipeline("table_recognition", engine_config={"enable_new_ir": False})
-        except Exception as ex:
-            sim_load.done()
-            print(f"[Tool] Test mode model load failed: {ex}")
-            return ""
-        sim_load.done()
-        print("[Tool] PaddleStructure model loaded.")
-
-        # Step 2: table structure recognition
-        _p(22, "Table structure recognition...")
-        print("[Tool] Test mode: running table structure recognition...", flush=True)
-        sim_infer = _ProgressSim(progress_callback, 22, 40, "Table recognition", 3, 0.8)
-        sim_infer.start()
-        hb = _Heartbeat("table recognition")
-        hb.start()
-        import time as _time
-        _t0 = _time.time()
-        try:
-            result = list(pipe(image_path))
-        except Exception as ex:
-            hb.stop()
-            sim_infer.done()
-            print(f"[Tool] Test mode inference failed ({_time.time()-_t0:.1f}s): {ex}")
-            return ""
-        hb.stop()
-        sim_infer.done()
-        print(f"[Tool] Table recognition done ({_time.time()-_t0:.1f}s), {len(result)} result(s).")
-
-        if not result:
-            print("[Tool] Test mode: no tables detected")
-            return ""
-
-        html_dict = result[0].html if hasattr(result[0], "html") else {}
-        html_parts = [v for v in html_dict.values() if v]
-        if not html_parts:
-            print("[Tool] Test mode: table HTML is empty")
-            return ""
-
-        table_html = "\n".join(html_parts)
-        print(f"[Tool] PaddleStructure done, {len(html_parts)} table(s), {len(table_html)} chars HTML.")
-
-        # Step 2.5: PaddleOCR 补充识别（含 √/×），按坐标合并到 PaddleX HTML
-        _p(40, "OCR merge: filling symbols...")
-        print("[Tool] OCR merge: running PaddleOCR for symbol supplement...")
-        try:
-            from paddleocr import PaddleOCR
-            ocr = PaddleOCR(lang="ch")
-            ocr_entries = AgentTools._ocr_entries_basic(image_path, ocr)
-            table_html = AgentTools._merge_ocr_into_html(table_html, ocr_entries, image_path)
-        except Exception as ex:
-            print(f"[Tool] OCR merge failed: {ex}, using PaddleX result only")
-
-        if brain is None:
-            _p(50, "Done (no LLM)")
-            return table_html
-
-        # Step 3: LLM high-precision restore
-        _p(42, "LLM high-precision restore...")
-        print("[Tool] Test mode: LLM high-precision Markdown restore...")
-
-        system_prompt = (
-            "你是一个高精度的安全生产档案数字化专家。你的核心任务是将 PaddleStructure 提取出的"
-            "原始 HTML 表格骨架与 OCR 文本碎片，完美还原为高可读性的 Markdown 格式。\n\n"
-            "# Workflow（底层三步骤）\n"
-            "1. 布局结构对齐 (Layout Alignment)：识别输入数据中的区域划分"
-            "（如：基本信息区、核心检查大表、底部签批区），保持各区域的上下独立性。\n"
-            "2. 复杂网络映射 (Structure Mapping)：严格遵循原始 HTML 中的 rowspan 和 colspan"
-            "（合并单元格）逻辑，利用 Markdown 标准语法（|）将行与列精准对齐。\n"
-            "3. 单元格内容精化 (Cell Refining)：将 OCR 文本（含手写体和符号）填入对应格子。\n\n"
-            "# Formatting Rules\n"
-            "1. 复杂合并单元格处理：\n"
-            "   - 纵向合并（如“人、物、环、管”）：首行填入该类别名称（加粗），"
-            "后续被合并的行在对应单元格保持空白，切勿错位。\n"
-            "   - 横向合并：通过重复文本或用“—”符号连接，确保整张大表的总列数保持绝对一致。\n"
-            "2. 符号与手写体强校验：\n"
-            "   - 手写体名字统一转化为：“姓名（手写）”格式。\n"
-            "   - 检查状态符号（如“✓”、“X”、“—”）必须精准填入对应的列中，"
-            "若无符号则填入“—”（不适用），绝对不能留空或错位。\n"
-            "3. 关键信息区保留：\n"
-            "   - 顶部的“作业票编号”、“作业内容”等非表格主体信息，使用加粗键值对或小型单行表呈现。\n"
-            "   - 底部的“签批栏”需独立成表，将手写签名与对应的日期合并在同一个单元格内。\n\n"
-            "# Constraints\n"
-            "- 严格基于输入的 HTML 和 OCR 数据进行还原，禁止脑补、禁止删除任何一行检查项、禁止编造数据。\n"
-            "- 仅输出最终的 Markdown 文本，不要包含任何前后缀、解释或分析。"
-        )
-
-        user_content = (
-            "请将以下表格数据转换为 Markdown。数据来源：PaddleStructure 表格结构识别 + PaddleOCR 文字补充"
-            "（已按坐标合并，含手写符号如 ✓/× 等）：\n"
-            f"{table_html}"
-        )
-
-        sim_llm = _ProgressSim(progress_callback, 42, 48, "LLM high-precision restore", 1, 1.5)
-        sim_llm.start()
-        try:
-            resp = brain.client.chat.completions.create(
-                model=brain.model_name,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content},
-                ],
-                temperature=0.1,
-                max_tokens=8192,
-                timeout=120,
-            )
-            md = resp.choices[0].message.content.strip()
-            sim_llm.done()
-            _p(50, "Test mode done")
-            print(f"[Tool] Test mode LLM restore done, {len(md)} chars.")
-            return md
-        except Exception as ex:
-            sim_llm.done()
-            print(f"[Tool] Test mode LLM restore failed: {ex}, returning raw HTML")
-            return table_html
 
     @staticmethod
     def _merge_ocr_into_html(table_html: str, ocr_entries: list, image_path: str) -> str:
