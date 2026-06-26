@@ -386,10 +386,14 @@ with tab1:
                         with st.expander("📝 OCR 识别原文"):
                             # 原始 OCR 文本（未经加工）
                             raw = getattr(AgentTools, "_last_ocr_raw", "")
+                            ocr_out = result["ocr"].split("\n---\n")[-1] if "\n---\n" in result["ocr"] else result["ocr"]
+                            is_html = "<table" in ocr_out.lower()
                             if raw:
                                 st.code(raw, language=None, line_numbers=True)
+                            elif is_html:
+                                st.markdown(ocr_out, unsafe_allow_html=True)
                             else:
-                                st.text(result["ocr"].split("\n---\n")[-1] if "\n---\n" in result["ocr"] else result["ocr"])
+                                st.text(ocr_out)
 
                     if d.issues:
                         with st.expander(f"⚠️ 隐患明细 ({len(d.issues)})", expanded=True):
