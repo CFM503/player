@@ -93,20 +93,16 @@ with st.sidebar:
         "本地 PaddleOCR": "paddleocr",
         "视觉大模型": "vision",
         "GOT-OCR 2.0": "got",
-        "Surya-OCR": "surya",
     }
     ocr_engine_label = st.selectbox(
         "🔍 OCR 引擎",
         list(_ocr_engines.keys()),
         index=0,
-        help="本地 PaddleOCR：默认，本地推理，支持全部6种表格模式\n"
+        help="本地 PaddleOCR：默认，本地推理，支持全部4种表格模式\n"
              "视觉大模型：调用 VL 模型（如 Qwen-VL）直接读图识别，一步完成结构+文字+符号\n"
-             "GOT-OCR 2.0：阶跃星辰专用文档 OCR，符号/手写体/公式识别能力强\n"
-             "Surya-OCR：开源 OCR 引擎，对符号和手写体支持较好",
+             "GOT-OCR 2.0：阶跃星辰专用文档 OCR，符号/手写体/公式识别能力强",
     )
     ocr_engine = _ocr_engines[ocr_engine_label]
-    if ocr_engine == "surya":
-        st.caption("⚠️ 需安装 surya-ocr: pip install surya-ocr")
     if ocr_engine in ("vision", "got"):
         st.caption("💡 需配置支持视觉的 API（如 Qwen-VL / GOT-OCR / GPT-4o）")
 
