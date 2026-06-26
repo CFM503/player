@@ -1,5 +1,16 @@
 # 更新日志 (CHANGELOG)
 
+## [3.5.2] - 2026-06-26
+
+### 修复
+- **Streamlit ScriptRunContext 警告**：`_ProgressSim._run` 不再在后台线程调用 Streamlit 组件回调，消除 `missing ScriptRunContext` 噪音；全局日志过滤屏蔽 PaddleX/PaddlePaddle 内部线程触发的残余警告。
+- **PaddleX 推理卡顿**：`_format_table_test` / `_format_table_precise` 注入 `FLAGS_use_gpu=0` 强制 CPU 推理，避免无 CUDA 环境下 GPU 初始化挂起。
+- **API Key 无法保存**：侧边栏"💾 保存设置"按钮原先仅保存通知 Webhook，现同时持久化 API Key、API URL、模型名称到 `config.json`。
+
+### 新增
+- **`_Heartbeat` 推理心跳**：PaddleX 推理期间按 `HEARTBEAT_INTERVAL` 全局间隔打印存活消息（含耗时），避免长时间推理看起来像卡死；推理完成/失败打印耗时和结果数。
+- **模型加载与推理分离**：`_format_table_precise` 将 `create_pipeline` 和 `list(pipe(...))` 拆分到独立 try 块，模型加载失败和推理失败分别报错并回退坐标聚类。
+
 ## [3.5.1] - 2026-06-25
 
 ### 修复

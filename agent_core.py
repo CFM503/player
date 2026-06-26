@@ -9,6 +9,8 @@ pip install pydantic openai paddleocr opencv-python numpy requests -i https://py
 import os
 import json
 import time
+import logging
+logging.getLogger("streamlit").setLevel(logging.ERROR)  # 屏蔽后台线程 ScriptRunContext 噪音
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 
@@ -755,22 +757,28 @@ class AgentTools:
         _os.environ.setdefault("FLAGS_download_tool", "wget")
         _os.environ.setdefault("PADDLE_PDX_SOURCE_HOME", "https://paddle-model-ecology.bj.bcebos.com")
         _os.environ.setdefault("PADDLEX_PDX_MODEL_SOURCE", "https://paddle-model-ecology.bj.bcebos.com")
-        import paddle.inference as _pi
-        if not getattr(_pi.Config, "_patched_for_onednn", False):
-            _orig_new_ir = _pi.Config.enable_new_ir
-            _pi.Config.enable_new_ir = lambda self, v=True: _orig_new_ir(self, False)
-            _orig_opt = _pi.Config.set_optimization_level
-            _pi.Config.set_optimization_level = lambda self, lv: _orig_opt(self, 0)
-            _pi.Config._patched_for_onednn = True
+        _os.environ.setdefault("FLAGS_use_gpu", "0")  # 强制 CPU，避免 GPU 初始化卡顿
 
         print("[Tool] PaddleStructure 表格识别...")
         try:
             from paddlex import create_pipeline
             pipe = create_pipeline("table_recognition", engine_config={"enable_new_ir": False})
+        except Exception as ex:
+            print(f"[Tool] PaddleStructure 模型加载失败: {ex}，回退坐标聚类")
+            return ""
+
+        hb = _Heartbeat("table recognition")
+        hb.start()
+        import time as _time
+        _t0 = _time.time()
+        try:
             result = list(pipe(image_path))
         except Exception as ex:
-            print(f"[Tool] PaddleStructure 识别失败: {ex}，回退坐标聚类")
+            hb.stop()
+            print(f"[Tool] PaddleStructure 推理失败 ({_time.time()-_t0:.1f}s): {ex}，回退坐标聚类")
             return ""
+        hb.stop()
+        print(f"[Tool] PaddleStructure 推理完成 ({_time.time()-_t0:.1f}s)，{len(result)} 个结果。")
 
         if not result:
             print("[Tool] PaddleStructure 未检测到表格，回退坐标聚类")
@@ -832,13 +840,7 @@ class AgentTools:
         _os.environ.setdefault("FLAGS_download_tool", "wget")
         _os.environ.setdefault("PADDLE_PDX_SOURCE_HOME", "https://paddle-model-ecology.bj.bcebos.com")
         _os.environ.setdefault("PADDLEX_PDX_MODEL_SOURCE", "https://paddle-model-ecology.bj.bcebos.com")
-        import paddle.inference as _pi
-        if not getattr(_pi.Config, "_patched_for_onednn", False):
-            _orig_new_ir = _pi.Config.enable_new_ir
-            _pi.Config.enable_new_ir = lambda self, v=True: _orig_new_ir(self, False)
-            _orig_opt = _pi.Config.set_optimization_level
-            _pi.Config.set_optimization_level = lambda self, lv: _orig_opt(self, 0)
-            _pi.Config._patched_for_onednn = True
+        _os.environ.setdefault("FLAGS_use_gpu", "0")  # 强制 CPU，避免 GPU 初始化卡顿
 
         # Step 1: load model
         _p(8, "PaddleStructure load model...")
@@ -857,16 +859,23 @@ class AgentTools:
 
         # Step 2: table structure recognition
         _p(22, "Table structure recognition...")
-        print("[Tool] Test mode: running table structure recognition...")
+        print("[Tool] Test mode: running table structure recognition...", flush=True)
         sim_infer = _ProgressSim(progress_callback, 22, 40, "Table recognition", 3, 0.8)
         sim_infer.start()
+        hb = _Heartbeat("table recognition")
+        hb.start()
+        import time as _time
+        _t0 = _time.time()
         try:
             result = list(pipe(image_path))
         except Exception as ex:
+            hb.stop()
             sim_infer.done()
-            print(f"[Tool] Test mode inference failed: {ex}")
+            print(f"[Tool] Test mode inference failed ({_time.time()-_t0:.1f}s): {ex}")
             return ""
+        hb.stop()
         sim_infer.done()
+        print(f"[Tool] Table recognition done ({_time.time()-_t0:.1f}s), {len(result)} result(s).")
 
         if not result:
             print("[Tool] Test mode: no tables detected")
@@ -1103,8 +1112,8 @@ class _ProgressSim:
         next_hb = HEARTBEAT_INTERVAL
         while not self._stop and self._cur < self._end - 1:
             self._cur = min(self._cur + self._step, self._end - 1)
-            if self._cb:
-                self._cb(int(self._cur), self._msg)
+            # 不在后台线程调用 Streamlit 回调，避免 ScriptRunContext 警告；
+            # 主线程 _p() 调用已提供实时进度，done() 在主线程触发最终更新。
             if HEARTBEAT_INTERVAL > 0:
                 elapsed = _t.time() - t0
                 if elapsed >= next_hb:
@@ -1119,6 +1128,31 @@ class _ProgressSim:
         self._stop = True
         if self._cb:
             self._cb(int(self._end), self._msg)
+
+
+class _Heartbeat:
+    """后台线程定期打印进度点，避免长时间推理时看起来像卡死"""
+    def __init__(self, label: str, interval: float = None):
+        import threading as _th
+        self._label = label
+        self._interval = interval if interval is not None else HEARTBEAT_INTERVAL
+        self._stop = False
+        self._t = _th.Thread(target=self._run, daemon=True)
+
+    def _run(self):
+        import time as _t
+        t0 = _t.time()
+        while not self._stop:
+            _t.sleep(self._interval)
+            if self._stop:
+                break
+            print(f"  ... {self._label} ({int(_t.time() - t0)}s)", flush=True)
+
+    def start(self):
+        self._t.start()
+
+    def stop(self):
+        self._stop = True
 
 
 class SecurityAgent:
