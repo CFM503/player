@@ -74,12 +74,11 @@
 
 ### 3.2 AI 智能结构化
 - PaddleOCR 识别手写/打印文字，自动按坐标排序还原阅读顺序
-- **五种 OCR 表格识别模式**：
+- **四种 OCR 表格识别模式**：
   - 坐标聚类（默认）：基于文字坐标 Y 间隙分行、X 排序
-  - 精细网格：X 坐标聚类识别列边界，按列对齐输出
   - 自适应边框检测：OpenCV 形态学运算检测表格线段，按单元格组织文本
-  - 多方向检测：分离水平/垂直文本，分别聚类处理
-  - **精确表格识别**：PaddleStructure 表格结构识别 + LLM Markdown 精排，支持合并单元格和手写签名还原
+  - 精确增强：OpenCV 边框检测 + PaddleOCR 文字识别，直接输出 HTML 表格
+  - 测试模式：复用精确增强逻辑，用于调试验证
 - LLM 将 OCR 文本解析为结构化 JSON（票号、场站、动火人、浓度、安全措施等21个字段）
 - Pydantic Schema 强类型校验，确保数据质量
 
@@ -132,8 +131,7 @@
 | 前端 | Streamlit 1.58+ | Web UI，支持 PC + 手机端 |
 | 图像处理 | OpenCV 4.13 (CLAHE) | 自适应去阴影、二值化 |
 | 文字识别 | PaddleOCR 3.7.0 (PaddlePaddle 3.3) | 中文手写体/打印体识别 |
-| 表格结构识别 | PaddleX TableRecognition (SLANet_plus) | 精确表格结构还原，合并单元格支持 |
-| 版面检测 | PP-DocLayout-L | 文档版面分析，定位表格区域 |
+| 表格结构识别 | OpenCV 形态学运算 + PaddleOCR | 边框检测 + 文字识别，输出 HTML 表格 |
 | 语义理解 | mimo-v2.5-pro (OpenAI 兼容) | OCR 文本→结构化 JSON + Markdown 精排 |
 | 数据校验 | Pydantic 2.13 | Schema 强类型校验 |
 | Agent 框架 | 自研 ReAct | 六阶段自主决策+反思重试 |
