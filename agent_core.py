@@ -1392,46 +1392,51 @@ class SecurityAgent:
         print(f"[Agent Act] ⑤ 已存入 SQLite: {data.ticket_id}")
         mem.remember("执行", "💾", "数据入库", f"票号 {data.ticket_id} 已存入 SQLite")
 
-        # ---- ⑥ 分级通知 ----
-        print("[Agent Act] ⑥ 分级通知...")
+        # ---- ⑥ 双通道通知（所有路由均推送） ----
+        print("[Agent Act] ⑥ 双通道通知（企微+钉钉）...")
         cfg = load_config()
-        notify_result = ""
+        applicant = data.worker_id or "未知"
+        supervisor = data.approver_name or "未知"
 
+        # 按路由级别构建消息
         if data.approval_level == "自动通过":
-            notify_result = "低风险自动通过，无需推送通知"
-            print(f"[Agent Act] ⑥ {notify_result}")
-
+            title = "✅ 自动通过"
+            body = (f"【{title}】{data.station_name}\n"
+                    f"票号:{data.ticket_id} 申请人:{applicant} 安全主管:{supervisor}\n"
+                    f"风险:{data.risk_level} 浓度:{data.gas_concentration}\n"
+                    f"状态:低风险，已自动审批通过")
         elif data.approval_level == "主管审批":
-            msg = (f"【待审批】{data.station_name} 票号:{data.ticket_id}\n"
-                   f"风险:{data.risk_level} 浓度:{data.gas_concentration}\n"
-                   f"签批:{data.approver_name or '未知'}")
-            if cfg.get("wechat_webhook"):
-                self.tools.send_wechat_alert(msg)
-                notify_result += "企业微信✓ "
-            else:
-                notify_result += "企业微信(未配置) "
-                print("[Agent Act] ⚠️ 企业微信 Webhook 未配置，跳过推送。")
-            notify_result += "→ 通知主管审批"
-            print(f"[Agent Act] ⑥ {notify_result}")
+            title = "⏳ 待主管审批"
+            body = (f"【{title}】{data.station_name}\n"
+                    f"票号:{data.ticket_id} 申请人:{applicant} 安全主管:{supervisor}\n"
+                    f"风险:{data.risk_level} 浓度:{data.gas_concentration}\n"
+                    f"状态:需安全主管审批后方可作业")
+        else:
+            title = "🚫 禁止作业"
+            issue_lines = "\n".join(f"  ·{i.item_name}({i.raw_text or '异常'})" for i in data.issues[:5])
+            body = (f"【{title}】{data.station_name}\n"
+                    f"票号:{data.ticket_id} 申请人:{applicant} 安全主管:{supervisor}\n"
+                    f"风险:{data.risk_level} 浓度:{data.gas_concentration}\n"
+                    f"隐患明细:\n{issue_lines}")
 
-        elif data.approval_level == "禁止作业":
-            for issue in data.issues:
-                msg = (f"【🚫禁止作业】{data.station_name} 票号:{data.ticket_id}\n"
-                       f"隐患:{issue.item_name}({issue.raw_text or '无备注'})\n"
-                       f"风险:{data.risk_level} 浓度:{data.gas_concentration}\n"
-                       f"签批:{data.approver_name or '未知'}")
-                if cfg.get("wechat_webhook"):
-                    self.tools.send_wechat_alert(msg)
-                if cfg.get("dingtalk_webhook"):
-                    self.tools.send_dingtalk_alert(msg)
-            if not cfg.get("wechat_webhook"):
-                print("[Agent Act] ⚠️ 企业微信 Webhook 未配置，跳过推送。")
-            if not cfg.get("dingtalk_webhook"):
-                print("[Agent Act] ⚠️ 钉钉 Webhook 未配置，跳过推送。")
-            notify_result = f"企业微信+钉钉双通道预警 ({len(data.issues)}条隐患)"
-            print(f"[Agent Act] ⑥ {notify_result}")
+        # 企业微信推送
+        if cfg.get("wechat_webhook"):
+            wx_body = body.replace("\n", "\n> ")  # markdown 格式
+            self.tools.send_wechat_alert(f"### {title}\n> {wx_body}")
+            print("[Agent Act] ⑥ 企业微信 → 已推送")
+        else:
+            print("[Agent Act] ⚠️ 企业微信 Webhook 未配置，跳过推送。")
 
-        mem.remember("执行", "📤", "分级通知", notify_result)
+        # 钉钉推送
+        if cfg.get("dingtalk_webhook"):
+            self.tools.send_dingtalk_alert(body)
+            print("[Agent Act] ⑥ 钉钉 → 已推送")
+        else:
+            print("[Agent Act] ⚠️ 钉钉 Webhook 未配置，跳过推送。")
+
+        notify_result = f"{title} → 企微+钉钉通知 申请人:{applicant} 安全主管:{supervisor}"
+        print(f"[Agent Act] ⑥ {notify_result}")
+        mem.remember("执行", "📤", "双通道通知", notify_result)
 
     def _report(self, mem: AgentMemory, data: SecuritySheetData = None):
         print(f"[Agent Report] ===== 决策链报告 =====")
