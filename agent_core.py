@@ -651,6 +651,7 @@ class AgentTools:
             if brain is None:
                 raise RuntimeError("视觉大模型模式需要配置 LLM API")
             _prog(10, "视觉大模型读图中...")
+            AgentTools._last_ocr_raw = ""
             return AgentTools._vision_llm_ocr(image_path, brain)
 
         # ---- GOT-OCR 2.0：专用文档 OCR ----
@@ -658,6 +659,7 @@ class AgentTools:
             if brain is None:
                 raise RuntimeError("GOT-OCR 模式需要配置 LLM API")
             _prog(10, "GOT-OCR 识别中...")
+            AgentTools._last_ocr_raw = ""
             return AgentTools._got_ocr(image_path, brain)
 
         # ---- Surya-OCR：用 Surya 替代 PaddleOCR 做基础识别 ----
@@ -691,6 +693,7 @@ class AgentTools:
                 print("[Tool] 精确识别无结果，回退坐标聚类。")
                 mode = "cluster"
             else:
+                AgentTools._last_ocr_raw = ""  # 清除旧 raw，让前端走 HTML 渲染
                 return table_text
 
         # 测试模式
@@ -700,6 +703,7 @@ class AgentTools:
                 print("[Tool] 测试模式无结果，回退坐标聚类。")
                 mode = "cluster"
             else:
+                AgentTools._last_ocr_raw = ""
                 return table_text
 
         # 基础 OCR 模式
