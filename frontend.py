@@ -79,7 +79,7 @@ with st.sidebar:
         "精细网格（列对齐）": "grid",
         "自适应边框检测": "adaptive",
         "多方向检测": "multidir",
-        "精确表格识别（PaddleStructure）": "precise",
+        "坐标聚类（精确增强）": "precise",
         "测试模式（高精度三步还原）": "test",
     }
     ocr_mode_label = st.selectbox(
