@@ -23,6 +23,12 @@ RISK_ST_COLOR = {
     "重大": "red", "较大": "orange",
     "一般": "orange", "低风险": "green",
 }
+APPROVAL_COLOR = {
+    "自动通过": "#059669", "待审批": "#0052CC", "已驳回": "#d6131c",
+}
+APPROVAL_ICON = {
+    "自动通过": "✅", "待审批": "⏳", "已驳回": "🚫",
+}
 
 
 # ============================================================
@@ -74,20 +80,26 @@ def render_ticket_kpis(d) -> None:
     status_color = "#d6131c" if d.has_abnormal else "#059669"
     status_text = f"{len(d.issues)}项" if d.has_abnormal else "正常"
     conc_text = ", ".join(f"{v}%" for v in d.gas_concentration) or "无"
+    ap_status = d.approval_status or "-"
+    ap_color = APPROVAL_COLOR.get(ap_status, "#0052CC")
 
     render_kpi_row([
         ("票号", d.ticket_id, ""),
         ("状态", status_text, status_color),
-        ("措施", str(len(d.safety_measures)), ""),
         ("风险", rl, RISK_COLOR.get(rl, "#0052CC")),
         ("浓度", conc_text, ""),
+        ("审批", ap_status, ap_color),
     ])
 
     # 审批建议
     if d.approval_opinion:
-        ic = RISK_ICON.get(d.risk_level or "", "")
-        alert = st.warning if d.has_abnormal else st.success
-        alert(f"{ic} {d.approval_opinion}")
+        ic = APPROVAL_ICON.get(ap_status, RISK_ICON.get(d.risk_level or "", ""))
+        if ap_status == "已驳回":
+            st.error(f"{ic} {d.approval_opinion}")
+        elif ap_status == "待审批":
+            st.warning(f"{ic} {d.approval_opinion}")
+        else:
+            st.success(f"{ic} {d.approval_opinion}")
 
 
 def render_guide(step: int, text: str) -> None:

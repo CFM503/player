@@ -216,6 +216,8 @@ class SecuritySheetData(BaseModel):
     approver_name: Optional[str] = Field(None, description="签批人/负责人姓名")
     approval_opinion: Optional[str] = Field(None, description="自动生成的审批建议")
     risk_level: Optional[str] = Field(None, description="风险等级：重大/较大/一般/低风险")
+    approval_status: Optional[str] = Field(None, description="审批状态：自动通过/待审批/已驳回")
+    approval_level: Optional[str] = Field(None, description="审批路由级别：自动通过/主管审批/禁止作业")
 
 
 # ==========================================
@@ -988,7 +990,8 @@ class AgentTools:
 
         # 自动迁移：给旧表补列
         existing = {row[1] for row in conn.execute("PRAGMA table_info(hse_fire_work_tickets)").fetchall()}
-        for col, typ in [("approval_opinion", "TEXT"), ("risk_level", "TEXT"), ("image_path", "TEXT")]:
+        for col, typ in [("approval_opinion", "TEXT"), ("risk_level", "TEXT"), ("image_path", "TEXT"),
+                         ("approval_status", "TEXT"), ("approval_level", "TEXT")]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE hse_fire_work_tickets ADD COLUMN {col} {typ}")
                 print(f"[Tool] 旧表迁移：新增列 {col}")
@@ -997,15 +1000,17 @@ class AgentTools:
             "INSERT INTO hse_fire_work_tickets "
             "(ticket_id,station_name,content,worker_id,check_date,"
             "gas_concentration_json,safety_measures_json,has_abnormal,"
-            "issues_json,completion_time,approver_name,approval_opinion,risk_level,raw_ocr_text,image_path) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "issues_json,completion_time,approver_name,approval_opinion,risk_level,"
+            "approval_status,approval_level,raw_ocr_text,image_path) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (data.ticket_id, data.station_name, data.content, data.worker_id,
              data.check_date, json.dumps(data.gas_concentration, ensure_ascii=False),
              json.dumps([m.model_dump() for m in data.safety_measures], ensure_ascii=False),
              int(data.has_abnormal),
              json.dumps([i.model_dump() for i in data.issues], ensure_ascii=False),
              data.completion_time, data.approver_name, data.approval_opinion,
-             data.risk_level, raw_ocr, image_path),
+             data.risk_level, data.approval_status, data.approval_level,
+             raw_ocr, image_path),
         )
         conn.commit()
         conn.close()
@@ -1328,46 +1333,113 @@ class SecurityAgent:
         return f"【暂缓作业】{detail}。依据{std_name}，请整改后重新提交。"
 
     def _act(self, data: SecuritySheetData, ocr_text: str, mem: AgentMemory, image_path: str = ""):
-        print("[Agent Act] 执行工具组合...")
+        print("[Agent Act] ⚡ 执行 L3 条件路由审批...")
+        mem.remember("执行", "⚡", "L3 条件路由审批", "开始分级审核流程")
 
-        # 检查通知渠道配置
-        cfg = load_config()
-        if not cfg.get("dingtalk_webhook"):
-            print("[Agent Act] ⚠️ 钉钉 Webhook 未配置，跳过钉钉推送。")
-        if not cfg.get("wechat_webhook"):
-            print("[Agent Act] ⚠️ 企业微信 Webhook 未配置，跳过微信推送。")
-
-        # 天气检查
+        # ---- ① 天气检查 ----
+        print("[Agent Act] ① 天气检查...")
         weather = self.tools.check_weather_tool("牡丹江")
-        if weather.get("issues"):
-            for w in weather["issues"]:
-                mem.remember("执行", "⛅", "天气检查", w, status="retry")
-
-        # 生成审批建议（含天气信息）
-        data.approval_opinion = self._generate_approval(data, weather)
-        print(f"[Agent Act] 审批建议: {data.approval_opinion[:80]}...")
-
-        self.tools.save_to_db(data, raw_ocr=ocr_text, image_path=image_path)
-
-        if data.has_abnormal:
-            for issue in data.issues:
-                msg = (f"【{data.station_name}】票号:{data.ticket_id} "
-                       f"隐患:{issue.item_name}({issue.raw_text or '无备注'}) "
-                       f"浓度:{data.gas_concentration} 签批:{data.approver_name or '未知'}")
-                self.tools.send_wechat_alert(msg)
-                self.tools.send_dingtalk_alert(msg)
-            summary = "SQLite + 企业微信/钉钉预警 (共3个工具)"
+        weather_ok = weather.get("ok", True)
+        if weather_ok:
+            print("[Agent Act] ① 天气检查 → 正常")
+            mem.remember("执行", "⛅", "天气检查", f"{weather.get('weather','未知')} {weather.get('temp_c','?')}℃ 风力{weather.get('wind_level','?')}级 → 正常")
         else:
-            summary = "SQLite (无隐患，跳过预警)"
+            issues_str = "；".join(weather.get("issues", []))
+            print(f"[Agent Act] ① 天气检查 → 异常: {issues_str}")
+            mem.remember("执行", "⛅", "天气检查", f"异常: {issues_str}", status="retry")
 
-        print(f"[Agent Act] {summary}")
-        mem.remember("执行", "⚡", "自主选择工具", summary)
+        # ---- ② 风险评估 ----
+        print("[Agent Act] ② 风险评估...")
+        if data.has_abnormal:
+            data.risk_level = self._assess_risk_level(data)
+        else:
+            data.risk_level = "低风险"
+        unimpl_count = len([m for m in data.safety_measures if not m.implemented])
+        conc_vals = [v for v in data.gas_concentration if v > 0]
+        max_conc = max(conc_vals) if conc_vals else 0
+        print(f"[Agent Act] ② 风险评估 → {data.risk_level} (未落实{unimpl_count}项, 最高浓度{max_conc}%, 隐患{len(data.issues)}条)")
+        mem.remember("执行", "📊", "风险评估", f"{data.risk_level} | 未落实{unimpl_count}项 | 浓度{max_conc}% | 隐患{len(data.issues)}条")
 
-    def _report(self, mem: AgentMemory):
+        # ---- ③ L3 路由决策 ----
+        print("[Agent Act] ③ L3 路由决策...")
+        weather_blocked = not weather_ok and any("禁止" in i for i in weather.get("issues", []))
+
+        if data.risk_level == "低风险" and weather_ok:
+            data.approval_level = "自动通过"
+            data.approval_status = "自动通过"
+            route_desc = "低风险 + 天气正常 → ✅ 自动通过"
+        elif data.risk_level in ("较大", "重大") or weather_blocked:
+            data.approval_level = "禁止作业"
+            data.approval_status = "已驳回"
+            reason = f"风险{data.risk_level}" if not weather_blocked else "天气禁止作业"
+            route_desc = f"{reason} → 🚫 禁止作业，需安全负责人介入"
+        else:
+            data.approval_level = "主管审批"
+            data.approval_status = "待审批"
+            route_desc = f"风险{data.risk_level} → ⏳ 推送主管审批"
+        print(f"[Agent Act] ③ L3 路由决策 → {route_desc}")
+        mem.remember("执行", "🔀", "L3 路由决策", route_desc)
+
+        # ---- ④ 生成审批建议 ----
+        print("[Agent Act] ④ 生成审批建议...")
+        data.approval_opinion = self._generate_approval(data, weather)
+        print(f"[Agent Act] ④ 审批建议: {data.approval_opinion[:80]}...")
+        mem.remember("执行", "📝", "生成审批建议", data.approval_opinion[:60])
+
+        # ---- ⑤ 数据入库 ----
+        print("[Agent Act] ⑤ 数据入库...")
+        self.tools.save_to_db(data, raw_ocr=ocr_text, image_path=image_path)
+        print(f"[Agent Act] ⑤ 已存入 SQLite: {data.ticket_id}")
+        mem.remember("执行", "💾", "数据入库", f"票号 {data.ticket_id} 已存入 SQLite")
+
+        # ---- ⑥ 分级通知 ----
+        print("[Agent Act] ⑥ 分级通知...")
+        cfg = load_config()
+        notify_result = ""
+
+        if data.approval_level == "自动通过":
+            notify_result = "低风险自动通过，无需推送通知"
+            print(f"[Agent Act] ⑥ {notify_result}")
+
+        elif data.approval_level == "主管审批":
+            msg = (f"【待审批】{data.station_name} 票号:{data.ticket_id}\n"
+                   f"风险:{data.risk_level} 浓度:{data.gas_concentration}\n"
+                   f"签批:{data.approver_name or '未知'}")
+            if cfg.get("wechat_webhook"):
+                self.tools.send_wechat_alert(msg)
+                notify_result += "企业微信✓ "
+            else:
+                notify_result += "企业微信(未配置) "
+                print("[Agent Act] ⚠️ 企业微信 Webhook 未配置，跳过推送。")
+            notify_result += "→ 通知主管审批"
+            print(f"[Agent Act] ⑥ {notify_result}")
+
+        elif data.approval_level == "禁止作业":
+            for issue in data.issues:
+                msg = (f"【🚫禁止作业】{data.station_name} 票号:{data.ticket_id}\n"
+                       f"隐患:{issue.item_name}({issue.raw_text or '无备注'})\n"
+                       f"风险:{data.risk_level} 浓度:{data.gas_concentration}\n"
+                       f"签批:{data.approver_name or '未知'}")
+                if cfg.get("wechat_webhook"):
+                    self.tools.send_wechat_alert(msg)
+                if cfg.get("dingtalk_webhook"):
+                    self.tools.send_dingtalk_alert(msg)
+            if not cfg.get("wechat_webhook"):
+                print("[Agent Act] ⚠️ 企业微信 Webhook 未配置，跳过推送。")
+            if not cfg.get("dingtalk_webhook"):
+                print("[Agent Act] ⚠️ 钉钉 Webhook 未配置，跳过推送。")
+            notify_result = f"企业微信+钉钉双通道预警 ({len(data.issues)}条隐患)"
+            print(f"[Agent Act] ⑥ {notify_result}")
+
+        mem.remember("执行", "📤", "分级通知", notify_result)
+
+    def _report(self, mem: AgentMemory, data: SecuritySheetData = None):
         print(f"[Agent Report] ===== 决策链报告 =====")
         print(mem.get_summary())
+        if data and data.approval_status:
+            print(f"[Agent Report] 🔖 最终审批: {data.approval_status} ({data.approval_level})")
         print(f"[Agent Report] ===== {len(mem.steps)} 阶段完成 =====")
-        mem.remember("总结", "📊", "输出决策链报告", f"{len(mem.steps)}阶段完成")
+        mem.remember("总结", "📊", "输出决策链报告", f"{len(mem.steps)}阶段完成 | 审批: {data.approval_status if data else '-'}")
 
     def run(self, image_path: str, ocr_mode: str = None, progress_callback=None):
         """运行完整 ReAct 循环，返回 (ocr_text, structured_data)"""
@@ -1391,7 +1463,7 @@ class SecurityAgent:
 
         elapsed = time.time() - t0
         print(f"[Agent] 全流程耗时: {elapsed:.1f}s")
-        self._report(mem)
+        self._report(mem, data)
         if prog: prog(100, "完成")
         return ocr_text, data
 

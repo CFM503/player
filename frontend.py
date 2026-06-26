@@ -368,11 +368,11 @@ with tab1:
                     nc1, nc2 = st.columns(2)
                     with nc1:
                         def _dt_fmt(d):
-                            return ("text", f"【安全数字监督员】\n票号: {d.ticket_id}\n场站: {d.station_name}\n状态: {'有隐患' if d.has_abnormal else '正常'}\n风险: {d.risk_level or '-'}\n审批: {d.approval_opinion or '-'}")
+                            return ("text", f"【安全数字监督员】\n票号: {d.ticket_id}\n场站: {d.station_name}\n状态: {'有隐患' if d.has_abnormal else '正常'}\n风险: {d.risk_level or '-'}\n审批: {d.approval_status or '-'}\n建议: {d.approval_opinion or '-'}")
                         render_notification_btn("钉钉", "📱", "dingtalk_webhook", _dt_fmt, d, idx, _cfg)
                     with nc2:
                         def _wx_fmt(d):
-                            return ("markdown", f"**【安全数字监督员】**\n> 票号: {d.ticket_id}\n> 场站: {d.station_name}\n> 状态: {'有隐患' if d.has_abnormal else '正常'}\n> 风险: {d.risk_level or '-'}\n> 审批: {d.approval_opinion or '-'}")
+                            return ("markdown", f"**【安全数字监督员】**\n> 票号: {d.ticket_id}\n> 场站: {d.station_name}\n> 状态: {'有隐患' if d.has_abnormal else '正常'}\n> 风险: {d.risk_level or '-'}\n> 审批: {d.approval_status or '-'}\n> 建议: {d.approval_opinion or '-'}")
                         render_notification_btn("微信", "💬", "wechat_webhook", _wx_fmt, d, idx, _cfg)
 
                     # OCR + 隐患（折叠）
@@ -412,7 +412,7 @@ with tab1:
         if len(st.session_state.results) > 1:
             abn = sum(1 for r in st.session_state.results if r["data"].has_abnormal)
             st.markdown(f"**📊 汇总** {len(st.session_state.results)}张 {badge('正常'+str(len(st.session_state.results)-abn), 'ok')} {badge('隐患'+str(abn), 'err' if abn else 'ok')}", unsafe_allow_html=True)
-            rows = [{"票号": r["data"].ticket_id, "场站": r["data"].station_name, "状态": "有隐患" if r["data"].has_abnormal else "正常", "风险": r["data"].risk_level or "-"} for r in st.session_state.results]
+            rows = [{"票号": r["data"].ticket_id, "场站": r["data"].station_name, "状态": "有隐患" if r["data"].has_abnormal else "正常", "风险": r["data"].risk_level or "-", "审批": r["data"].approval_status or "-"} for r in st.session_state.results]
             st.dataframe(pd.DataFrame(rows), width="stretch", height=min(len(rows)*28+30, 200))
 
 
@@ -427,9 +427,9 @@ with tab2:
     else:
         conn = sqlite3.connect(db_path)
         try:
-            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,approval_opinion,risk_level,created_at,image_path FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
+            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,approval_opinion,risk_level,approval_status,approval_level,created_at,image_path FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
         except Exception:
-            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,'','',created_at,'' FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
+            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,'','','','','',created_at,'' FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
 
         total = len(rows_db)
         abn_cnt = sum(1 for r in rows_db if r[5])
@@ -486,7 +486,7 @@ with tab2:
 
         # 记录列表（搜索过滤）
         for row in rows_db:
-            rid, ticket, station, worker, date, abnormal, opinion, risk, created, img_path = row
+            rid, ticket, station, worker, date, abnormal, opinion, risk, ap_status, ap_level, created, img_path = row
             if search and search.lower() not in (ticket or "").lower():
                 continue
             icon = "🚨" if abnormal else "✅"
@@ -500,8 +500,9 @@ with tab2:
                     with cb:
                         st.markdown(f"**状态** {'🔴 有隐患' if abnormal else '🟢 正常'}")
                         if risk: st.markdown(f"**风险** {risk}")
+                        if ap_status: st.markdown(f"**审批** {ap_status}")
                         st.caption(f"处理: {created}")
-                        if opinion: st.caption(f"审批: {opinion}")
+                        if opinion: st.caption(f"建议: {opinion}")
                     # 查看原图 + 下载按钮
                     if img_path and os.path.exists(img_path):
                         dc1, dc2 = st.columns(2)
