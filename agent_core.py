@@ -539,7 +539,74 @@ class AgentTools:
         return entries
 
     @staticmethod
-    def ocr_tool(image_path: str, mode: str = "cluster", brain=None, progress_callback=None) -> str:
+    def _vision_llm_ocr(image_path: str, brain) -> str:
+        """视觉大模型直接读图识别表格，一步完成结构+文字+符号"""
+        import base64
+        with open(image_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        prompt = (
+            "请识别这张表格图片中的全部内容，输出 Markdown 表格格式。\n"
+            "要求：\n"
+            "1. 保留所有勾选符号（✓、×、√、X），准确填入对应单元格\n"
+            "2. 合并单元格用 Markdown 标准语法表达，保持行列对齐\n"
+            "3. 手写体文字标注（手写）\n"
+            "4. 仅输出 Markdown，不要解释"
+        )
+        print("[Tool] Vision LLM: 读图识别表格...")
+        resp = brain.client.chat.completions.create(
+            model=brain.model_name,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+            temperature=0.1,
+            max_tokens=8192,
+            timeout=120,
+        )
+        md = resp.choices[0].message.content.strip()
+        print(f"[Tool] Vision LLM done, {len(md)} chars.")
+        return md
+
+    @staticmethod
+    def _surya_ocr(image_path: str) -> list:
+        """Surya-OCR 文字识别，返回与 PaddleOCR 相同格式的 entries"""
+        try:
+            from surya.detection import DetectionPredictor
+            from surya.recognition import RecognitionPredictor
+            from PIL import Image
+        except ImportError:
+            raise ImportError("Surya-OCR 未安装，请运行: pip install surya-ocr")
+
+        print("[Tool] Surya-OCR: 加载模型...")
+        det = DetectionPredictor()
+        rec = RecognitionPredictor()
+        image = Image.open(image_path)
+
+        print("[Tool] Surya-OCR: 文字检测...")
+        det_result = det.predict([image])
+        print("[Tool] Surya-OCR: 文字识别...")
+        rec_result = rec.predict([image], det_result)
+
+        entries = []
+        for item in rec_result[0]:
+            text = item.text if hasattr(item, "text") else str(item)
+            bbox = item.bbox if hasattr(item, "bbox") else None
+            if bbox:
+                y_center = (bbox[1] + bbox[3]) / 2
+                x_left = bbox[0]
+                height = abs(bbox[3] - bbox[1])
+                width = abs(bbox[2] - bbox[0])
+            else:
+                y_center, x_left, height, width = 0, 0, 20, 0
+            entries.append({"text": text, "y": y_center, "x": x_left, "h": height, "w": width})
+        print(f"[Tool] Surya-OCR done, {len(entries)} entries.")
+        return entries
+
+    @staticmethod
+    def ocr_tool(image_path: str, mode: str = "cluster", brain=None, progress_callback=None, engine: str = "paddleocr") -> str:
         """PaddleOCR 文字识别，支持五种表格处理策略（基于 PaddlePaddle）"""
         def _prog(pct, msg):
             if progress_callback:
@@ -550,9 +617,31 @@ class AgentTools:
             "adaptive": "自适应边框检测", "multidir": "多方向检测",
             "precise": "精确表格识别", "test": "测试模式",
         }
-        print(f"[Tool] OCR 模式: {mode_labels.get(mode, mode)}")
+        print(f"[Tool] OCR 模式: {mode_labels.get(mode, mode)} | 引擎: {engine}")
 
-        # ---- PaddlePaddle 3.x PIR+OneDNN 兼容补丁 ----
+        # ---- 视觉大模型：直接读图，跳过 PaddleOCR ----
+        if engine == "vision":
+            if brain is None:
+                raise RuntimeError("视觉大模型模式需要配置 LLM API")
+            _prog(10, "视觉大模型读图中...")
+            return AgentTools._vision_llm_ocr(image_path, brain)
+
+        # ---- Surya-OCR：用 Surya 替代 PaddleOCR 做基础识别 ----
+        if engine == "surya":
+            entries = AgentTools._surya_ocr(image_path)
+            if not entries:
+                raise RuntimeError(f"Surya-OCR 未能识别任何文字: {image_path}")
+            _prog(52, "表格格式化")
+            if mode == "grid":
+                return AgentTools._format_table_grid(entries)
+            elif mode == "adaptive":
+                return AgentTools._format_table_adaptive(image_path, entries)
+            elif mode == "multidir":
+                return AgentTools._format_table_multidir(entries)
+            else:
+                return AgentTools._format_table(entries)
+
+        # ---- PaddleOCR 引擎（默认） ----
         import paddle.inference as _pi
         if not getattr(_pi.Config, "_patched_for_onednn", False):
             _orig_new_ir = _pi.Config.enable_new_ir
@@ -1284,10 +1373,11 @@ class SecurityAgent:
 
     MAX_REFLECT_RETRIES = 2
 
-    def __init__(self, brain: LLMBrain, ocr_mode: str = "cluster", progress_callback=None):
+    def __init__(self, brain: LLMBrain, ocr_mode: str = "cluster", ocr_engine: str = "paddleocr", progress_callback=None):
         self.brain = brain
         self.tools = AgentTools()
         self.ocr_mode = ocr_mode
+        self.ocr_engine = ocr_engine
         self._progress = progress_callback
 
     def _plan(self, image_path: str, mem: AgentMemory):
@@ -1304,7 +1394,7 @@ class SecurityAgent:
         prog = self._progress
         if prog: prog(5, "图像预处理")
         print("[Agent Perceive] OpenCV + PaddleOCR 感知...")
-        text = self.tools.ocr_tool(image_path, mode=self.ocr_mode, brain=self.brain, progress_callback=prog)
+        text = self.tools.ocr_tool(image_path, mode=self.ocr_mode, brain=self.brain, progress_callback=prog, engine=self.ocr_engine)
         n = len(text.strip().split("\n"))
         summary = f"提取 {n} 行文本"
         print(f"[Agent Perceive] {summary}")

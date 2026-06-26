@@ -90,6 +90,26 @@ with st.sidebar:
     )
     ocr_mode = _ocr_modes[ocr_mode_label]
 
+    # OCR 引擎选择
+    _ocr_engines = {
+        "本地 PaddleOCR": "paddleocr",
+        "视觉大模型": "vision",
+        "Surya-OCR": "surya",
+    }
+    ocr_engine_label = st.selectbox(
+        "🔍 OCR 引擎",
+        list(_ocr_engines.keys()),
+        index=0,
+        help="本地 PaddleOCR：默认，本地推理，支持全部6种表格模式\n"
+             "视觉大模型：调用 VL 模型（如 Qwen-VL）直接读图识别，一步完成结构+文字+符号\n"
+             "Surya-OCR：开源 OCR 引擎，对符号和手写体支持较好",
+    )
+    ocr_engine = _ocr_engines[ocr_engine_label]
+    if ocr_engine == "surya":
+        st.caption("⚠️ 需安装 surya-ocr: pip install surya-ocr")
+    if ocr_engine == "vision":
+        st.caption("💡 需配置支持视觉的 API（如 Qwen-VL、GPT-4o）")
+
     # 设置面板
     st.markdown("---")
     with st.expander("⚙️ 通知设置", expanded=False):
@@ -224,7 +244,7 @@ with tab1:
 
         from agent_core import SecurityAgent, LLMBrain, AgentTools
         brain = LLMBrain(api_key=api_key, base_url=base_url, model_name=model_name)
-        agent = SecurityAgent(brain=brain, ocr_mode=ocr_mode)
+        agent = SecurityAgent(brain=brain, ocr_mode=ocr_mode, ocr_engine=ocr_engine)
         st.session_state.results = []
 
         # ---- 上传保存进度 ----
