@@ -1,5 +1,10 @@
 # 更新日志 (CHANGELOG)
 
+## [3.6.0] - 2026-06-26
+
+### 新增
+- **test 模式双路合并**：PaddleX 表格结构 + PaddleOCR 文字识别双路并行，PaddleOCR 检测到的 √/× 等小符号按 bbox 坐标自动填入 PaddleX HTML 的空单元格，解决 PaddleX 内部 pipeline 丢失确认符号的问题。合并逻辑优先匹配含符号的 OCR 条目，并打印补充数量。
+
 ## [3.5.3] - 2026-06-26
 
 ### 新增
