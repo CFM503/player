@@ -1401,21 +1401,21 @@ class SecurityAgent:
         # 按路由级别构建消息
         if data.approval_level == "自动通过":
             title = "✅ 自动通过"
-            body = (f"【{title}】{data.station_name}\n"
-                    f"票号:{data.ticket_id} 申请人:{applicant} 安全主管:{supervisor}\n"
+            body = (f"【{title}】{data.ticket_id}\n"
+                    f"场站:{data.station_name} 申请人:{applicant} 安全主管:{supervisor}\n"
                     f"风险:{data.risk_level} 浓度:{data.gas_concentration}\n"
                     f"状态:低风险，已自动审批通过")
         elif data.approval_level == "主管审批":
             title = "⏳ 待主管审批"
-            body = (f"【{title}】{data.station_name}\n"
-                    f"票号:{data.ticket_id} 申请人:{applicant} 安全主管:{supervisor}\n"
+            body = (f"【{title}】{data.ticket_id}\n"
+                    f"场站:{data.station_name} 申请人:{applicant} 安全主管:{supervisor}\n"
                     f"风险:{data.risk_level} 浓度:{data.gas_concentration}\n"
                     f"状态:需安全主管审批后方可作业")
         else:
             title = "🚫 禁止作业"
             issue_lines = "\n".join(f"  ·{i.item_name}({i.raw_text or '异常'})" for i in data.issues[:5])
-            body = (f"【{title}】{data.station_name}\n"
-                    f"票号:{data.ticket_id} 申请人:{applicant} 安全主管:{supervisor}\n"
+            body = (f"【{title}】{data.ticket_id}\n"
+                    f"场站:{data.station_name} 申请人:{applicant} 安全主管:{supervisor}\n"
                     f"风险:{data.risk_level} 浓度:{data.gas_concentration}\n"
                     f"隐患明细:\n{issue_lines}")
 
