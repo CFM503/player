@@ -643,6 +643,7 @@ class AgentTools:
             "cluster": "坐标聚类",
             "adaptive": "自适应边框检测",
             "precise": "精确增强",
+            "test": "测试模式",
         }
         print(f"[Tool] OCR 模式: {mode_labels.get(mode, mode)} | 引擎: {engine}")
 
@@ -690,6 +691,16 @@ class AgentTools:
                 mode = "cluster"
             else:
                 AgentTools._last_ocr_raw = ""  # 清除旧 raw，让前端走 HTML 渲染
+                return table_text
+
+        # 测试模式（与 precise 相同逻辑）
+        if mode == "test":
+            table_text = AgentTools._format_table_precise(image_path, brain)
+            if not table_text:
+                print("[Tool] 测试模式无结果，回退坐标聚类。")
+                mode = "cluster"
+            else:
+                AgentTools._last_ocr_raw = ""
                 return table_text
 
         # 基础 OCR 模式

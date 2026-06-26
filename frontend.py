@@ -78,6 +78,7 @@ with st.sidebar:
         "坐标聚类（默认）": "cluster",
         "自适应边框检测": "adaptive",
         "坐标聚类（精确增强）": "precise",
+        "测试模式": "test",
     }
     ocr_mode_label = st.selectbox(
         "📋 OCR 表格模式",
