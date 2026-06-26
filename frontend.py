@@ -112,20 +112,22 @@ with st.sidebar:
     if ocr_engine in ("vision", "got"):
         st.caption("💡 需配置支持视觉的 API（如 Qwen-VL / GOT-OCR / GPT-4o）")
 
-    # 设置面板
+    # 保存设置按钮（始终可见）
     st.markdown("---")
+    if st.button("💾 保存设置", width="stretch"):
+        _cfg["api_key"] = api_key
+        _cfg["base_url"] = base_url
+        _cfg["model_name"] = model_name
+        _cfg["wechat_webhook"] = st.session_state.get("_wx", _cfg.get("wechat_webhook", ""))
+        _cfg["dingtalk_webhook"] = st.session_state.get("_dd", _cfg.get("dingtalk_webhook", ""))
+        with open(_cfg_path, "w", encoding="utf-8") as f:
+            json.dump(_cfg, f, ensure_ascii=False, indent=2)
+        st.success("已保存")
+
+    # 通知设置面板
     with st.expander("⚙️ 通知设置", expanded=False):
-        wechat_webhook = st.text_input("企业微信 Webhook", _cfg.get("wechat_webhook", ""), type="password", help="企业微信群机器人 Webhook 地址")
-        dingtalk_webhook = st.text_input("钉钉 Webhook", _cfg.get("dingtalk_webhook", ""), type="password", help="钉钉群机器人 Webhook 地址")
-        if st.button("💾 保存设置", width="stretch"):
-            _cfg["api_key"] = api_key
-            _cfg["base_url"] = base_url
-            _cfg["model_name"] = model_name
-            _cfg["wechat_webhook"] = wechat_webhook
-            _cfg["dingtalk_webhook"] = dingtalk_webhook
-            with open(_cfg_path, "w", encoding="utf-8") as f:
-                json.dump(_cfg, f, ensure_ascii=False, indent=2)
-            st.success("已保存")
+        wechat_webhook = st.text_input("企业微信 Webhook", _cfg.get("wechat_webhook", ""), type="password", help="企业微信群机器人 Webhook 地址", key="_wx")
+        dingtalk_webhook = st.text_input("钉钉 Webhook", _cfg.get("dingtalk_webhook", ""), type="password", help="钉钉群机器人 Webhook 地址", key="_dd")
 
 # ---- 主面板：Hero 横幅 ----
 _status_ok = bool(api_key)
