@@ -875,47 +875,94 @@ class AgentTools:
 
     @staticmethod
     def _format_table_precise(image_path: str, brain=None) -> str:
-        """精确表格识别：PaddleStructure 表格结构识别 + LLM Markdown 还原"""
-        import os as _os
-        _os.environ.setdefault("FLAGS_download_tool", "wget")
-        _os.environ.setdefault("PADDLE_PDX_SOURCE_HOME", "https://paddle-model-ecology.bj.bcebos.com")
-        _os.environ.setdefault("PADDLEX_PDX_MODEL_SOURCE", "https://paddle-model-ecology.bj.bcebos.com")
-        _os.environ.setdefault("FLAGS_use_gpu", "0")  # 强制 CPU，避免 GPU 初始化卡顿
+        """精确表格识别：OpenCV 边框检测 + PaddleOCR 文字识别，输出 HTML"""
+        import cv2
+        import numpy as np
 
-        print("[Tool] PaddleStructure 表格识别...")
-        try:
-            from paddlex import create_pipeline
-            pipe = create_pipeline("table_recognition", engine_config={"enable_new_ir": False})
-        except Exception as ex:
-            print(f"[Tool] PaddleStructure 模型加载失败: {ex}，回退坐标聚类")
+        # PaddleOCR 文字识别
+        from paddleocr import PaddleOCR
+        print("[Tool] Precise: PaddleOCR 识别...")
+        ocr = PaddleOCR(lang="ch")
+        entries = AgentTools._ocr_entries_basic(image_path, ocr)
+        if not entries:
+            print("[Tool] Precise: OCR 无结果")
             return ""
 
-        hb = _Heartbeat("table recognition")
-        hb.start()
-        import time as _time
-        _t0 = _time.time()
-        try:
-            result = list(pipe(image_path))
-        except Exception as ex:
-            hb.stop()
-            print(f"[Tool] PaddleStructure 推理失败 ({_time.time()-_t0:.1f}s): {ex}，回退坐标聚类")
+        # OpenCV 边框检测
+        print("[Tool] Precise: OpenCV 边框检测...")
+        img = cv2.imread(image_path)
+        if img is None:
+            print("[Tool] Precise: 图片读取失败")
             return ""
-        hb.stop()
-        print(f"[Tool] PaddleStructure 推理完成 ({_time.time()-_t0:.1f}s)，{len(result)} 个结果。")
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        bw = cv2.adaptiveThreshold(~gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 15, -2)
+        h, w = bw.shape
 
-        if not result:
-            print("[Tool] PaddleStructure 未检测到表格，回退坐标聚类")
+        h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(w // 30, 1), 1))
+        h_lines = cv2.morphologyEx(bw, cv2.MORPH_OPEN, h_kernel)
+        h_lines = cv2.dilate(h_lines, h_kernel, iterations=1)
+
+        v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(h // 30, 1)))
+        v_lines = cv2.morphologyEx(bw, cv2.MORPH_OPEN, v_kernel)
+        v_lines = cv2.dilate(v_lines, v_kernel, iterations=1)
+
+        h_proj = np.sum(h_lines, axis=1)
+        v_proj = np.sum(v_lines, axis=0)
+        h_thresh = w * 128 * 0.3
+        v_thresh = h * 128 * 0.3
+        row_splits = [i for i in range(len(h_proj)) if h_proj[i] > h_thresh]
+        col_splits = [i for i in range(len(v_proj)) if v_proj[i] > v_thresh]
+
+        def merge_splits(splits, min_gap=10):
+            if not splits:
+                return []
+            groups = [[splits[0]]]
+            for s in splits[1:]:
+                if s - groups[-1][-1] < min_gap:
+                    groups[-1].append(s)
+                else:
+                    groups.append([s])
+            return [int(np.mean(g)) for g in groups]
+
+        row_splits = merge_splits(row_splits)
+        col_splits = merge_splits(col_splits)
+
+        if len(row_splits) < 2 or len(col_splits) < 2:
+            print("[Tool] Precise: 未检测到表格线段，回退坐标聚类")
             return ""
 
-        # 合并所有识别到的表格 HTML
-        html_dict = result[0].html if hasattr(result[0], "html") else {}
-        html_parts = [v for v in html_dict.values() if v]
-        if not html_parts:
-            print("[Tool] PaddleStructure 表格 HTML 为空，回退坐标聚类")
-            return ""
+        # 映射 OCR 文本到单元格
+        def find_cell(pos, splits):
+            for i in range(len(splits) - 1):
+                if splits[i] <= pos <= splits[i + 1]:
+                    return i
+            return 0 if pos < splits[0] else len(splits) - 2
 
-        table_html = "\n".join(html_parts)
-        print(f"[Tool] PaddleStructure 表格识别完成，{len(html_parts)} 个表格，{len(table_html)} 字符 HTML。")
+        grid = {}
+        for e in entries:
+            r = find_cell(e["y"], row_splits)
+            c = find_cell(e["x"], col_splits)
+            key = (r, c)
+            if key in grid:
+                grid[key] += " " + e["text"]
+            else:
+                grid[key] = e["text"]
+
+        n_rows = len(row_splits) - 1
+        n_cols = len(col_splits) - 1
+        print(f"[Tool] Precise: {n_rows} 行 x {n_cols} 列网格，{len(entries)} 个文本块")
+
+        # 输出 HTML
+        parts = ["<table>"]
+        for r in range(n_rows):
+            parts.append("<tr>")
+            for c in range(n_cols):
+                text = grid.get((r, c), "")
+                parts.append(f"<td>{text}</td>")
+            parts.append("</tr>")
+        parts.append("</table>")
+        table_html = "".join(parts)
+        print(f"[Tool] Precise done, {len(table_html)} chars HTML.")
         return table_html
 
     @staticmethod
