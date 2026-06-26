@@ -10,6 +10,3 @@ paddlepaddle>=3.3.1
 requests>=2.34.2
 # 精确表格识别依赖 (paddlex[ocr])
 paddlex[ocr]>=3.7.1
-scikit-learn>=1.9.0
-tiktoken>=0.13.0
-sentencepiece>=0.2.1
