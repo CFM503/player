@@ -571,6 +571,33 @@ class AgentTools:
         return md
 
     @staticmethod
+    def _got_ocr(image_path: str, brain, mode: str = "<format>") -> str:
+        """GOT-OCR 2.0 识别，支持 <ocr>/<fine_grained>/<format> 三种模式"""
+        import base64
+        with open(image_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+
+        prompt = f"{mode} 识别这张图片中的全部内容。表格请输出 Markdown 格式，保留所有勾选符号（✓/×/√/X），手写体标注（手写）。仅输出识别结果，不要解释。"
+
+        print(f"[Tool] GOT-OCR 2.0 ({mode})...")
+        resp = brain.client.chat.completions.create(
+            model=brain.model_name,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+            temperature=0.1,
+            max_tokens=8192,
+            timeout=120,
+        )
+        md = resp.choices[0].message.content.strip()
+        print(f"[Tool] GOT-OCR done, {len(md)} chars.")
+        return md
+
+    @staticmethod
     def _surya_ocr(image_path: str) -> list:
         """Surya-OCR 文字识别，返回与 PaddleOCR 相同格式的 entries"""
         try:
@@ -625,6 +652,13 @@ class AgentTools:
                 raise RuntimeError("视觉大模型模式需要配置 LLM API")
             _prog(10, "视觉大模型读图中...")
             return AgentTools._vision_llm_ocr(image_path, brain)
+
+        # ---- GOT-OCR 2.0：专用文档 OCR ----
+        if engine == "got":
+            if brain is None:
+                raise RuntimeError("GOT-OCR 模式需要配置 LLM API")
+            _prog(10, "GOT-OCR 识别中...")
+            return AgentTools._got_ocr(image_path, brain)
 
         # ---- Surya-OCR：用 Surya 替代 PaddleOCR 做基础识别 ----
         if engine == "surya":
