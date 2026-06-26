@@ -915,42 +915,8 @@ class AgentTools:
             return ""
 
         table_html = "\n".join(html_parts)
-        print(f"[Tool] PaddleStructure 表格识别完成，{len(html_parts)} 个表格。")
-
-        # 无 LLM 时直接返回 HTML
-        if brain is None:
-            return table_html
-
-        # LLM 将 HTML 转换为标准 Markdown 表格
-        print("[Tool] LLM 精排 Markdown 表格...")
-        system_prompt = (
-            "你是一个专业的安全生产档案数字化专家，专门负责将包含 PaddleStructure 识别出的"
-            "结构化数据（HTML）与 OCR 文字的原始日志，转换成排版精美、便于检索的 Markdown 表格。\n\n"
-            "规则：\n"
-            "1. 严格比对原始表格的行列关系，使用 Markdown 标准语法（| Column |）还原表格。"
-            "合并单元格可在不破坏大结构的前提下进行合理拆分或用合并话术表达。\n"
-            "2. 识别到的手写签名直接保留名字，并在括号中注明（手写），如：张三（手写）。\n"
-            "3. 复选框和检查项中的勾选状态（✓、X、—）必须精准填入对应的 Markdown 单元格中。\n"
-            "4. 作业基本信息使用加粗键值对或小型表格呈现；核心安全检查大表需保留分类表头。\n"
-            "5. 仅根据提供的 HTML 进行还原，不要编造、猜测任何未显示的文字或检查结果。\n\n"
-            "输出要求：直接输出最终的 Markdown 文本，不要包含任何前言、解释或分析。"
-        )
-        try:
-            resp = brain.client.chat.completions.create(
-                model=brain.model_name,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"请将以下 PaddleStructure 识别的 HTML 表格转换为 Markdown：\n\n{table_html}"},
-                ],
-                temperature=0.1,
-                max_tokens=4096,
-            )
-            md = resp.choices[0].message.content.strip()
-            print(f"[Tool] LLM 精排完成，{len(md)} 字符。")
-            return md
-        except Exception as ex:
-            print(f"[Tool] LLM 精排失败: {ex}，返回原始 HTML")
-            return table_html
+        print(f"[Tool] PaddleStructure 表格识别完成，{len(html_parts)} 个表格，{len(table_html)} 字符 HTML。")
+        return table_html
 
     @staticmethod
     def _format_table_test(image_path: str, brain=None, progress_callback=None) -> str:
