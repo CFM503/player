@@ -324,6 +324,7 @@ with tab1:
             log_ph = col_l.empty()
             log_buf = []
             _t0_img = time.time()
+            _last_stage = [""]  # 用列表避免闭包问题
 
             def hlog(line, _save_path=save_path, _name=uploaded.name):
                 _dt = time.time() - _t0_img
@@ -333,6 +334,18 @@ with tab1:
                 import html as _h
                 parts = []
                 for l in log_buf[-30:]:
+                    # 检测阶段分隔
+                    stage = ""
+                    if "[" in l and "]" in l:
+                        _bracket = l.split("]", 1)[0].split("[", 1)[-1] if "[" in l else ""
+                        if _bracket in ("规划", "感知", "归档", "推理", "反思", "执行", "总结"):
+                            stage = _bracket
+                    # 新阶段插入分隔线
+                    if stage and stage != _last_stage[0] and _last_stage[0] != "":
+                        parts.append('<div class="ls"></div>')
+                    if stage:
+                        _last_stage[0] = stage
+
                     c = ""
                     if "Tool" in l: c = "lo"
                     elif "FAIL" in l or "出错" in l: c = "le"
