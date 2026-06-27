@@ -468,10 +468,11 @@ div[data-baseweb="notification"] { border-radius: 10px !important; }
     color: #34d399 !important;
     line-height: 1.6 !important;
     overflow-y: auto !important;
+    max-height: 500px !important;
     box-shadow: inset 0 2px 8px rgba(0,0,0,0.35), 0 4px 14px rgba(15,23,42,0.1) !important;
     position: relative !important;
-    margin-top: 28px !important;
-    margin-bottom: 16px !important;
+    margin-top: 8px !important;
+    margin-bottom: 8px !important;
 }
 .hlog::after {
     content: " " !important;
@@ -537,9 +538,8 @@ details {
     padding: 8px 12px !important;
     margin-bottom: 12px !important;
     box-shadow: var(--glass-shadow) !important;
-    overflow: visible !important;
+    overflow: hidden !important;
     position: relative !important;
-    z-index: 10 !important;
 }
 details summary {
     color: var(--text) !important;
@@ -569,7 +569,7 @@ details[open] {
     box-shadow: var(--glass-shadow), var(--neon-blue-shadow) !important;
 }
 details > div, details > .stMarkdown, details > [data-testid] {
-    overflow: visible !important;
+    overflow: hidden !important;
 }
 
 /* ============== 数据表格 ============== */
