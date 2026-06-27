@@ -949,9 +949,11 @@ class AgentTools:
 
             # 判断是否符合动火条件
             issues = []
+            if temp_c <= -5:
+                issues.append(f"气温{temp_c}℃(≤-5℃)，低温警告，需加强防冻防滑措施")
             if wind_level >= 5:
                 issues.append(f"风力{wind_level}级(≥5级)，禁止露天动火")
-            if weather_code in [386, 389, 392, 395, 200, 386, 392]:  # 雷雨/暴雨
+            if weather_code in [386, 389, 392, 395, 200]:  # 雷雨/暴雨
                 issues.append(f"天气{desc}，禁止动火作业")
             if temp_c >= 40:
                 issues.append(f"气温{temp_c}℃(≥40℃)，需加强防暑")
