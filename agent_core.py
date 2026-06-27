@@ -1158,13 +1158,16 @@ class SecurityAgent:
 
     def _plan(self, image_path: str, mem: AgentMemory):
         print("[Agent Plan] 收到作业票照片，制定执行计划...")
-        plan = ("① 感知：OpenCV 清洗 + PaddleOCR 提取\n"
-                "② 推理：LLM 结构化为 JSON\n"
-                "③ 反思：校验数据完整性\n"
-                "④ 执行：自主选择工具\n"
-                "⑤ 总结：输出决策链报告")
-        print(f"[Agent Plan] {plan}")
-        mem.remember("规划", "📋", "制定5步执行计划", plan)
+        steps = [
+            "① 感知：OpenCV 清洗 + PaddleOCR 提取",
+            "② 推理：LLM 结构化为 JSON",
+            "③ 反思：校验数据完整性",
+            "④ 执行：自主选择工具",
+            "⑤ 总结：输出决策链报告",
+        ]
+        for s in steps:
+            print(f"[Agent Plan] {s}")
+        mem.remember("规划", "📋", "制定5步执行计划", " → ".join(steps))
 
     def _perceive(self, image_path: str, mem: AgentMemory) -> str:
         prog = self._progress
