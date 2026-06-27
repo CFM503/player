@@ -102,6 +102,10 @@ with st.sidebar:
     )
     ocr_engine = _ocr_engines[ocr_engine_label]
 
+    # 视觉引擎下 OCR 模式不生效提示
+    if ocr_engine == "vision":
+        st.caption("💡 视觉大模型直接读图返回 Markdown，OCR 表格模式不生效")
+
     # 视觉大模型独立配置
     vision_api_key = _cfg.get("vision_api_key", "")
     vision_base_url = _cfg.get("vision_base_url", "")
