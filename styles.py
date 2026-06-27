@@ -63,9 +63,19 @@ section[data-testid="stSidebar"] {
 .stApp { background: transparent !important; }
 .stApp > header { background: transparent !important; }
 .block-container {
-    padding: 0.6rem 1.4rem 0.4rem 1.4rem;
+    padding: 0.8rem 1.4rem 0.8rem 1.4rem;
     max-width: 100%;
     color: var(--text);
+}
+
+/* 确保 caption 不与 markdown 重叠 */
+[data-testid="stCaptionContainer"] {
+    position: relative !important;
+    z-index: 1 !important;
+    margin-top: 4px !important;
+}
+[data-testid="stMarkdownContainer"] {
+    position: relative !important;
 }
 
 /* 隐藏原生 chrome + Streamlit 原生菜单与页脚 */
@@ -581,7 +591,7 @@ details > div, details > .stMarkdown, details > [data-testid] {
 }
 
 /* ============== 文字及排版 ============== */
-.stMarkdown, .stMarkdown p, .stMarkdown div, .stMarkdown span, .stMarkdown strong {
+.stMarkdown p, .stMarkdown strong {
     color: var(--text) !important;
 }
 h1, h2, h3, h4, h5, h6 {
@@ -589,7 +599,9 @@ h1, h2, h3, h4, h5, h6 {
     font-weight: 700 !important;
     font-family: 'Rajdhani', 'Inter', sans-serif !important;
 }
-.stCaption { color: var(--text-muted) !important; }
+.stCaption, [data-testid="stCaptionContainer"] {
+    color: var(--text-muted) !important;
+}
 
 /* ============== 引导步骤条 ============== */
 .guide-box {
