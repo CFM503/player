@@ -112,7 +112,9 @@ def render_guide(step: int, text: str) -> None:
     """
     st.markdown(
         f'<div class="guide-box">'
-        f'<span class="guide-badge">第 {step} 步</span> {text}'
+        f'<span style="background:linear-gradient(120deg,#FF1E27,#0052CC);color:#fff;'
+        f'padding:2px 9px;border-radius:6px;font-size:12px;font-weight:700;'
+        f'white-space:nowrap">第 {step} 步</span> {text}'
         f'</div>',
         unsafe_allow_html=True,
     )
