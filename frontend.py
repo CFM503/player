@@ -341,16 +341,21 @@ with tab1:
                         if _bracket in ("规划", "感知", "归档", "推理", "反思", "执行", "总结"):
                             stage = _bracket
                     # 新阶段插入分隔线
+                    is_header = False
                     if stage and stage != _last_stage[0] and _last_stage[0] != "":
                         parts.append('<div class="ls"></div>')
+                        is_header = True
+                    elif stage and _last_stage[0] == "":
+                        is_header = True
                     if stage:
                         _last_stage[0] = stage
 
-                    c = ""
-                    if "Tool" in l: c = "lo"
-                    elif "FAIL" in l or "出错" in l: c = "le"
-                    elif "OK" in l or "通过" in l or "完成" in l: c = "lk"
-                    elif "重试" in l or "未通过" in l: c = "lw"
+                    c = "lh" if is_header else ""
+                    if not c:
+                        if "Tool" in l: c = "lo"
+                        elif "FAIL" in l or "出错" in l: c = "le"
+                        elif "OK" in l or "通过" in l or "完成" in l: c = "lk"
+                        elif "重试" in l or "未通过" in l: c = "lw"
                     parts.append(f'<div class="{c}">{_h.escape(l)}</div>')
                 log_ph.markdown(
                     f'<div class="hlog">'

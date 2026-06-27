@@ -496,6 +496,7 @@ div[data-baseweb="notification"] { border-radius: 10px !important; }
 .stMarkdown .hlog div.le { color: #ff6b6f !important; font-weight: bold !important; }
 .stMarkdown .hlog div.lk { color: #34d399 !important; font-weight: bold !important; }
 .stMarkdown .hlog div.lw { color: #fbbf24 !important; font-weight: bold !important; }
+.stMarkdown .hlog div.lh { color: #fbbf24 !important; font-weight: 700 !important; font-size: 13px !important; }
 .stMarkdown .hlog div.ls {
     border-top: 1px dashed rgba(52,211,153,0.35) !important;
     margin: 6px 0 4px 0 !important;
