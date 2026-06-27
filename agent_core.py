@@ -573,8 +573,8 @@ class AgentTools:
         return md
 
     @staticmethod
-    def ocr_tool(image_path: str, mode: str = "cluster", brain=None, progress_callback=None, engine: str = "paddleocr") -> str:
-        """PaddleOCR 文字识别，支持五种表格处理策略（基于 PaddlePaddle）"""
+    def ocr_tool(image_path: str, mode: str = "cluster", brain=None, progress_callback=None, engine: str = "paddleocr", vision_brain=None) -> str:
+        """PaddleOCR 文字识别，支持多种表格处理策略（基于 PaddlePaddle）"""
         def _prog(pct, msg):
             if progress_callback:
                 progress_callback(pct, msg)
@@ -589,11 +589,12 @@ class AgentTools:
 
         # ---- 视觉大模型：直接读图，跳过 PaddleOCR ----
         if engine == "vision":
-            if brain is None:
-                raise RuntimeError("视觉大模型模式需要配置 LLM API")
-            _prog(10, "视觉大模型读图中...")
+            vb = vision_brain or brain
+            if vb is None:
+                raise RuntimeError("视觉大模型模式需要配置视觉模型 API")
+            _prog(10, f"视觉大模型读图中 ({vb.model_name})...")
             AgentTools._last_ocr_raw = ""
-            return AgentTools._vision_llm_ocr(image_path, brain)
+            return AgentTools._vision_llm_ocr(image_path, vb)
 
         # ---- PaddleOCR 引擎（默认） ----
         import paddle.inference as _pi
@@ -1141,12 +1142,13 @@ class SecurityAgent:
 
     MAX_REFLECT_RETRIES = 2
 
-    def __init__(self, brain: LLMBrain, ocr_mode: str = "cluster", ocr_engine: str = "paddleocr", progress_callback=None):
+    def __init__(self, brain: LLMBrain, ocr_mode: str = "cluster", ocr_engine: str = "paddleocr", progress_callback=None, vision_brain: LLMBrain = None):
         self.brain = brain
         self.tools = AgentTools()
         self.ocr_mode = ocr_mode
         self.ocr_engine = ocr_engine
         self._progress = progress_callback
+        self.vision_brain = vision_brain
 
     def _plan(self, image_path: str, mem: AgentMemory):
         print("[Agent Plan] 收到作业票照片，制定执行计划...")
@@ -1162,7 +1164,7 @@ class SecurityAgent:
         prog = self._progress
         if prog: prog(5, "图像预处理")
         print("[Agent Perceive] OpenCV + PaddleOCR 感知...")
-        text = self.tools.ocr_tool(image_path, mode=self.ocr_mode, brain=self.brain, progress_callback=prog, engine=self.ocr_engine)
+        text = self.tools.ocr_tool(image_path, mode=self.ocr_mode, brain=self.brain, progress_callback=prog, engine=self.ocr_engine, vision_brain=self.vision_brain)
         n = len(text.strip().split("\n"))
         summary = f"提取 {n} 行文本"
         print(f"[Agent Perceive] {summary}")

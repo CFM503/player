@@ -101,8 +101,18 @@ with st.sidebar:
              "视觉大模型：调用 VL 模型（如 Qwen-VL）直接读图识别，一步完成结构+文字+符号",
     )
     ocr_engine = _ocr_engines[ocr_engine_label]
+
+    # 视觉大模型独立配置
+    vision_api_key = _cfg.get("vision_api_key", "")
+    vision_base_url = _cfg.get("vision_base_url", "")
+    vision_model_name = _cfg.get("vision_model_name", "")
     if ocr_engine == "vision":
-        st.caption("💡 需配置支持视觉的 API（如 Qwen-VL / GPT-4o）")
+        st.markdown("**👁️ 视觉模型配置**")
+        vision_api_key = st.text_input("视觉 API Key", vision_api_key, type="password", key="_v_key", help="视觉大模型的 API Key，可与主模型不同")
+        vision_base_url = st.text_input("视觉 API URL", vision_base_url, key="_v_url", help="视觉大模型的 API 地址")
+        vision_model_name = st.text_input("视觉模型", vision_model_name, key="_v_model", help="支持视觉的模型名称，如 Qwen-VL / GPT-4o")
+        if not vision_model_name:
+            st.warning("⚠️ 请配置视觉模型名称")
 
     # 保存设置按钮（始终可见）
     st.markdown("---")
@@ -110,6 +120,9 @@ with st.sidebar:
         _cfg["api_key"] = api_key
         _cfg["base_url"] = base_url
         _cfg["model_name"] = model_name
+        _cfg["vision_api_key"] = vision_api_key
+        _cfg["vision_base_url"] = vision_base_url
+        _cfg["vision_model_name"] = vision_model_name
         _cfg["wechat_webhook"] = st.session_state.get("_wx", _cfg.get("wechat_webhook", ""))
         _cfg["dingtalk_webhook"] = st.session_state.get("_dd", _cfg.get("dingtalk_webhook", ""))
         with open(_cfg_path, "w", encoding="utf-8") as f:
@@ -240,7 +253,16 @@ with tab1:
 
         from agent_core import SecurityAgent, LLMBrain, AgentTools
         brain = LLMBrain(api_key=api_key, base_url=base_url, model_name=model_name)
-        agent = SecurityAgent(brain=brain, ocr_mode=ocr_mode, ocr_engine=ocr_engine)
+        vision_brain = None
+        if ocr_engine == "vision":
+            vk = vision_api_key or api_key
+            vu = vision_base_url or base_url
+            vm = vision_model_name
+            if not vm:
+                st.error("❌ 视觉大模型引擎需要配置视觉模型名称")
+                st.stop()
+            vision_brain = LLMBrain(api_key=vk, base_url=vu, model_name=vm)
+        agent = SecurityAgent(brain=brain, ocr_mode=ocr_mode, ocr_engine=ocr_engine, vision_brain=vision_brain)
         st.session_state.results = []
 
         # ---- 上传保存进度 ----
