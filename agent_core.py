@@ -1449,15 +1449,27 @@ class SecurityAgent:
         mem.remember("总结", "📊", "输出决策链报告", f"{len(mem.steps)}阶段完成 | 审批: {data.approval_status if data else '-'}")
 
     def _archive(self, image_path: str, ocr_text: str, mem: AgentMemory) -> str:
-        """数字 OCR 归档：将 OCR 原始结果保存为独立文件"""
+        """数字 OCR 归档：将 OCR 原始结果保存为独立文件（文件名含票据单号）"""
         import shutil
         ts = time.strftime("%Y%m%d_%H%M%S")
         date_dir = time.strftime("%Y-%m-%d")
         archive_dir = os.path.join(os.path.dirname(__file__), "archives", date_dir)
         os.makedirs(archive_dir, exist_ok=True)
 
-        base_name = os.path.splitext(os.path.basename(image_path))[0]
-        prefix = f"{base_name}_{ts}"
+        # 从 OCR 原文中提取票据单号
+        ticket_id = ""
+        for line in ocr_text.split("\n"):
+            m = re.search(r"(MDJZR\d+|MPJZR\d+|NDJZR\d+|\d+NDJZR\d+|MDJ\d+|MPJ\d+)", line, re.IGNORECASE)
+            if m:
+                ticket_id = m.group(1)
+                break
+        if not ticket_id:
+            m = re.search(r"(?:编号|NO\.?|No\.?)[：:]?\s*([A-Za-z0-9]+)", ocr_text)
+            if m:
+                ticket_id = m.group(1)
+        ticket_id = re.sub(r"\s+", "", ticket_id) if ticket_id else "未知票号"
+
+        prefix = f"{ticket_id}_{ts}"
 
         # 保存 OCR 原文
         ocr_path = os.path.join(archive_dir, f"{prefix}_ocr.txt")
