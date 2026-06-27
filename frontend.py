@@ -375,11 +375,14 @@ with tab1:
                 def write(self, s):
                     s = s.strip()
                     if s:
-                        hlog(s)
-                        for k, p in _sp.items():
-                            if f"Agent {k}" in s:
-                                progress.progress(p)
-                                status_text.caption(f"[{idx+1}/{len(final_files)}] {_sc[k]}...")
+                        for line in s.split("\n"):
+                            line = line.strip()
+                            if line:
+                                hlog(line)
+                                for k, p in _sp.items():
+                                    if f"Agent {k}" in line:
+                                        progress.progress(p)
+                                        status_text.caption(f"[{idx+1}/{len(final_files)}] {_sc[k]}...")
                         _dt = time.time() - _t0_img
                         _mm, _ss = divmod(int(_dt), 60)
                         print(f"[{_mm:02d}:{_ss:02d}] {s}", file=_orig_err, flush=True)
