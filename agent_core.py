@@ -1448,6 +1448,51 @@ class SecurityAgent:
         print(f"[Agent Report] ===== {len(mem.steps)} 阶段完成 =====")
         mem.remember("总结", "📊", "输出决策链报告", f"{len(mem.steps)}阶段完成 | 审批: {data.approval_status if data else '-'}")
 
+    def _archive(self, image_path: str, ocr_text: str, mem: AgentMemory) -> str:
+        """数字 OCR 归档：将 OCR 原始结果保存为独立文件"""
+        import shutil
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        date_dir = time.strftime("%Y-%m-%d")
+        archive_dir = os.path.join(os.path.dirname(__file__), "archives", date_dir)
+        os.makedirs(archive_dir, exist_ok=True)
+
+        base_name = os.path.splitext(os.path.basename(image_path))[0]
+        prefix = f"{base_name}_{ts}"
+
+        # 保存 OCR 原文
+        ocr_path = os.path.join(archive_dir, f"{prefix}_ocr.txt")
+        with open(ocr_path, "w", encoding="utf-8") as f:
+            f.write(ocr_text)
+
+        # 保存原图副本
+        img_ext = os.path.splitext(image_path)[1] or ".jpg"
+        img_dest = os.path.join(archive_dir, f"{prefix}_原图{img_ext}")
+        try:
+            shutil.copy2(image_path, img_dest)
+        except Exception as e:
+            print(f"[Agent Archive] ⚠️ 原图复制失败: {e}")
+            img_dest = ""
+
+        # 保存元数据
+        meta = {
+            "source_image": os.path.basename(image_path),
+            "ocr_file": os.path.basename(ocr_path),
+            "image_file": os.path.basename(img_dest) if img_dest else "",
+            "ocr_engine": self.ocr_engine,
+            "ocr_mode": self.ocr_mode,
+            "ocr_lines": len(ocr_text.strip().split("\n")),
+            "archived_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        meta_path = os.path.join(archive_dir, f"{prefix}_meta.json")
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+
+        archive_rel = os.path.relpath(archive_dir, os.path.dirname(__file__))
+        summary = f"{archive_rel}/{prefix}_ocr.txt ({meta['ocr_lines']}行)"
+        print(f"[Agent Archive] 已归档: {summary}")
+        mem.remember("归档", "📦", "数字 OCR 归档", summary)
+        return ocr_path
+
     def run(self, image_path: str, ocr_mode: str = None, progress_callback=None):
         """运行完整 ReAct 循环，返回 (ocr_text, structured_data)"""
         if ocr_mode:
@@ -1460,13 +1505,15 @@ class SecurityAgent:
         self._plan(image_path, mem)
         if prog: prog(3, "感知阶段")
         ocr_text = self._perceive(image_path, mem)
+        if prog: prog(52, "OCR 归档")
+        self._archive(image_path, ocr_text, mem)
         if prog: prog(55, "推理阶段")
         data = self._reason(ocr_text, mem)
-        if prog: prog(82, "反思阶段")
+        if prog: prog(80, "反思阶段")
         data = self._reflect(ocr_text, data, mem)
-        if prog: prog(90, "执行阶段")
+        if prog: prog(88, "执行阶段")
         self._act(data, ocr_text, mem, image_path=image_path)
-        if prog: prog(98, "生成报告")
+        if prog: prog(96, "生成报告")
 
         elapsed = time.time() - t0
         print(f"[Agent] 全流程耗时: {elapsed:.1f}s")

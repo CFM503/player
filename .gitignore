@@ -14,6 +14,7 @@ __pycache__/
 workspace/
 upload/
 uploads/
+archives/
 
 # 临时文件
 *.tmp
