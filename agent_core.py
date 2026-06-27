@@ -227,9 +227,13 @@ class SecuritySheetData(BaseModel):
 class LLMBrain:
     """通过 OpenAI 兼容协议调用线上大模型"""
 
-    def __init__(self, api_key: str, base_url: str, model_name: str):
+    def __init__(self, api_key: str, base_url: str, model_name: str, proxy: str = ""):
         from openai import OpenAI
-        self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=120.0)
+        import httpx
+        kwargs = dict(api_key=api_key, base_url=base_url, timeout=120.0)
+        if proxy:
+            kwargs["http_client"] = httpx.Client(proxy=proxy, timeout=120.0)
+        self.client = OpenAI(**kwargs)
         self.model_name = model_name
 
     def _sanitize_sheet_data(self, raw_dict: dict, ocr_text: str) -> dict:

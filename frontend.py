@@ -118,6 +118,13 @@ with st.sidebar:
         if not vision_model_name:
             st.warning("⚠️ 请配置视觉模型名称")
 
+    # 代理设置
+    st.markdown("---")
+    proxy_enabled = st.checkbox("🌐 使用代理访问 AI 模型", value=bool(_cfg.get("proxy", "")), key="_proxy_on", help="勾选后通过代理服务器访问 Google/Gemini 等海外 AI 模型")
+    proxy_url = ""
+    if proxy_enabled:
+        proxy_url = st.text_input("代理地址", _cfg.get("proxy", "http://127.0.0.1:9192"), key="_proxy_url", help="格式: http://127.0.0.1:端口")
+
     # 保存设置按钮（始终可见）
     st.markdown("---")
     if st.button("💾 保存设置", width="stretch"):
@@ -127,6 +134,7 @@ with st.sidebar:
         _cfg["vision_api_key"] = vision_api_key
         _cfg["vision_base_url"] = vision_base_url
         _cfg["vision_model_name"] = vision_model_name
+        _cfg["proxy"] = proxy_url if proxy_enabled else ""
         _cfg["wechat_webhook"] = st.session_state.get("_wx", _cfg.get("wechat_webhook", ""))
         _cfg["dingtalk_webhook"] = st.session_state.get("_dd", _cfg.get("dingtalk_webhook", ""))
         with open(_cfg_path, "w", encoding="utf-8") as f:
@@ -256,7 +264,8 @@ with tab1:
         st.session_state.run_processing = False
 
         from agent_core import SecurityAgent, LLMBrain, AgentTools
-        brain = LLMBrain(api_key=api_key, base_url=base_url, model_name=model_name)
+        _proxy = proxy_url if proxy_enabled else ""
+        brain = LLMBrain(api_key=api_key, base_url=base_url, model_name=model_name, proxy=_proxy)
         vision_brain = None
         if ocr_engine == "vision":
             vk = vision_api_key or api_key
@@ -265,7 +274,7 @@ with tab1:
             if not vm:
                 st.error("❌ 视觉大模型引擎需要配置视觉模型名称")
                 st.stop()
-            vision_brain = LLMBrain(api_key=vk, base_url=vu, model_name=vm)
+            vision_brain = LLMBrain(api_key=vk, base_url=vu, model_name=vm, proxy=_proxy)
         agent = SecurityAgent(brain=brain, ocr_mode=ocr_mode, ocr_engine=ocr_engine, vision_brain=vision_brain)
         st.session_state.results = []
 
