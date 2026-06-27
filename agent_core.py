@@ -1167,7 +1167,7 @@ class SecurityAgent:
         ]
         for s in steps:
             print(f"[Agent Plan] {s}")
-        mem.remember("规划", "📋", "制定5步执行计划", " → ".join(steps))
+        mem.remember("规划", "📋", "制定5步执行计划", f"{len(steps)}步：感知→推理→反思→执行→总结")
 
     def _perceive(self, image_path: str, mem: AgentMemory) -> str:
         prog = self._progress
