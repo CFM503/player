@@ -70,12 +70,28 @@ section[data-testid="stSidebar"] {
 
 /* 确保 caption 不与 markdown 重叠 */
 [data-testid="stCaptionContainer"] {
+    display: block !important;
     position: relative !important;
     z-index: 1 !important;
-    margin-top: 4px !important;
+    margin-top: 2px !important;
+    clear: both !important;
 }
 [data-testid="stMarkdownContainer"] {
+    display: block !important;
     position: relative !important;
+    max-width: 100% !important;
+    overflow-wrap: break-word !important;
+}
+/* 所有 Streamlit 垂直块容器正确排列 */
+[data-testid="stVerticalBlock"] {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 0.25rem !important;
+}
+/* 所有 Streamlit 水平块容器正确间距 */
+[data-testid="stHorizontalBlock"] {
+    gap: 0.5rem !important;
+    align-items: flex-start !important;
 }
 
 /* 隐藏原生 chrome + Streamlit 原生菜单与页脚 */
