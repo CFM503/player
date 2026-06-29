@@ -1,5 +1,17 @@
 # 更新日志 (CHANGELOG)
 
+## [Unreleased]
+
+### 安全修复 (ponytail.audit)
+- **🔴 修复 API Key 泄露**：`config.example.json` 中真实 API Key 替换为占位符，防止凭证外泄。
+- **🟡 环境变量优先**：配置加载改为环境变量优先（`ONLINE_API_KEY` / `ONLINE_BASE_URL` / `ONLINE_MODEL`），配置文件降级 fallback，支持无文件部署。
+- **🟡 移除全局 `print` 覆盖**：删除 `print = safe_print`，所有 `agent_core.py` 内部日志改用 `safe_print()`，避免污染第三方库的 `print` 行为。
+- **🟡 线程安全修复**：`_ProgressSim` 和 `_Heartbeat` 的裸 `bool` 标志替换为 `threading.Event`，共享状态加 `threading.Lock`，消除竞态条件。
+- **🟡 配置原子写入**：`config.json` 保存改为先写 `.tmp` 再 `os.replace()` 原子替换，防止写入中断导致配置损坏。
+- **🟢 DB 异常处理完善**：Tab 2 看板所有数据库操作纳入 `try/finally`，连接确保关闭，删除操作增加错误提示。
+- **🟢 清理重复装饰器**：移除 `agent_core.py` 中悬空的 `@staticmethod`。
+- **🟢 视觉 LLM 图片大小检查**：`_vision_llm_ocr` 增加 5MB 图片大小上限警告。
+
 ## [3.9.0] - 2026-06-28
 
 ### 新增
