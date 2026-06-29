@@ -13,9 +13,9 @@ from components import (
     render_notification_btn, render_record_badge,
 )
 
-# ---- 配置 ----
-_cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
-_cfg = json.load(open(_cfg_path, encoding="utf-8")) if os.path.exists(_cfg_path) else {}
+# ---- 配置（优先环境变量，其次 config.json） ----
+from agent_core import load_config
+_cfg = load_config()
 _ver = open(os.path.join(os.path.dirname(__file__), "VERSION"), encoding="utf-8").read().strip()
 
 st.set_page_config(page_title="安全数字监督员", page_icon="🛡️", layout="wide", initial_sidebar_state="expanded")
@@ -137,9 +137,24 @@ with st.sidebar:
         _cfg["proxy"] = proxy_url if proxy_enabled else ""
         _cfg["wechat_webhook"] = st.session_state.get("_wx", _cfg.get("wechat_webhook", ""))
         _cfg["dingtalk_webhook"] = st.session_state.get("_dd", _cfg.get("dingtalk_webhook", ""))
-        with open(_cfg_path, "w", encoding="utf-8") as f:
-            json.dump(_cfg, f, ensure_ascii=False, indent=2)
-        st.success("已保存")
+        # 环境变量优先于配置文件
+        if api_key: os.environ["ONLINE_API_KEY"] = api_key
+        if base_url: os.environ["ONLINE_BASE_URL"] = base_url
+        if model_name: os.environ["ONLINE_MODEL"] = model_name
+        _save_path = os.path.join(os.path.dirname(__file__), "config.json")
+        _tmp_path = _save_path + ".tmp"
+        try:
+            with open(_tmp_path, "w", encoding="utf-8") as f:
+                json.dump(_cfg, f, ensure_ascii=False, indent=2)
+            os.replace(_tmp_path, _save_path)  # 原子替换（同一文件系统）
+        except Exception:
+            try:
+                os.remove(_tmp_path)
+            except OSError:
+                pass
+            st.error("保存配置失败")
+            st.stop()
+        st.success("已保存（环境变量 + 配置文件）")
 
     # 通知设置面板
     with st.expander("⚙️ 通知设置", expanded=False):
@@ -481,36 +496,44 @@ with tab2:
     if not os.path.exists(db_path):
         st.caption("📭 暂无数据，处理作业票后自动保存。")
     else:
-        conn = sqlite3.connect(db_path)
+        conn = None
         try:
-            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,approval_opinion,risk_level,approval_status,approval_level,created_at,image_path FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
-        except Exception:
-            rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,'','','','','',created_at,'' FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
+            conn = sqlite3.connect(db_path)
+            try:
+                rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,approval_opinion,risk_level,approval_status,approval_level,created_at,image_path FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
+            except Exception:
+                try:
+                    rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,approval_opinion,risk_level,approval_status,approval_level,created_at,image_path FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()
+                except Exception:
+                    rows_db = []
 
-        total = len(rows_db)
-        abn_cnt = sum(1 for r in rows_db if r[5])
+            total = len(rows_db)
+            abn_cnt = sum(1 for r in rows_db if r[5])
 
-        # KPI 行
-        render_kpi_row([
-            ("总票数", str(total), ""),
-            ("有隐患", str(abn_cnt), "#d6131c" if abn_cnt else "#059669"),
-            ("正常", str(total - abn_cnt), "#059669"),
-            ("隐患率", f"{abn_cnt/total*100:.0f}%" if total else "0%", ""),
-        ])
+            # KPI 行
+            render_kpi_row([
+                ("总票数", str(total), ""),
+                ("有隐患", str(abn_cnt), "#d6131c" if abn_cnt else "#059669"),
+                ("正常", str(total - abn_cnt), "#059669"),
+                ("隐患率", f"{abn_cnt/total*100:.0f}%" if total else "0%", ""),
+            ])
 
-        # 高频隐患
-        issue_counter = {}
-        try:
-            for (ij,) in conn.execute("SELECT issues_json FROM hse_fire_work_tickets WHERE has_abnormal=1").fetchall():
-                if ij:
-                    for item in json.loads(ij):
-                        n = item.get("item_name", "未知"); issue_counter[n] = issue_counter.get(n, 0) + 1
-        except Exception: pass
-        conn.close()
-
-        if issue_counter:
-            top5 = sorted(issue_counter.items(), key=lambda x: -x[1])[:5]
-            render_kpi_row([(name, f"{count}次", "#d6131c") for name, count in top5])
+            # 高频隐患
+            issue_counter = {}
+            try:
+                for (ij,) in conn.execute("SELECT issues_json FROM hse_fire_work_tickets WHERE has_abnormal=1").fetchall():
+                    if ij:
+                        for item in json.loads(ij):
+                            n = item.get("item_name", "未知"); issue_counter[n] = issue_counter.get(n, 0) + 1
+            except Exception:
+                pass
+            if issue_counter:
+                top5 = sorted(issue_counter.items(), key=lambda x: -x[1])[:5]
+                render_kpi_row([(name, f"{count}次", "#d6131c") for name, count in top5])
+        finally:
+            if conn:
+                conn.close()
+                conn = None
 
         # 删除弹窗
         if st.session_state.delete_id:
@@ -522,9 +545,14 @@ with tab2:
                 with fc1:
                     if st.button("✅ 确认", type="primary", width="stretch"):
                         if pwd == _del_pwd:
-                            c2 = sqlite3.connect(db_path)
-                            c2.execute("DELETE FROM hse_fire_work_tickets WHERE id=?", (st.session_state.delete_id,))
-                            c2.commit(); c2.close()
+                            try:
+                                c2 = sqlite3.connect(db_path)
+                                c2.execute("DELETE FROM hse_fire_work_tickets WHERE id=?", (st.session_state.delete_id,))
+                                c2.commit()
+                            except Exception as e:
+                                st.error(f"删除失败: {e}")
+                            finally:
+                                c2.close()
                             st.session_state.delete_id = None; st.rerun()
                         else: st.error("密码错误")
                 with fc2:
@@ -542,7 +570,18 @@ with tab2:
 
         # 记录列表（搜索过滤）
         for row in rows_db:
-            rid, ticket, station, worker, date, abnormal, opinion, risk, ap_status, ap_level, created, img_path = row
+            rid = row[0]
+            ticket = row[1]
+            station = row[2]
+            worker = row[3]
+            date = row[4]
+            abnormal = row[5]
+            opinion = row[6]
+            risk = row[7]
+            ap_status = row[8]
+            ap_level = row[9]
+            created = row[10]
+            img_path = row[11]
             if search and search.lower() not in (ticket or "").lower():
                 continue
             icon = "🚨" if abnormal else "✅"

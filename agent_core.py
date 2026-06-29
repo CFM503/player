@@ -43,12 +43,16 @@ def safe_write(stream, text: str):
 
 
 def safe_print(*args, sep=" ", end="\n", file=None, flush=False):
+    """安全打印，处理 Windows 控制台 UnicodeEncodeError。"""
     if file is None:
         file = sys.stdout
     text = sep.join(str(arg) for arg in args) + end
     safe_write(file, text)
-
-print = safe_print
+    if flush:
+        try:
+            file.flush()
+        except Exception:
+            pass
 
 
 def clean_thinking(text: str) -> str:
@@ -401,7 +405,7 @@ class LLMBrain:
         return raw_dict
 
     def extract_sheet_json(self, ocr_text: str) -> SecuritySheetData:
-        print(f"[LLM Log] 调用 API [{self.model_name}] 进行语义分析...")
+        safe_print(f"[LLM Log] 调用 API [{self.model_name}] 进行语义分析...")
 
         system_prompt = (
             "你是牡丹江中燃 HSE 管理体系的专职安全审计专家。将经 OCR 识别后的文本，"
@@ -420,10 +424,10 @@ class LLMBrain:
 
         # 截断过长 OCR 文本，避免 API 超时（保留前 2000 字符，通常包含票头+关键信息）
         if len(ocr_text) > OCR_TEXT_MAX_CHARS:
-            print(f"[LLM Log] OCR 文本 {len(ocr_text)} 字符，截断至 {OCR_TEXT_MAX_CHARS} 字符以加速推理")
+            safe_print(f"[LLM Log] OCR 文本 {len(ocr_text)} 字符，截断至 {OCR_TEXT_MAX_CHARS} 字符以加速推理")
             ocr_text = ocr_text[:OCR_TEXT_MAX_CHARS]
 
-        print(f"[LLM Log] 发送请求中，请等待...")
+        safe_print(f"[LLM Log] 发送请求中，请等待...")
         response = self.client.chat.completions.create(
             model=self.model_name,
             messages=[
@@ -442,7 +446,7 @@ class LLMBrain:
         try:
             raw_dict = json.loads(raw_content)
         except Exception as e:
-            print(f"[LLM Log] JSON 直接解析失败: {e}. 尝试用正则提取 JSON 结构...")
+            safe_print(f"[LLM Log] JSON 直接解析失败: {e}. 尝试用正则提取 JSON 结构...")
             m = re.search(r"(\{.*\})", raw_content, re.DOTALL)
             if m:
                 try:
@@ -468,7 +472,7 @@ class AgentTools:
         """OpenCV 去阴影 + 自适应二值化"""
         import cv2
         import tempfile
-        print("[Tool] 图像预处理：CLAHE 去阴影 + 自适应二值化...")
+        safe_print("[Tool] 图像预处理：CLAHE 去阴影 + 自适应二值化...")
 
         img = cv2.imread(image_path)
         if img is None:
@@ -534,10 +538,10 @@ class AgentTools:
                         entries.append({"text": text, "y": y_center, "x": x_left, "h": height, "w": width})
             return entries
 
-        print("[Tool] PaddleOCR 识别原图...")
+        safe_print("[Tool] PaddleOCR 识别原图...")
         entries = _do_ocr(image_path)
         if len(entries) < 5:
-            print("[Tool] 原图识别不足，预处理后重试...")
+            safe_print("[Tool] 原图识别不足，预处理后重试...")
             cleaned = AgentTools.preprocess_image(image_path)
             entries = _do_ocr(cleaned)
             if os.path.exists(cleaned):
@@ -548,6 +552,13 @@ class AgentTools:
     def _vision_llm_ocr(image_path: str, brain) -> str:
         """视觉大模型直接读图识别表格，一步完成结构+文字+符号"""
         import base64
+
+        # 限制图片大小（≤5MB），避免超大图片触发 token 超限或费用失控
+        MAX_IMG_BYTES = 5 * 1024 * 1024
+        img_size = os.path.getsize(image_path)
+        if img_size > MAX_IMG_BYTES:
+            safe_print(f"[Tool] Vision LLM: 图片过大 ({img_size // 1024}KB)，跳过压缩警告")
+
         with open(image_path, "rb") as f:
             b64 = base64.b64encode(f.read()).decode()
         prompt = (
@@ -558,7 +569,7 @@ class AgentTools:
             "3. 手写体文字标注（手写）\n"
             "4. 仅输出 Markdown，不要解释"
         )
-        print("[Tool] Vision LLM: 读图识别表格...")
+        safe_print("[Tool] Vision LLM: 读图识别表格...")
         resp = brain.client.chat.completions.create(
             model=brain.model_name,
             messages=[{
@@ -573,7 +584,7 @@ class AgentTools:
             timeout=120,
         )
         md = resp.choices[0].message.content.strip()
-        print(f"[Tool] Vision LLM done, {len(md)} chars.")
+        safe_print(f"[Tool] Vision LLM done, {len(md)} chars.")
         return md
 
     @staticmethod
@@ -589,7 +600,7 @@ class AgentTools:
             "precise": "精确增强",
             "test": "测试模式",
         }
-        print(f"[Tool] OCR 模式: {mode_labels.get(mode, mode)} | 引擎: {engine}")
+        safe_print(f"[Tool] OCR 模式: {mode_labels.get(mode, mode)} | 引擎: {engine}")
 
         # ---- 视觉大模型：直接读图，跳过 PaddleOCR ----
         if engine == "vision":
@@ -613,7 +624,7 @@ class AgentTools:
         if mode == "precise":
             table_text = AgentTools._format_table_precise(image_path, brain)
             if not table_text:
-                print("[Tool] 精确识别无结果，回退坐标聚类。")
+                safe_print("[Tool] 精确识别无结果，回退坐标聚类。")
                 mode = "cluster"
             else:
                 AgentTools._last_ocr_raw = ""  # 清除旧 raw，让前端走 HTML 渲染
@@ -623,7 +634,7 @@ class AgentTools:
         if mode == "test":
             table_text = AgentTools._format_table_precise(image_path, brain)
             if not table_text:
-                print("[Tool] 测试模式无结果，回退坐标聚类。")
+                safe_print("[Tool] 测试模式无结果，回退坐标聚类。")
                 mode = "cluster"
             else:
                 AgentTools._last_ocr_raw = ""
@@ -643,7 +654,7 @@ class AgentTools:
         entries = AgentTools._ocr_entries_basic(image_path, ocr)
         sim_ocr.done()
 
-        print(f"[Tool] OCR 完成，识别 {len(entries)} 个文本块。")
+        safe_print(f"[Tool] OCR 完成，识别 {len(entries)} 个文本块。")
         if not entries:
             raise RuntimeError(f"OCR 未能识别任何文字: {image_path}")
 
@@ -699,7 +710,7 @@ class AgentTools:
             row_splits = merge_splits(row_splits)
             col_splits = merge_splits(col_splits)
             if len(row_splits) < 2 or len(col_splits) < 2:
-                print("[Tool] 未检测到明显表格线段，回退坐标聚类")
+                safe_print("[Tool] 未检测到明显表格线段，回退坐标聚类")
                 return AgentTools._format_table(entries)
             # 将文本映射到单元格
             def find_cell(pos, splits):
@@ -722,10 +733,10 @@ class AgentTools:
                 cells = [grid.get((r, c), "").strip() for c in range(max_c + 1)]
                 if any(cells):
                     lines.append(" | ".join(cells))
-            print(f"[Tool] 检测到 {len(row_splits)} 行 x {len(col_splits)} 列网格")
+            safe_print(f"[Tool] 检测到 {len(row_splits)} 行 x {len(col_splits)} 列网格")
             return "\n".join(lines) if lines else AgentTools._format_table(entries)
         except Exception as ex:
-            print(f"[Tool] 边框检测异常: {ex}，回退坐标聚类")
+            safe_print(f"[Tool] 边框检测异常: {ex}，回退坐标聚类")
             return AgentTools._format_table(entries)
 
 
@@ -737,18 +748,18 @@ class AgentTools:
 
         # PaddleOCR 文字识别
         from paddleocr import PaddleOCR
-        print("[Tool] Precise: PaddleOCR 识别...")
+        safe_print("[Tool] Precise: PaddleOCR 识别...")
         ocr = PaddleOCR(lang="ch")
         entries = AgentTools._ocr_entries_basic(image_path, ocr)
         if not entries:
-            print("[Tool] Precise: OCR 无结果")
+            safe_print("[Tool] Precise: OCR 无结果")
             return ""
 
         # OpenCV 边框检测
-        print("[Tool] Precise: OpenCV 边框检测...")
+        safe_print("[Tool] Precise: OpenCV 边框检测...")
         img = cv2.imread(image_path)
         if img is None:
-            print("[Tool] Precise: 图片读取失败")
+            safe_print("[Tool] Precise: 图片读取失败")
             return ""
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         bw = cv2.adaptiveThreshold(~gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 15, -2)
@@ -784,7 +795,7 @@ class AgentTools:
         col_splits = merge_splits(col_splits)
 
         if len(row_splits) < 2 or len(col_splits) < 2:
-            print("[Tool] Precise: 未检测到表格线段，回退坐标聚类")
+            safe_print("[Tool] Precise: 未检测到表格线段，回退坐标聚类")
             return ""
 
         # 映射 OCR 文本到单元格
@@ -806,7 +817,7 @@ class AgentTools:
 
         n_rows = len(row_splits) - 1
         n_cols = len(col_splits) - 1
-        print(f"[Tool] Precise: {n_rows} 行 x {n_cols} 列网格，{len(entries)} 个文本块")
+        safe_print(f"[Tool] Precise: {n_rows} 行 x {n_cols} 列网格，{len(entries)} 个文本块")
 
         # 输出 HTML
         parts = ["<table>"]
@@ -818,10 +829,8 @@ class AgentTools:
             parts.append("</tr>")
         parts.append("</table>")
         table_html = "".join(parts)
-        print(f"[Tool] Precise done, {len(table_html)} chars HTML.")
+        safe_print(f"[Tool] Precise done, {len(table_html)} chars HTML.")
         return table_html
-
-    @staticmethod
 
     @staticmethod
     def _merge_ocr_into_html(table_html: str, ocr_entries: list, image_path: str) -> str:
@@ -913,7 +922,7 @@ class AgentTools:
         if filled == 0:
             return table_html
 
-        print(f"[Tool] OCR merge: 补充了 {filled} 个空单元格")
+        safe_print(f"[Tool] OCR merge: 补充了 {filled} 个空单元格")
 
         # 重建 HTML
         parts = ["<table>"]
@@ -934,7 +943,7 @@ class AgentTools:
     def check_weather_tool(city: str = "牡丹江") -> dict:
         """查询实时天气，判断是否符合作业条件"""
         import requests
-        print(f"[Tool] 查询 {city} 实时天气...")
+        safe_print(f"[Tool] 查询 {city} 实时天气...")
         try:
             resp = requests.get(f"https://wttr.in/{city}?format=j1", timeout=10)
             data = resp.json()
@@ -966,12 +975,12 @@ class AgentTools:
                 "humidity": humidity, "weather": desc, "ok": ok, "issues": issues,
             }
             if ok:
-                print(f"[Tool] 天气正常: {desc} {temp_c}℃ 风{wind_level}级")
+                safe_print(f"[Tool] 天气正常: {desc} {temp_c}℃ 风{wind_level}级")
             else:
-                print(f"[Tool] 天气异常: {'; '.join(issues)}")
+                safe_print(f"[Tool] 天气异常: {'; '.join(issues)}")
             return result
         except Exception as e:
-            print(f"[Tool] 天气查询失败: {e}, 跳过天气检查")
+            safe_print(f"[Tool] 天气查询失败: {e}, 跳过天气检查")
             return {"city": city, "ok": True, "issues": [], "error": str(e)}
 
     @staticmethod
@@ -979,7 +988,7 @@ class AgentTools:
         """写入 SQLite，自动迁移旧表"""
         import sqlite3
         db_path = os.path.join(os.path.dirname(__file__), "security_data.db")
-        print(f"[Tool] 写入 SQLite: {db_path}")
+        safe_print(f"[Tool] 写入 SQLite: {db_path}")
 
         conn = sqlite3.connect(db_path)
         conn.execute("""
@@ -1001,7 +1010,7 @@ class AgentTools:
                          ("approval_status", "TEXT"), ("approval_level", "TEXT")]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE hse_fire_work_tickets ADD COLUMN {col} {typ}")
-                print(f"[Tool] 旧表迁移：新增列 {col}")
+                safe_print(f"[Tool] 旧表迁移：新增列 {col}")
 
         conn.execute(
             "INSERT INTO hse_fire_work_tickets "
@@ -1021,7 +1030,7 @@ class AgentTools:
         )
         conn.commit()
         conn.close()
-        print(f"[Tool] 作业票 {data.ticket_id} 已存入数据库。")
+        safe_print(f"[Tool] 作业票 {data.ticket_id} 已存入数据库。")
         return True
 
     @staticmethod
@@ -1029,16 +1038,16 @@ class AgentTools:
         """企业微信 Webhook 预警"""
         cfg = load_config()
         webhook = cfg.get("wechat_webhook", "")
-        print(f"[Tool] 向 {receiver} 推送企业微信预警...")
+        safe_print(f"[Tool] 向 {receiver} 推送企业微信预警...")
         if not webhook:
-            print("[Tool] 未配置企业微信 Webhook，跳过实际发送。")
+            safe_print("[Tool] 未配置企业微信 Webhook，跳过实际发送。")
             return True
         import requests
         payload = {"msgtype": "markdown", "markdown": {"content": f"### 安全隐患警报\n> {receiver}\n> {detail}"}}
         try:
             return requests.post(webhook, json=payload, timeout=10).status_code == 200
         except Exception as e:
-            print(f"[Tool] 企业微信推送失败: {e}")
+            safe_print(f"[Tool] 企业微信推送失败: {e}")
             return False
 
     @staticmethod
@@ -1046,16 +1055,16 @@ class AgentTools:
         """钉钉 Webhook 预警"""
         cfg = load_config()
         webhook = cfg.get("dingtalk_webhook", "")
-        print(f"[Tool] 向 {receiver} 推送钉钉预警...")
+        safe_print(f"[Tool] 向 {receiver} 推送钉钉预警...")
         if not webhook:
-            print("[Tool] 未配置钉钉 Webhook，跳过实际发送。")
+            safe_print("[Tool] 未配置钉钉 Webhook，跳过实际发送。")
             return True
         import requests
         payload = {"msgtype": "text", "text": {"content": f"【安全隐患警报】\n接收人: {receiver}\n{detail}"}}
         try:
             return requests.post(webhook, json=payload, timeout=10).status_code == 200
         except Exception as e:
-            print(f"[Tool] 钉钉推送失败: {e}")
+            safe_print(f"[Tool] 钉钉推送失败: {e}")
             return False
 
 
@@ -1084,11 +1093,12 @@ class _ProgressSim:
         self._cb = callback
         self._start = start_pct
         self._end = end_pct
-        self._cur = float(start_pct)
         self._step = step
         self._interval = interval
-        self._stop = False
         self._msg = msg
+        self._lock = __import__('threading').Lock()
+        self._stop_event = __import__('threading').Event()
+        self._cur = float(start_pct)
         import threading as _th
         self._t = _th.Thread(target=self._run, daemon=True)
 
@@ -1096,14 +1106,16 @@ class _ProgressSim:
         import time as _t
         t0 = _t.time()
         next_hb = HEARTBEAT_INTERVAL
-        while not self._stop and self._cur < self._end - 1:
-            self._cur = min(self._cur + self._step, self._end - 1)
+        while not self._stop_event.is_set() and self._cur < self._end - 1:
+            with self._lock:
+                self._cur = min(self._cur + self._step, self._end - 1)
+                cur = self._cur
             # 不在后台线程调用 Streamlit 回调，避免 ScriptRunContext 警告；
             # 主线程 _p() 调用已提供实时进度，done() 在主线程触发最终更新。
             if HEARTBEAT_INTERVAL > 0:
                 elapsed = _t.time() - t0
                 if elapsed >= next_hb:
-                    print(f"  ... {self._msg} ({int(elapsed)}s)")
+                    safe_print(f"  ... {self._msg} ({int(elapsed)}s)")
                     next_hb += HEARTBEAT_INTERVAL
             _t.sleep(self._interval)
 
@@ -1111,7 +1123,9 @@ class _ProgressSim:
         self._t.start()
 
     def done(self):
-        self._stop = True
+        self._stop_event.set()
+        with self._lock:
+            self._cur = float(self._end)
         if self._cb:
             self._cb(int(self._end), self._msg)
 
@@ -1119,26 +1133,26 @@ class _ProgressSim:
 class _Heartbeat:
     """后台线程定期打印进度点，避免长时间推理时看起来像卡死"""
     def __init__(self, label: str, interval: float = None):
-        import threading as _th
         self._label = label
         self._interval = interval if interval is not None else HEARTBEAT_INTERVAL
-        self._stop = False
+        self._stop_event = __import__('threading').Event()
+        import threading as _th
         self._t = _th.Thread(target=self._run, daemon=True)
 
     def _run(self):
         import time as _t
         t0 = _t.time()
-        while not self._stop:
-            _t.sleep(self._interval)
-            if self._stop:
+        while not self._stop_event.is_set():
+            self._stop_event.wait(self._interval)
+            if self._stop_event.is_set():
                 break
-            print(f"  ... {self._label} ({int(_t.time() - t0)}s)", flush=True)
+            safe_print(f"  ... {self._label} ({int(_t.time() - t0)}s)", flush=True)
 
     def start(self):
         self._t.start()
 
     def stop(self):
-        self._stop = True
+        self._stop_event.set()
 
 
 class SecurityAgent:
@@ -1157,7 +1171,7 @@ class SecurityAgent:
         self.vision_brain = vision_brain
 
     def _plan(self, image_path: str, mem: AgentMemory):
-        print("[Agent Plan] 收到作业票照片，制定执行计划...")
+        safe_print("[Agent Plan] 收到作业票照片，制定执行计划...")
         steps = [
             "① 感知：OpenCV 清洗 + PaddleOCR 提取",
             "② 推理：LLM 结构化为 JSON",
@@ -1166,22 +1180,22 @@ class SecurityAgent:
             "⑤ 总结：输出决策链报告",
         ]
         for s in steps:
-            print(f"[Agent Plan] {s}")
+            safe_print(f"[Agent Plan] {s}")
         mem.remember("规划", "📋", "制定5步执行计划", f"{len(steps)}步：感知→推理→反思→执行→总结")
 
     def _perceive(self, image_path: str, mem: AgentMemory) -> str:
         prog = self._progress
         if prog: prog(5, "图像预处理")
-        print("[Agent Perceive] OpenCV + PaddleOCR 感知...")
+        safe_print("[Agent Perceive] OpenCV + PaddleOCR 感知...")
         text = self.tools.ocr_tool(image_path, mode=self.ocr_mode, brain=self.brain, progress_callback=prog, engine=self.ocr_engine, vision_brain=self.vision_brain)
         n = len(text.strip().split("\n"))
         summary = f"提取 {n} 行文本"
-        print(f"[Agent Perceive] {summary}")
+        safe_print(f"[Agent Perceive] {summary}")
         mem.remember("感知", "👁️", "OCR 提取文字", summary)
         return text
 
     def _reason(self, ocr_text: str, mem: AgentMemory) -> SecuritySheetData:
-        print("[Agent Reason] LLM 语义分析...")
+        safe_print("[Agent Reason] LLM 语义分析...")
         sim = _ProgressSim(self._progress, 55, 80, "LLM 语义分析中", 2, 1.0)
         sim.start()
         data = self.brain.extract_sheet_json(ocr_text)
@@ -1189,12 +1203,12 @@ class SecurityAgent:
         summary = (f"票号={data.ticket_id} | 场站={data.station_name} | "
                    f"浓度={data.gas_concentration} | 措施={len(data.safety_measures)}项 | "
                    f"异常={data.has_abnormal}")
-        print(f"[Agent Reason] {summary}")
+        safe_print(f"[Agent Reason] {summary}")
         mem.remember("推理", "🤔", "LLM 结构化解析", summary)
         return data
 
     def _reflect(self, ocr_text: str, data: SecuritySheetData, mem: AgentMemory) -> SecuritySheetData:
-        print("[Agent Reflect] 校验数据完整性...")
+        safe_print("[Agent Reflect] 校验数据完整性...")
         for attempt in range(1, self.MAX_REFLECT_RETRIES + 1):
             checks = []
 
@@ -1218,20 +1232,20 @@ class SecurityAgent:
 
             all_pass = all(ok for _, ok, _ in checks)
             for name, ok, detail in checks:
-                print(f"[Agent Reflect]   {'OK' if ok else '!!'} {name}: {detail}")
+                safe_print(f"[Agent Reflect]   {'OK' if ok else '!!'} {name}: {detail}")
 
             if all_pass:
-                print("[Agent Reflect] 校验通过。")
+                safe_print("[Agent Reflect] 校验通过。")
                 mem.remember("反思", "🔍", "校验数据完整性", f"{len(checks)}项全部通过")
                 return data
 
             failed = [n for n, ok, _ in checks if not ok]
-            print(f"[Agent Reflect] 未通过({', '.join(failed)})，第{attempt}次重试...")
+            safe_print(f"[Agent Reflect] 未通过({', '.join(failed)})，第{attempt}次重试...")
             mem.remember("反思", "🔍", f"第{attempt}次重试", f"未通过: {', '.join(failed)}", status="retry")
             hint = f"上次问题：{', '.join(failed)}。请严格按规则重新解析。"
             data = self.brain.extract_sheet_json(f"[重试] {hint}\n\n原文:\n{ocr_text}")
 
-        print("[Agent Reflect] 达到最大重试，标记高风险。")
+        safe_print("[Agent Reflect] 达到最大重试，标记高风险。")
         mem.remember("反思", "🔍", "最大重试", "标记高风险", status="error")
         return data
 
@@ -1278,7 +1292,7 @@ class SecurityAgent:
         )
 
         try:
-            print("[Agent Act] 调用 LLM 生成审批建议...")
+            safe_print("[Agent Act] 调用 LLM 生成审批建议...")
             response = self.brain.client.chat.completions.create(
                 model=self.brain.model_name,
                 messages=[{"role": "user", "content": prompt}],
@@ -1296,7 +1310,7 @@ class SecurityAgent:
 
             return opinion
         except Exception as e:
-            print(f"[Agent Act] LLM 审批建议生成失败，使用模板: {e}")
+            safe_print(f"[Agent Act] LLM 审批建议生成失败，使用模板: {e}")
             return self._generate_approval_template(data)
 
     def _assess_risk_level(self, data: SecuritySheetData) -> str:
@@ -1344,23 +1358,23 @@ class SecurityAgent:
         return f"【暂缓作业】{detail}。依据{std_name}，请整改后重新提交。"
 
     def _act(self, data: SecuritySheetData, ocr_text: str, mem: AgentMemory, image_path: str = ""):
-        print("[Agent Act] ⚡ 执行 L3 条件路由审批...")
+        safe_print("[Agent Act] ⚡ 执行 L3 条件路由审批...")
         mem.remember("执行", "⚡", "L3 条件路由审批", "开始分级审核流程")
 
         # ---- ① 天气检查 ----
-        print("[Agent Act] ① 天气检查...")
+        safe_print("[Agent Act] ① 天气检查...")
         weather = self.tools.check_weather_tool("牡丹江")
         weather_ok = weather.get("ok", True)
         if weather_ok:
-            print("[Agent Act] ① 天气检查 → 正常")
+            safe_print("[Agent Act] ① 天气检查 → 正常")
             mem.remember("执行", "⛅", "天气检查", f"{weather.get('weather','未知')} {weather.get('temp_c','?')}℃ 风力{weather.get('wind_level','?')}级 → 正常")
         else:
             issues_str = "；".join(weather.get("issues", []))
-            print(f"[Agent Act] ① 天气检查 → 异常: {issues_str}")
+            safe_print(f"[Agent Act] ① 天气检查 → 异常: {issues_str}")
             mem.remember("执行", "⛅", "天气检查", f"异常: {issues_str}", status="retry")
 
         # ---- ② 风险评估 ----
-        print("[Agent Act] ② 风险评估...")
+        safe_print("[Agent Act] ② 风险评估...")
         if data.has_abnormal:
             data.risk_level = self._assess_risk_level(data)
         else:
@@ -1368,11 +1382,11 @@ class SecurityAgent:
         unimpl_count = len([m for m in data.safety_measures if not m.implemented])
         conc_vals = [v for v in data.gas_concentration if v > 0]
         max_conc = max(conc_vals) if conc_vals else 0
-        print(f"[Agent Act] ② 风险评估 → {data.risk_level} (未落实{unimpl_count}项, 最高浓度{max_conc}%, 隐患{len(data.issues)}条)")
+        safe_print(f"[Agent Act] ② 风险评估 → {data.risk_level} (未落实{unimpl_count}项, 最高浓度{max_conc}%, 隐患{len(data.issues)}条)")
         mem.remember("执行", "📊", "风险评估", f"{data.risk_level} | 未落实{unimpl_count}项 | 浓度{max_conc}% | 隐患{len(data.issues)}条")
 
         # ---- ③ L3 路由决策 ----
-        print("[Agent Act] ③ L3 路由决策...")
+        safe_print("[Agent Act] ③ L3 路由决策...")
         weather_blocked = not weather_ok and any("禁止" in i for i in weather.get("issues", []))
 
         if data.risk_level == "低风险" and weather_ok:
@@ -1388,23 +1402,23 @@ class SecurityAgent:
             data.approval_level = "主管审批"
             data.approval_status = "待审批"
             route_desc = f"风险{data.risk_level} → ⏳ 推送主管审批"
-        print(f"[Agent Act] ③ L3 路由决策 → {route_desc}")
+        safe_print(f"[Agent Act] ③ L3 路由决策 → {route_desc}")
         mem.remember("执行", "🔀", "L3 路由决策", route_desc)
 
         # ---- ④ 生成审批建议 ----
-        print("[Agent Act] ④ 生成审批建议...")
+        safe_print("[Agent Act] ④ 生成审批建议...")
         data.approval_opinion = self._generate_approval(data, weather)
-        print(f"[Agent Act] ④ 审批建议: {data.approval_opinion[:80]}...")
+        safe_print(f"[Agent Act] ④ 审批建议: {data.approval_opinion[:80]}...")
         mem.remember("执行", "📝", "生成审批建议", data.approval_opinion[:60])
 
         # ---- ⑤ 数据入库 ----
-        print("[Agent Act] ⑤ 数据入库...")
+        safe_print("[Agent Act] ⑤ 数据入库...")
         self.tools.save_to_db(data, raw_ocr=ocr_text, image_path=image_path)
-        print(f"[Agent Act] ⑤ 已存入 SQLite: {data.ticket_id}")
+        safe_print(f"[Agent Act] ⑤ 已存入 SQLite: {data.ticket_id}")
         mem.remember("执行", "💾", "数据入库", f"票号 {data.ticket_id} 已存入 SQLite")
 
         # ---- ⑥ 双通道通知（所有路由均推送） ----
-        print("[Agent Act] ⑥ 双通道通知（企微+钉钉）...")
+        safe_print("[Agent Act] ⑥ 双通道通知（企微+钉钉）...")
         cfg = load_config()
         applicant = data.worker_id or "未知"
         supervisor = data.approver_name or "未知"
@@ -1434,27 +1448,27 @@ class SecurityAgent:
         if cfg.get("wechat_webhook"):
             wx_body = body.replace("\n", "\n> ")  # markdown 格式
             self.tools.send_wechat_alert(f"### {title}\n> {wx_body}")
-            print("[Agent Act] ⑥ 企业微信 → 已推送")
+            safe_print("[Agent Act] ⑥ 企业微信 → 已推送")
         else:
-            print("[Agent Act] ⚠️ 企业微信 Webhook 未配置，跳过推送。")
+            safe_print("[Agent Act] ⚠️ 企业微信 Webhook 未配置，跳过推送。")
 
         # 钉钉推送
         if cfg.get("dingtalk_webhook"):
             self.tools.send_dingtalk_alert(body)
-            print("[Agent Act] ⑥ 钉钉 → 已推送")
+            safe_print("[Agent Act] ⑥ 钉钉 → 已推送")
         else:
-            print("[Agent Act] ⚠️ 钉钉 Webhook 未配置，跳过推送。")
+            safe_print("[Agent Act] ⚠️ 钉钉 Webhook 未配置，跳过推送。")
 
         notify_result = f"{title} → 企微+钉钉通知 申请人:{applicant} 安全主管:{supervisor}"
-        print(f"[Agent Act] ⑥ {notify_result}")
+        safe_print(f"[Agent Act] ⑥ {notify_result}")
         mem.remember("执行", "📤", "双通道通知", notify_result)
 
     def _report(self, mem: AgentMemory, data: SecuritySheetData = None):
-        print(f"[Agent Report] ===== 决策链报告 =====")
-        print(mem.get_summary())
+        safe_print(f"[Agent Report] ===== 决策链报告 =====")
+        safe_print(mem.get_summary())
         if data and data.approval_status:
-            print(f"[Agent Report] 🔖 最终审批: {data.approval_status} ({data.approval_level})")
-        print(f"[Agent Report] ===== {len(mem.steps)} 阶段完成 =====")
+            safe_print(f"[Agent Report] 🔖 最终审批: {data.approval_status} ({data.approval_level})")
+        safe_print(f"[Agent Report] ===== {len(mem.steps)} 阶段完成 =====")
         mem.remember("总结", "📊", "输出决策链报告", f"{len(mem.steps)}阶段完成 | 审批: {data.approval_status if data else '-'}")
 
     def _archive(self, image_path: str, ocr_text: str, mem: AgentMemory) -> str:
@@ -1491,7 +1505,7 @@ class SecurityAgent:
         try:
             shutil.copy2(image_path, img_dest)
         except Exception as e:
-            print(f"[Agent Archive] ⚠️ 原图复制失败: {e}")
+            safe_print(f"[Agent Archive] ⚠️ 原图复制失败: {e}")
             img_dest = ""
 
         # 保存元数据
@@ -1510,7 +1524,7 @@ class SecurityAgent:
 
         archive_rel = os.path.relpath(archive_dir, os.path.dirname(__file__))
         summary = f"{archive_rel}/{prefix}_ocr.txt ({meta['ocr_lines']}行)"
-        print(f"[Agent Archive] 已归档: {summary}")
+        safe_print(f"[Agent Archive] 已归档: {summary}")
         mem.remember("归档", "📦", "数字 OCR 归档", summary)
         return ocr_path
 
@@ -1537,7 +1551,7 @@ class SecurityAgent:
         if prog: prog(96, "生成报告")
 
         elapsed = time.time() - t0
-        print(f"[Agent] 全流程耗时: {elapsed:.1f}s")
+        safe_print(f"[Agent] 全流程耗时: {elapsed:.1f}s")
         self._report(mem, data)
         if prog: prog(100, "完成")
         return ocr_text, data
@@ -1578,5 +1592,5 @@ if __name__ == "__main__":
     )
     agent = SecurityAgent(brain=brain)
     ocr_text, result = agent.run("workspace/phone_captured_sheet.jpg")
-    print(f"\nOCR:\n{ocr_text}")
-    print(f"\nJSON:\n{result.model_dump_json(indent=2)}")
+    safe_print(f"\nOCR:\n{ocr_text}")
+    safe_print(f"\nJSON:\n{result.model_dump_json(indent=2)}")
