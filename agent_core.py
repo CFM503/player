@@ -2,6 +2,10 @@
 中燃"安全数字监督员"智能体核心架构 (agent_core.py)
 面向场景：巡检工人手机拍照上传 -> 自动去阴影矫正 -> 线上API语义结构化 -> 自动化闭环。
 
+v3.12.0 变更：
+  - 解耦重构：提取 OCR 相关代码至独立的 `ocr.py` 模块。
+  - `ocr_tool()` 和 `_ocr_crop_region()` 改为导入并委托 `ocr.run_ocr()` 处理，支持坐标裁剪及 Markdown 扫描结果输出，且支持选择 CPU 或 GPU 运行。
+
 v3.11.0 变更：
   - 基于坐标的责任人定位提取：`extract_filler_name()` 升级为对特定填表坐标区域精确定位匹配。
   - OCR flat_text 输出包含 `[x,y,w,h]` 元数据。
@@ -504,59 +508,6 @@ class AgentTools:
         return tmp.name
 
     @staticmethod
-    def _format_table(entries):
-        """将带坐标的 OCR entries 聚类为表格行列结构，返回结构化文本"""
-        if not entries:
-            return ""
-        # 按 y_center 排序，检测行间间隙分行
-        entries_sorted = sorted(entries, key=lambda e: e["y"])
-        rows = []
-        current_row = [entries_sorted[0]]
-        for prev, cur in zip(entries_sorted, entries_sorted[1:]):
-            gap = cur["y"] - prev["y"]
-            row_h = max(prev["h"], cur["h"])
-            if gap > row_h * 0.6:
-                rows.append(current_row)
-                current_row = [cur]
-            else:
-                current_row.append(cur)
-        rows.append(current_row)
-        # 每行内按 x 排序，用 | 分隔
-        lines = []
-        for row in rows:
-            row.sort(key=lambda e: e["x"])
-            line = " | ".join(e["text"] for e in row)
-            lines.append(line)
-        return "\n".join(lines)
-
-    @staticmethod
-    def _ocr_entries_basic(image_path: str, ocr):
-        """基础 OCR 流程：原图识别，不足时预处理重试，返回 entries 列表"""
-        def _do_ocr(path):
-            result = ocr.predict(path)
-            entries = []
-            if result and hasattr(result[0], 'json'):
-                res = result[0].json.get('res', {})
-                texts = res.get('rec_texts', [])
-                polys = res.get('rec_polys', [])
-                if texts:
-                    for i, text in enumerate(texts):
-                        box = polys[i] if i < len(polys) else []
-                        if len(box) >= 3:
-                            y_center = (box[0][1] + box[2][1]) / 2
-                            x_left = box[0][0]
-                            height = abs(box[2][1] - box[0][1])
-                            width = abs(box[1][0] - box[0][0]) if len(box) >= 2 else 0
-                        else:
-                            y_center, x_left, height, width = 0, 0, 20, 0
-                        entries.append({"text": text, "y": y_center, "x": x_left, "h": height, "w": width})
-            return entries
-
-        safe_print("[Tool] PaddleOCR 识别原图...")
-        entries = _do_ocr(image_path)
-        return entries
-
-    @staticmethod
     def _vision_llm_ocr(image_path: str, brain) -> str:
         """视觉大模型直接读图识别表格，一步完成结构+文字+符号"""
         import base64
@@ -597,7 +548,7 @@ class AgentTools:
 
     @staticmethod
     def ocr_tool(image_path: str, mode: str = "cluster", brain=None, progress_callback=None, engine: str = "paddleocr", vision_brain=None) -> str:
-        """PaddleOCR 文字识别，支持坐标聚类和自适应边框检测；可选视觉大模型"""
+        """调用 ocr 模块进行 OCR 识别，支持坐标聚类和自适应边框检测；可选视觉大模型"""
         def _prog(pct, msg):
             if progress_callback:
                 progress_callback(pct, msg)
@@ -612,338 +563,62 @@ class AgentTools:
             return AgentTools._vision_llm_ocr(image_path, vb)
 
         # ---- PaddleOCR（带坐标） ----
-        safe_print(f"[Tool] OCR 模式: {'自适应边框检测' if mode == 'adaptive' else '坐标聚类'}")
-
-        import paddle.inference as _pi
-        if not getattr(_pi.Config, "_patched_for_onednn", False):
-            _orig_new_ir = _pi.Config.enable_new_ir
-            _pi.Config.enable_new_ir = lambda self, v=True: _orig_new_ir(self, False)
-            _orig_opt = _pi.Config.set_optimization_level
-            _pi.Config.set_optimization_level = lambda self, lv: _orig_opt(self, 0)
-            _pi.Config._patched_for_onednn = True
-
-        from paddleocr import PaddleOCR
-        _prog(10, "PaddleOCR 加载模型")
-        sim_load = _ProgressSim(progress_callback, 10, 18, "PaddleOCR 加载模型", 2, 0.8)
-        sim_load.start()
-        ocr = PaddleOCR(lang="ch")
-        sim_load.done()
-
-        _prog(20, "OCR 文字识别中")
-        sim_ocr = _ProgressSim(progress_callback, 20, 50, "OCR 文字识别中", 3, 0.6)
+        from ocr import run_ocr
+        _prog(15, "启动 PaddleOCR 扫描")
+        
+        sim_ocr = _ProgressSim(progress_callback, 15, 50, "OCR 文字识别中", 3, 0.6)
         sim_ocr.start()
-        entries = AgentTools._ocr_entries_basic(image_path, ocr)
-        sim_ocr.done()
+        try:
+            ocr_result = run_ocr(
+                image_path=image_path,
+                coords=None,
+                mode=mode
+            )
+        finally:
+            sim_ocr.done()
 
-        safe_print(f"[Tool] OCR 完成，识别 {len(entries)} 个文本块。")
-        if not entries:
+        _prog(52, "表格格式化完成")
+        if not ocr_result:
             raise RuntimeError(f"OCR 未能识别任何文字: {image_path}")
 
-        _prog(52, "表格格式化")
-        if mode == "adaptive":
-            table_text = AgentTools._format_table_adaptive(image_path, entries)
+        # 从 ocr_result 中分离出 flat_text，用于更新 AgentTools._last_ocr_raw
+        if "---" in ocr_result:
+            parts = ocr_result.split("---", 1)
+            flat_text = parts[1].strip()
         else:
-            table_text = AgentTools._format_table(entries)
-
-        flat_text = "\n".join(
-            f"{e['text']}  [{int(e['x'])},{int(e['y'])},{int(e['w'])},{int(e['h'])}]"
-            for e in sorted(entries, key=lambda e: (e["y"] // 15, e["x"]))
-        )
+            flat_text = ocr_result
         AgentTools._last_ocr_raw = flat_text
-        return f"{table_text}\n---\n{flat_text}"
-
+        return ocr_result
 
     @staticmethod
     def _ocr_crop_region(image_path: str, x: int, y: int, w: int, h: int) -> str:
         """裁剪图片指定区域做 PaddleOCR，返回识别文本"""
-        import cv2
-        from paddleocr import PaddleOCR
-        img = cv2.imread(image_path)
-        if img is None:
-            return ""
-        img_h, img_w = img.shape[:2]
-        x1, y1 = max(0, x), max(0, y)
-        x2, y2 = min(img_w, x + w), min(img_h, y + h)
-        if x2 <= x1 or y2 <= y1:
-            return ""
-        crop = img[y1:y2, x1:x2]
-        ocr = PaddleOCR(lang="ch")
-        result = ocr.predict(crop)
-        if result and hasattr(result[0], 'json'):
-            texts = result[0].json.get('res', {}).get('rec_texts', [])
-            return " ".join(texts)
-        return ""
-
-
-    @staticmethod
-    def _format_table_adaptive(image_path, entries):
-        """自适应边框检测：用 OpenCV 检测表格线段，根据单元格边界组织文本"""
-        import cv2
-        import numpy as np
+        from ocr import run_ocr
         try:
-            img = cv2.imread(image_path)
-            if img is None:
-                return AgentTools._format_table(entries)
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            bw = cv2.adaptiveThreshold(~gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 15, -2)
-            h, w = bw.shape
-            # 检测水平线
-            h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(w // 30, 1), 1))
-            h_lines = cv2.morphologyEx(bw, cv2.MORPH_OPEN, h_kernel)
-            h_lines = cv2.dilate(h_lines, h_kernel, iterations=1)
-            # 检测垂直线
-            v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(h // 30, 1)))
-            v_lines = cv2.morphologyEx(bw, cv2.MORPH_OPEN, v_kernel)
-            v_lines = cv2.dilate(v_lines, v_kernel, iterations=1)
-            # 提取行列分割点
-            h_proj = np.sum(h_lines, axis=1)
-            v_proj = np.sum(v_lines, axis=0)
-            h_thresh = w * 128 * 0.3
-            v_thresh = h * 128 * 0.3
-            row_splits = [i for i in range(len(h_proj)) if h_proj[i] > h_thresh]
-            col_splits = [i for i in range(len(v_proj)) if v_proj[i] > v_thresh]
-            # 合并相近分割点
-            def merge_splits(splits, min_gap=10):
-                if not splits:
-                    return []
-                groups = [[splits[0]]]
-                for s in splits[1:]:
-                    if s - groups[-1][-1] < min_gap:
-                        groups[-1].append(s)
-                    else:
-                        groups.append([s])
-                return [int(np.mean(g)) for g in groups]
-            row_splits = merge_splits(row_splits)
-            col_splits = merge_splits(col_splits)
-            if len(row_splits) < 2 or len(col_splits) < 2:
-                safe_print("[Tool] 未检测到明显表格线段，回退坐标聚类")
-                return AgentTools._format_table(entries)
-            # 将文本映射到单元格
-            def find_cell(pos, splits):
-                for i in range(len(splits) - 1):
-                    if splits[i] <= pos <= splits[i + 1]:
-                        return i
-                return 0 if pos < splits[0] else len(splits) - 2
-            grid = {}
-            for e in entries:
-                row_idx = find_cell(e["y"], row_splits)
-                col_idx = find_cell(e["x"], col_splits)
-                key = (row_idx, col_idx)
-                grid[key] = grid.get(key, "") + " " + e["text"] if key in grid else e["text"]
-            if not grid:
-                return AgentTools._format_table(entries)
-            max_r = max(k[0] for k in grid)
-            max_c = max(k[1] for k in grid)
-            lines = []
-            for r in range(max_r + 1):
-                cells = [grid.get((r, c), "").strip() for c in range(max_c + 1)]
-                if any(cells):
-                    lines.append(" | ".join(cells))
-            safe_print(f"[Tool] 检测到 {len(row_splits)} 行 x {len(col_splits)} 列网格")
-            return "\n".join(lines) if lines else AgentTools._format_table(entries)
-        except Exception as ex:
-            safe_print(f"[Tool] 边框检测异常: {ex}，回退坐标聚类")
-            return AgentTools._format_table(entries)
-
-
-    @staticmethod
-    def _format_table_precise(image_path: str, brain=None) -> str:
-        """精确表格识别：OpenCV 边框检测 + PaddleOCR 文字识别，输出 HTML"""
-        import cv2
-        import numpy as np
-
-        # PaddleOCR 文字识别
-        from paddleocr import PaddleOCR
-        safe_print("[Tool] Precise: PaddleOCR 识别...")
-        ocr = PaddleOCR(lang="ch")
-        entries = AgentTools._ocr_entries_basic(image_path, ocr)
-        if not entries:
-            safe_print("[Tool] Precise: OCR 无结果")
-            return ""
-
-        # OpenCV 边框检测
-        safe_print("[Tool] Precise: OpenCV 边框检测...")
-        img = cv2.imread(image_path)
-        if img is None:
-            safe_print("[Tool] Precise: 图片读取失败")
-            return ""
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        bw = cv2.adaptiveThreshold(~gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 15, -2)
-        h, w = bw.shape
-
-        h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(w // 30, 1), 1))
-        h_lines = cv2.morphologyEx(bw, cv2.MORPH_OPEN, h_kernel)
-        h_lines = cv2.dilate(h_lines, h_kernel, iterations=1)
-
-        v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(h // 30, 1)))
-        v_lines = cv2.morphologyEx(bw, cv2.MORPH_OPEN, v_kernel)
-        v_lines = cv2.dilate(v_lines, v_kernel, iterations=1)
-
-        h_proj = np.sum(h_lines, axis=1)
-        v_proj = np.sum(v_lines, axis=0)
-        h_thresh = w * 128 * 0.3
-        v_thresh = h * 128 * 0.3
-        row_splits = [i for i in range(len(h_proj)) if h_proj[i] > h_thresh]
-        col_splits = [i for i in range(len(v_proj)) if v_proj[i] > v_thresh]
-
-        def merge_splits(splits, min_gap=10):
-            if not splits:
-                return []
-            groups = [[splits[0]]]
-            for s in splits[1:]:
-                if s - groups[-1][-1] < min_gap:
-                    groups[-1].append(s)
-                else:
-                    groups.append([s])
-            return [int(np.mean(g)) for g in groups]
-
-        row_splits = merge_splits(row_splits)
-        col_splits = merge_splits(col_splits)
-
-        if len(row_splits) < 2 or len(col_splits) < 2:
-            safe_print("[Tool] Precise: 未检测到表格线段，回退坐标聚类")
-            return ""
-
-        # 映射 OCR 文本到单元格
-        def find_cell(pos, splits):
-            for i in range(len(splits) - 1):
-                if splits[i] <= pos <= splits[i + 1]:
-                    return i
-            return 0 if pos < splits[0] else len(splits) - 2
-
-        grid = {}
-        for e in entries:
-            r = find_cell(e["y"], row_splits)
-            c = find_cell(e["x"], col_splits)
-            key = (r, c)
-            if key in grid:
-                grid[key] += " " + e["text"]
+            ocr_result = run_ocr(
+                image_path=image_path,
+                coords=(x, y, w, h),
+                mode="cluster"
+            )
+            if "---" in ocr_result:
+                flat_text = ocr_result.split("---", 1)[1].strip()
             else:
-                grid[key] = e["text"]
+                flat_text = ocr_result
+            
+            import re
+            lines = []
+            for line in flat_text.split("\n"):
+                m = re.match(r"(.+?)\s+\[\d+,\d+,\d+,\d+\]", line.strip())
+                if m:
+                    lines.append(m.group(1).strip())
+                else:
+                    lines.append(line.strip())
+            return " ".join(lines)
+        except Exception:
+            return ""
 
-        n_rows = len(row_splits) - 1
-        n_cols = len(col_splits) - 1
-        safe_print(f"[Tool] Precise: {n_rows} 行 x {n_cols} 列网格，{len(entries)} 个文本块")
 
-        # 输出 HTML
-        parts = ["<table>"]
-        for r in range(n_rows):
-            parts.append("<tr>")
-            for c in range(n_cols):
-                text = grid.get((r, c), "")
-                parts.append(f"<td>{text}</td>")
-            parts.append("</tr>")
-        parts.append("</table>")
-        table_html = "".join(parts)
-        safe_print(f"[Tool] Precise done, {len(table_html)} chars HTML.")
-        return table_html
 
-    @staticmethod
-    def _merge_ocr_into_html(table_html: str, ocr_entries: list, image_path: str) -> str:
-        """将 PaddleOCR 检测到的文本（含 √/×）按坐标填入 PaddleX HTML 的空单元格"""
-        import cv2
-        import re
-
-        if not ocr_entries or not table_html:
-            return table_html
-
-        # 解析图片尺寸
-        img = cv2.imread(image_path)
-        if img is None:
-            return table_html
-        img_h, img_w = img.shape[:2]
-
-        # 解析 HTML 为 grid（二维列表）
-        grid = []
-        for tr_match in re.finditer(r"<tr[^>]*>(.*?)</tr>", table_html, re.DOTALL):
-            row = []
-            for td_match in re.finditer(r"<td[^>]*>(.*?)</td>", tr_match.group(1), re.DOTALL):
-                attrs = td_match.group(0).split(">")[0]  # <td colspan="2" rowspan="3"
-                cs = 1
-                rs = 1
-                m_cs = re.search(r'colspan="(\d+)"', attrs)
-                m_rs = re.search(r'rowspan="(\d+)"', attrs)
-                if m_cs:
-                    cs = int(m_cs.group(1))
-                if m_rs:
-                    rs = int(m_rs.group(1))
-                text = re.sub(r"<[^>]+>", "", td_match.group(1)).strip()
-                row.append({"text": text, "cs": cs, "rs": rs})
-            if row:
-                grid.append(row)
-
-        if not grid:
-            return table_html
-
-        n_rows = len(grid)
-        max_cols = max(sum(c["cs"] for c in row) for row in grid)
-        if n_rows == 0 or max_cols == 0:
-            return table_html
-
-        # 估算单元格的像素坐标范围
-        cell_h = img_h / n_rows
-        cell_w = img_w / max_cols
-
-        symbol_re = re.compile(r"[✓√×X✗✘]")
-
-        # 填充空单元格
-        filled = 0
-        placed = set()
-        for r, row in enumerate(grid):
-            col_offset = 0
-            for c, cell in enumerate(row):
-                if cell["text"]:
-                    col_offset += cell["cs"]
-                    continue
-
-                # 估算该单元格在图片中的坐标范围
-                y1 = r * cell_h
-                y2 = (r + cell["rs"]) * cell_h
-                x1 = col_offset * cell_w
-                x2 = (col_offset + cell["cs"]) * cell_w
-
-                # 找落在该区域内的 OCR 条目
-                best_entry = None
-                best_dist = float("inf")
-                for i, entry in enumerate(ocr_entries):
-                    if i in placed:
-                        continue
-                    ey, ex = entry["y"], entry["x"] + entry.get("w", 0) / 2
-                    if y1 <= ey <= y2 and x1 <= ex <= x2:
-                        has_sym = bool(symbol_re.search(entry["text"]))
-                        dist = abs(ey - (y1 + y2) / 2) + abs(ex - (x1 + x2) / 2)
-                        score = (0 if has_sym else 10000) + dist
-                        if score < best_dist:
-                            best_dist = score
-                            best_entry = (i, entry)
-
-                if best_entry:
-                    idx, entry = best_entry
-                    cell["text"] = entry["text"]
-                    placed.add(idx)
-                    filled += 1
-
-                col_offset += cell["cs"]
-
-        if filled == 0:
-            return table_html
-
-        safe_print(f"[Tool] OCR merge: 补充了 {filled} 个空单元格")
-
-        # 重建 HTML
-        parts = ["<table>"]
-        for row in grid:
-            parts.append("<tr>")
-            for cell in row:
-                attrs = ""
-                if cell["cs"] > 1:
-                    attrs += f' colspan="{cell["cs"]}"'
-                if cell["rs"] > 1:
-                    attrs += f' rowspan="{cell["rs"]}"'
-                parts.append(f"<td{attrs}>{cell['text']}</td>")
-            parts.append("</tr>")
-        parts.append("</table>")
-        return "".join(parts)
 
     @staticmethod
     def check_weather_tool(city: str = "牡丹江") -> dict:
