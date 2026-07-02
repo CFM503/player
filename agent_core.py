@@ -2,6 +2,10 @@
 中燃"安全数字监督员"智能体核心架构 (agent_core.py)
 面向场景：巡检工人手机拍照上传 -> 自动去阴影矫正 -> 线上API语义结构化 -> 自动化闭环。
 
+v3.12.1 变更：
+  - 完善 `ocr.py` 的多引擎支持：正式继承“本地 PaddleOCR”与“视觉大模型 (Vision LLM)”双引擎，且在 Vision LLM 引擎下支持大模型相关参数配置。
+  - 修复 PaddleOCR 3.x 版本中不支持 `use_gpu` 的问题，改用 `device`（`cpu` 或 `gpu`）。
+
 v3.12.0 变更：
   - 解耦重构：提取 OCR 相关代码至独立的 `ocr.py` 模块。
   - `ocr_tool()` 和 `_ocr_crop_region()` 改为导入并委托 `ocr.run_ocr()` 处理，支持坐标裁剪及 Markdown 扫描结果输出，且支持选择 CPU 或 GPU 运行。

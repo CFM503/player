@@ -1,6 +1,6 @@
 """
 中燃"安全数字监督员" OCR 处理器模块 (ocr.py)
-面向场景：支持全图扫描/指定坐标区域裁剪扫描，保存裁剪子图及 Markdown 文本结果，支持指定使用 CPU 或 GPU。
+面向场景：支持全图扫描/指定坐标区域裁剪扫描，保存裁剪子图及 Markdown 文本结果，支持指定使用 CPU 或 GPU，以及选择不同的 OCR 引擎（本地 PaddleOCR 或 视觉大模型）。
 可用作 Python 模块导入，亦可独立在命令行运行。
 """
 
@@ -159,13 +159,54 @@ def get_ocr_instance(device: str = "cpu"):
         
     return _ocr_cache[device]
 
+def run_vision_ocr(image_path: str, api_key: str, base_url: str, model_name: str) -> str:
+    """调用视觉大模型（Vision LLM）识别表格。"""
+    import base64
+    from openai import OpenAI
+    
+    if not api_key:
+        raise ValueError("API key must be provided for vision engine.")
+        
+    client = OpenAI(api_key=api_key, base_url=base_url)
+    
+    with open(image_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+        
+    prompt = (
+        "请识别这张表格图片中的全部内容，输出 Markdown 表格格式。\n"
+        "要求：\n"
+        "1. 保留所有勾选符号（✓、×、√、X），准确填入对应单元格\n"
+        "2. 合并单元格用 Markdown 标准语法表达，保持行列对齐\n"
+        "3. 手写体文字标注（手写）\n"
+        "4. 仅输出 Markdown，不要解释"
+    )
+    
+    resp = client.chat.completions.create(
+        model=model_name,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                {"type": "text", "text": prompt},
+            ],
+        }],
+        temperature=0.1,
+        max_tokens=8192,
+        timeout=120,
+    )
+    return resp.choices[0].message.content.strip()
+
 def run_ocr(
     image_path: str,
     coords: Optional[tuple] = None,
     save_crop_path: Optional[str] = None,
     save_markdown_path: Optional[str] = None,
     mode: str = "cluster",
-    device: str = "cpu"
+    device: str = "cpu",
+    engine: str = "paddleocr",
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+    model_name: Optional[str] = None
 ) -> str:
     """
     执行 OCR 扫描核心流程。
@@ -176,9 +217,26 @@ def run_ocr(
     :param save_markdown_path: 若指定，将 OCR 结果以 markdown 文件形式保存
     :param mode: 格式化表格模式 ('cluster' 为坐标聚类, 'adaptive' 为自适应边框检测)
     :param device: 使用设备 ('cpu' 或 'gpu'，默认为 'cpu')
-    :return: 扫描结果的 markdown/文本字符串 (表数据 + 原文坐标元数据)
+    :param engine: OCR 引擎类型 ('paddleocr' 或 'vision')
+    :param api_key: 视觉大模型 API Key
+    :param base_url: 视觉大模型 API 基础 URL
+    :param model_name: 视觉大模型名称
+    :return: 扫描结果的 markdown/文本字符串
     """
-    # 1. 读取/裁剪图片
+    # 1. 运行视觉大模型（不需要裁剪和 PaddleOCR 识别）
+    if engine == "vision":
+        print(f"[OCR] Running Vision LLM OCR: {image_path} (model: {model_name})")
+        ocr_result = run_vision_ocr(image_path, api_key or "", base_url or "", model_name or "")
+        
+        # 保存为 markdown 结果
+        if save_markdown_path:
+            os.makedirs(os.path.dirname(os.path.abspath(save_markdown_path)), exist_ok=True)
+            with open(save_markdown_path, "w", encoding="utf-8") as f:
+                f.write(ocr_result)
+            print(f"[OCR] Saved scan result in Markdown format to: {save_markdown_path}")
+        return ocr_result
+
+    # 2. 本地 PaddleOCR 流程：读取/裁剪图片
     if coords:
         x, y, w, h = coords
         print(f"[OCR] 区域裁剪 OCR: x={x}, y={y}, w={w}, h={h} (使用设备: {device})")
@@ -191,7 +249,7 @@ def run_ocr(
             raise FileNotFoundError(f"无法读取图片: {image_path}")
         x_offset, y_offset = 0, 0
 
-    # 2. 获取 PaddleOCR 实例并运行识别
+    # 3. 获取 PaddleOCR 实例并运行识别
     ocr = get_ocr_instance(device=device)
     result = ocr.predict(img_for_ocr)
     
@@ -216,20 +274,20 @@ def run_ocr(
     if not entries:
         ocr_result = ""
     else:
-        # 3. 表格结构化
+        # 4. 表格结构化
         if mode == "adaptive":
             table_text = format_table_adaptive(img_for_ocr, entries)
         else:
             table_text = format_table_cluster(entries)
             
-        # 4. 输出绝对坐标（基于原始大图的绝对坐标）
+        # 5. 输出绝对坐标（基于原始大图的绝对坐标）
         flat_text = "\n".join(
             f"{e['text']}  [{int(e['x'] + x_offset)},{int(e['y'] + y_offset)},{int(e['w'])},{int(e['h'])}]"
             for e in sorted(entries, key=lambda e: (e["y"] // 15, e["x"]))
         )
         ocr_result = f"{table_text}\n---\n{flat_text}"
 
-    # 5. 保存为 markdown 结果
+    # 6. 保存为 markdown 结果
     if save_markdown_path:
         os.makedirs(os.path.dirname(os.path.abspath(save_markdown_path)), exist_ok=True)
         with open(save_markdown_path, "w", encoding="utf-8") as f:
@@ -246,6 +304,10 @@ if __name__ == "__main__":
     parser.add_argument("--save-markdown", help="File path to save the OCR scanned Markdown result")
     parser.add_argument("--mode", choices=["cluster", "adaptive"], default="cluster", help="Formatting table mode: cluster (coordinate clustering, default) or adaptive (adaptive border detection)")
     parser.add_argument("--device", choices=["cpu", "gpu"], default="cpu", help="Running device type: cpu (default) or gpu")
+    parser.add_argument("--engine", choices=["paddleocr", "vision"], default="paddleocr", help="OCR engine type: paddleocr (default) or vision (Vision LLM)")
+    parser.add_argument("--api-key", help="API key for Vision LLM (required if engine is vision)")
+    parser.add_argument("--base-url", default="https://api.siliconflow.cn/v1", help="API base URL for Vision LLM")
+    parser.add_argument("--model-name", default="Qwen/Qwen2.5-7B-Instruct", help="Model name for Vision LLM")
     
     args = parser.parse_args()
     
@@ -266,7 +328,11 @@ if __name__ == "__main__":
             save_crop_path=args.save_crop,
             save_markdown_path=args.save_markdown,
             mode=args.mode,
-            device=args.device
+            device=args.device,
+            engine=args.engine,
+            api_key=args.api_key if hasattr(args, "api_key") else getattr(args, "api_key", None),
+            base_url=args.base_url,
+            model_name=args.model_name
         )
         print("\n=== OCR Scanned Result ===")
         print(res)
