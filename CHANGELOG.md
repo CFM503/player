@@ -1,6 +1,28 @@
 # 更新日志 (CHANGELOG)
 
-## [Unreleased]
+## [3.10.0] - 2026-07-02
+
+### 新增
+- **钉钉 AI 表格 MCP 接入**：`AgentTools.write_dingtalk_table()` 重写为通过 MCP Streamable HTTP 协议直接写入钉钉多维表，彻底替代旧 Webhook 方式。
+- **自动表格结构发现**：首次接入时自动调用 `_discover_dingtalk_fields()` 枚举所有 Base / Table / Field 映射并缓存至 `.dingtalk_cache.json`，后续无需手动配置字段 ID。
+- **缓存兼容升级**：`_load_dingtalk_cache()` 支持旧版 dict 格式自动迁移为 list，向后兼容历史缓存文件。
+- **异步桥接**：`_run_async()` 在独立线程中运行新事件循环，避免与 Streamlit tornado 事件循环冲突。
+- **MCP 可达性探测**：`_ping_dingtalk_mcp()` 在写入前验证 MCP 地址可达性，快速失败并报错。
+- **钉钉 AI 表格客户端**：新增独立 `dingtalk_client.py`（`DingTalkAITableClient`），封装 list_bases / get_base / get_tables / create_record 等 MCP 调用。
+- **MCP 集成测试**：新增 `test_mcp.py`，覆盖发现流程、写入流程及多 Base 路由逻辑。
+- **依赖新增**：`requirements.txt` 补充 `mcp>=1.0.0` 和 `httpx>=0.28.0`。
+
+### 变更
+- **侧边栏通知设置重构**：移除企业微信 Webhook 和钉钉 Webhook 双输入框，改为单个「钉钉 MCP 地址」密码输入框；未配置时展示黄色警告横幅。
+- **配置字段重命名**：`config.json` / `config.example.json` 中 `wechat_webhook` 和 `dingtalk_webhook` 合并为 `dingtalk_mcp_url`。
+- **`components.py` 按钮逻辑升级**：`render_notification_btn()` 参数 `webhook_key` 改为 `mcp_key`，点击后调用 `AgentTools.write_dingtalk_table()` 写 AI 表格，不再 POST Webhook。
+- **Tab1 通知区域简化**：移除结果页中企业微信发送按钮，保留钉钉 AI 表格写入入口（由 Agent 自动触发，手动按钮已隐藏）。
+- **`.gitignore` 补充**：忽略 `dingtalk_client.py` 生成的临时鉴权缓存。
+
+### 修复
+- **`_discover_dingtalk_fields` 响应兼容**：`_safe_get()` 辅助函数处理 MCP 响应中 `data` 嵌套层级不一致问题，避免 KeyError。
+
+## [3.9.1] - 2026-06-28
 
 ### 安全修复 (ponytail.audit)
 - **🔴 修复 API Key 泄露**：`config.example.json` 中真实 API Key 替换为占位符，防止凭证外泄。
@@ -36,7 +58,7 @@
 ### 新增
 - **L3 条件路由自动审核**：根据风险等级自动分流审批——低风险自动通过、一般风险推送主管审批、较大/重大风险禁止作业。
 - **审批状态字段**：`SecuritySheetData` 新增 `approval_status`（自动通过/待审批/已驳回）和 `approval_level`（自动通过/主管审批/禁止作业）。
-- **双通道全量通知**：所有路由级别均通过企业微信+钉钉推送，消息包含申请人和安全主管。
+- **全量通知**：所有路由级别均通过钉钉推送，消息包含申请人和安全主管。
 - **运行日志增强**：`_act()` 重构为 6 步 L3 流程，每步 print + AgentMemory 记录，前端日志窗口可见完整审批链路。
 - **KPI 卡片新增审批状态**：结果页新增审批状态指标（绿=自动通过、蓝=待审批、红=已驳回）。
 - **看板审批状态显示**：Tab2 记录详情和批量汇总均展示审批状态。
@@ -131,7 +153,7 @@
 
 ### 文档
 - **README 全面更新**：版本号升至 v3.4.0，新增"软件特点"章节（自主决策、五种 OCR 模式、端到端闭环、双通道预警、启动校验、国内镜像），技术栈表格补充 PaddleStructure/SLANet_plus/PP-DocLayout-L/Pandas/双通道通知/依赖管理/推理引擎，快速启动更新为 requirements.txt + config.json 新格式，项目结构补充 check_deps.py/requirements.txt/components.py/styles.py。
-- **CHANGELOG 补充**：v3.4.0 补充企业微信/钉钉推送改为 config.json 读取及异常捕获修复记录。
+- **CHANGELOG 补充**：v3.4.0 补充钉钉推送改为 config.json 读取及异常捕获修复记录。
 
 ## [3.4.0] - 2026-06-25
 
@@ -143,14 +165,14 @@
 - **Streamlit API 更新**：`st.components.v1.html()` 已废弃，替换为 `st.html(unsafe_allow_javascript=True)`。
 
 ### 修复
-- **企业微信/钉钉推送改为 config.json 读取**：`send_wechat_alert()` 从环境变量改为读取 `config.json`，与前端侧边栏通知设置统一。
-- **企业微信/钉钉推送增加异常捕获**：网络错误时打印失败日志而非抛出异常。
+- **钉钉推送改为钉钉 AI 表格 MCP 接入**：`write_dingtalk_table()` 通过 MCP 协议写入多维表 `test_demo` 表（编号/原因/评估结果/填表人），替换原有 Webhook 推送。
+- **钉钉推送增加异常捕获**：网络错误时打印失败日志而非抛出异常。
 
 ## [3.3.5] - 2026-06-25
 
 ### 新增
 - **启动依赖版本检查**：新增 `check_deps.py`，程序启动时强制校验 Python 3.13+ 及全部第三方依赖为最新版本，不满足则打印诊断信息并阻止启动。Streamlit 多进程通过环境变量防重复输出。
-- **运行日志钉钉推送**：agent `_act()` 阶段新增钉钉 Webhook 自动推送（与企业微信并列），未配置时在运行日志窗口打印 ⚠️ 警告提示。
+- **运行日志钉钉推送**：agent `_act()` 阶段自动推送钉钉 Webhook，未配置时在运行日志窗口打印 ⚠️ 警告提示。
 - **requirements.txt**：新增依赖声明文件，支持 `pip install --upgrade -r requirements.txt` 一键升级。
 - **国内镜像安装**：所有 `pip install` 命令统一使用清华镜像源 `pypi.tuna.tsinghua.edu.cn`。
 
@@ -158,8 +180,7 @@
 - **OCR 引擎切换**：从 onnxruntime 切换为 PaddlePaddle 推理引擎，全项目 8 处更新（agent_core / check_deps / requirements / START.bat / 文档）。
 - **numpy 版本锁定**：从 1.26.4 升级至 2.3.5（满足 paddlex `>=1.24,<2.4` 约束）。
 - **依赖全量升级**：pydantic 2.13.4、opencv-python 4.13.0.92、openai 2.44.0、pandas 3.0.3、paddlepaddle 3.3.1、requests 2.34.2。
-- **企业微信推送改为 config.json 读取**：`send_wechat_alert()` 从环境变量 `WECHAT_WEBHOOK_URL` 改为读取 `config.json` 的 `wechat_webhook` 字段，与前端侧边栏设置统一。
-- **企业微信/钉钉推送增加异常捕获**：网络错误时打印失败日志而非抛出异常。
+- **钉钉推送增加异常捕获**：网络错误时打印失败日志而非抛出异常。
 
 ### 修复
 - **PaddlePaddle PIR+OneDNN 兼容**：修复 `ConvertPirAttribute2RuntimeAttribute not support [pir::ArrayAttribute<pir::DoubleAttribute>]` 错误，通过强制禁用 `enable_new_ir` 并降低优化等级。

@@ -135,8 +135,7 @@ with st.sidebar:
         _cfg["vision_base_url"] = vision_base_url
         _cfg["vision_model_name"] = vision_model_name
         _cfg["proxy"] = proxy_url if proxy_enabled else ""
-        _cfg["wechat_webhook"] = st.session_state.get("_wx", _cfg.get("wechat_webhook", ""))
-        _cfg["dingtalk_webhook"] = st.session_state.get("_dd", _cfg.get("dingtalk_webhook", ""))
+        _cfg["dingtalk_mcp_url"] = st.session_state.get("_dd", _cfg.get("dingtalk_mcp_url", ""))
         # 环境变量优先于配置文件
         if api_key: os.environ["ONLINE_API_KEY"] = api_key
         if base_url: os.environ["ONLINE_BASE_URL"] = base_url
@@ -158,8 +157,17 @@ with st.sidebar:
 
     # 通知设置面板
     with st.expander("⚙️ 通知设置", expanded=False):
-        wechat_webhook = st.text_input("企业微信 Webhook", _cfg.get("wechat_webhook", ""), type="password", help="企业微信群机器人 Webhook 地址", key="_wx")
-        dingtalk_webhook = st.text_input("钉钉 Webhook", _cfg.get("dingtalk_webhook", ""), type="password", help="钉钉群机器人 Webhook 地址", key="_dd")
+        pass
+    dingtalk_mcp_url = st.text_input(
+        "钉钉 MCP 地址",
+        _cfg.get("dingtalk_mcp_url", ""),
+        type="password",
+        help="钉钉 AI 表格 MCP Streamable HTTP 地址",
+        key="_dd",
+        placeholder="https://mcp-gw.dingtalk.com/server/...?key=...",
+    )
+    if not dingtalk_mcp_url:
+        st.warning("⚠️ 未配置钉钉 MCP 地址，将无法写入 AI 表格，请在左侧设置后点击「💾 保存设置」")
 
 # ---- 主面板：Hero 横幅 ----
 _status_ok = bool(api_key)
@@ -434,17 +442,6 @@ with tab1:
 
                     # KPI 行 + 审批建议
                     render_ticket_kpis(d)
-
-                    # 通知推送
-                    nc1, nc2 = st.columns(2)
-                    with nc1:
-                        def _dt_fmt(d):
-                            return ("text", f"【安全数字监督员】\n票号: {d.ticket_id}\n场站: {d.station_name}\n状态: {'有隐患' if d.has_abnormal else '正常'}\n风险: {d.risk_level or '-'}\n审批: {d.approval_status or '-'}\n建议: {d.approval_opinion or '-'}")
-                        render_notification_btn("钉钉", "📱", "dingtalk_webhook", _dt_fmt, d, idx, _cfg)
-                    with nc2:
-                        def _wx_fmt(d):
-                            return ("markdown", f"**【安全数字监督员】**\n> 票号: {d.ticket_id}\n> 场站: {d.station_name}\n> 状态: {'有隐患' if d.has_abnormal else '正常'}\n> 风险: {d.risk_level or '-'}\n> 审批: {d.approval_status or '-'}\n> 建议: {d.approval_opinion or '-'}")
-                        render_notification_btn("微信", "💬", "wechat_webhook", _wx_fmt, d, idx, _cfg)
 
                     # OCR + 隐患（折叠）
                     if result["ocr"]:

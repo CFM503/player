@@ -123,53 +123,52 @@ def render_guide(step: int, text: str) -> None:
 def render_notification_btn(
     platform: str,
     emoji: str,
-    webhook_key: str,
+    mcp_key: str,
     msg_fmt,
     d,
     idx: int,
     cfg: dict,
 ) -> None:
     """
-    通用通知推送按钮（钉钉/微信等）。
-
-    未配置 Webhook → disabled 按钮 + 提示文案。
-    已配置 → 点击发送，显示成功/失败反馈。
+    钉钉 AI 表格写入按钮。
 
     Args:
-        platform:    显示名，如 "钉钉"。
+        platform:    显示名，如 "钉钉 AI 表格"。
         emoji:       按钮前缀 emoji。
-        webhook_key: cfg 中的 key，如 "dingtalk_webhook"。
+        mcp_key:     cfg 中的 key，如 "dingtalk_mcp_url"。
         msg_fmt:     callable(d) -> (msgtype: str, content: str)。
         d:           结果数据对象（需有 ticket_id, station_name 等属性）。
         idx:         唯一 key 后缀（防 Streamlit key 冲突）。
         cfg:         应用配置字典。
     """
-    url = cfg.get(webhook_key, "")
-    key = f"{webhook_key}_{idx}"
+    url = cfg.get(mcp_key, "")
+    key = f"{mcp_key}_{idx}"
 
     if not url:
+        st.error(f"⚠️ 未配置钉钉 MCP 地址，无法写入 AI 表格")
         st.button(
-            f"{emoji} 发送{platform}", key=key,
+            f"{emoji} 写入{platform}", key=key,
             use_container_width=True, disabled=True,
-            help=f"请在侧边栏通知设置中配置{platform} Webhook",
+            help=f"请在左侧「钉钉 MCP 地址」中配置后重试",
         )
-        st.caption(f"⚠️ 未配置{platform} Webhook，请在左侧边栏设置")
         return
 
-    if st.button(f"{emoji} 发送{platform}", key=key, use_container_width=True):
-        msgtype, content = msg_fmt(d)
-        try:
-            resp = _req.post(
-                url,
-                json={"msgtype": msgtype, msgtype: {"content": content}},
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                st.success(f"✅ {platform}发送成功")
-            else:
-                st.error(f"发送失败: {resp.status_code}")
-        except Exception as e:
-            st.error(f"发送失败: {e}")
+    if st.button(f"{emoji} 写入{platform}", key=key, use_container_width=True):
+        # 导入 agent 工具写表格
+        from agent_core import AgentTools
+        _, content = msg_fmt(d)
+        # 写 AI 表格：编号 / 图片附件 / 问题描述 / 责任人 / 等级
+        result = AgentTools.write_dingtalk_table(
+            ticket_id=d.ticket_id,
+            image_path="",  # 手动触发时无图片路径
+            description=content[:200],
+            person_name=AgentTools.extract_filler_name("", d.worker_id or ""),
+            risk_level=d.risk_level or "",
+        )
+        if result:
+            st.success(f"✅ 已写入{platform}")
+        else:
+            st.error(f"写入{platform}失败，请查看运行日志")
 
 
 def render_record_badge(risk: str | None, abnormal: bool) -> str:

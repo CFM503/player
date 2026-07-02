@@ -8,5 +8,7 @@ numpy>=2.3.5,<2.4
 pandas>=3.0.3
 paddlepaddle>=3.3.1
 requests>=2.34.2
+mcp>=1.0.0
+httpx>=0.28.0
 # 精确表格识别依赖 (paddlex[ocr])
 paddlex[ocr]>=3.7.1

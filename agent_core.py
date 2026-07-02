@@ -2,13 +2,20 @@
 中燃"安全数字监督员"智能体核心架构 (agent_core.py)
 面向场景：巡检工人手机拍照上传 -> 自动去阴影矫正 -> 线上API语义结构化 -> 自动化闭环。
 
+v3.10.0 变更：
+  - 钉钉通知从 Webhook POST 重写为 MCP Streamable HTTP 协议写入钉钉 AI 表格（多维表）。
+  - AgentTools 新增 _discover_dingtalk_fields / _load_dingtalk_cache / _save_dingtalk_cache /
+    _run_async / _ping_dingtalk_mcp 五个辅助方法，write_dingtalk_table() 完全重写。
+  - 移除企业微信推送（send_wechat_alert / send_dingtalk_alert Webhook 路径）。
+
 依赖库:
-pip install pydantic openai paddleocr opencv-python numpy requests -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install pydantic openai paddleocr opencv-python numpy requests mcp httpx -i https://pypi.tuna.tsinghua.edu.cn/simple
 """
 
 import os
 import json
 import time
+import asyncio
 import logging
 logging.getLogger("streamlit").setLevel(logging.ERROR)  # 屏蔽后台线程 ScriptRunContext 噪音
 from typing import List, Dict, Any, Optional
@@ -1034,38 +1041,262 @@ class AgentTools:
         return True
 
     @staticmethod
-    def send_wechat_alert(detail: str, receiver: str = "安全负责人") -> bool:
-        """企业微信 Webhook 预警"""
-        cfg = load_config()
-        webhook = cfg.get("wechat_webhook", "")
-        safe_print(f"[Tool] 向 {receiver} 推送企业微信预警...")
-        if not webhook:
-            safe_print("[Tool] 未配置企业微信 Webhook，跳过实际发送。")
-            return True
-        import requests
-        payload = {"msgtype": "markdown", "markdown": {"content": f"### 安全隐患警报\n> {receiver}\n> {detail}"}}
+    def _dingtalk_field_cache_path() -> str:
+        return os.path.join(os.path.dirname(__file__), ".dingtalk_cache.json")
+
+    @staticmethod
+    def _load_dingtalk_cache() -> list:
+        """加载缓存，兼容旧版 dict 格式 → 转为 list"""
+        path = AgentTools._dingtalk_field_cache_path()
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict) and data.get("base_id"):
+                return [data]  # 旧版单 base
+        return []
+
+    @staticmethod
+    def _save_dingtalk_cache(cache: dict):
+        path = AgentTools._dingtalk_field_cache_path()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
+
+    @staticmethod
+    def _run_async(coro):
+        """同步桥接：在新线程中启动独立事件循环运行异步协程。避免与 Streamlit tornado 事件循环冲突。"""
+        import concurrent.futures
+
+        def _runner():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(coro)
+            finally:
+                loop.close()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            future = ex.submit(_runner)
+            return future.result(timeout=30)
+
+    @staticmethod
+    def _ping_dingtalk_mcp(mcp_url: str) -> bool:
+        """验证 MCP 地址是否可达"""
+        import httpx
         try:
-            return requests.post(webhook, json=payload, timeout=10).status_code == 200
-        except Exception as e:
-            safe_print(f"[Tool] 企业微信推送失败: {e}")
+            # MCP Streamable HTTP 端点通常接受 GET
+            resp = httpx.get(mcp_url, timeout=10)
+            return resp.status_code < 500
+        except Exception:
             return False
 
     @staticmethod
-    def send_dingtalk_alert(detail: str, receiver: str = "安全负责人") -> bool:
-        """钉钉 Webhook 预警"""
+    def _discover_dingtalk_fields(mcp_url: str) -> list:
+        """
+        首次连接时自动发现所有 base / table / field 映射，写入本地缓存。
+        返回 [{"base_id": "...", "table_id": "...", "fields": {...}}, ...]
+        """
+        safe_print("[Tool] 首次接入钉钉 AI 表格，正在自动发现表格结构...")
+
+        def _safe_get(response, key: str, default=None):
+            if not isinstance(response, dict):
+                return default
+            if key in response:
+                return response[key]
+            data = response.get("data")
+            if isinstance(data, dict) and key in data:
+                return data[key]
+            return default
+
+        async def _discover():
+            from dingtalk_client import DingTalkAITableClient
+            async with DingTalkAITableClient(mcp_url) as client:
+                bases = await client.list_bases(limit=50)
+                base_list = _safe_get(bases, "bases", [])
+                if not base_list:
+                    raise RuntimeError("未找到任何钉钉多维表 Base")
+
+                results = []
+                for b in base_list:
+                    base_id = b.get("baseId") or b.get("id", "")
+                    if not base_id:
+                        continue
+                    base_name = b.get("baseName", b.get("name", base_id))
+                    # 查找含有 test_demo 或 test_demo_base 的 base
+                    # 同时兼容 base_name 包含 "test_demo" 的
+                    if "test_demo" not in base_name.lower():
+                        continue
+
+                    base_info = await client.get_base(base_id)
+                    tables = _safe_get(base_info, "tables", [])
+                    for t in tables:
+                        tn = t.get("tableName", t.get("name", ""))
+                        # 匹配表名：test_demo 或 数据表（在 test_demo_base 系列中）
+                        if tn not in ("test_demo", "数据表"):
+                            continue
+                        table_id = t.get("tableId") or t.get("id", "")
+                        if not table_id:
+                            continue
+
+                        table_detail = await client.get_tables(base_id, [table_id])
+                        tbl_list = _safe_get(table_detail, "tables", [])
+                        field_map = {}
+                        for tbl in tbl_list:
+                            if (tbl.get("tableId") or tbl.get("id")) == table_id:
+                                for f in tbl.get("fields", []):
+                                    fname = f.get("fieldName", f.get("name", ""))
+                                    fid = f.get("fieldId") or f.get("id", "")
+                                    if fname and fid:
+                                        field_map[fname] = fid
+                        if field_map:
+                            # 至少有"编号"字段才算有效表
+                            has_key_fields = any("编号" in k for k in field_map)
+                            if not has_key_fields:
+                                safe_print(f"[Tool]   {base_name}/{tn}: 缺少编号字段，跳过")
+                                continue
+                            results.append({
+                                "base_id": base_id,
+                                "base_name": base_name,
+                                "table_id": table_id,
+                                "table_name": tn,
+                                "fields": field_map,
+                            })
+                            safe_print(f"[Tool]   {base_name}/{tn}: {field_map}")
+
+                if not results:
+                    raise RuntimeError("未找到 test_demo 相关表")
+                return results
+
+        result = AgentTools._run_async(_discover())
+        AgentTools._save_dingtalk_cache(result)
+        return result
+
+    @staticmethod
+    def write_dingtalk_table(ticket_id: str, image_path: str, description: str, person_name: str, risk_level: str = "") -> bool:
+        """写入钉钉 AI 表格 test_demo 表（全自动，无需手动点击）
+        ticket_id → 编号, image_path → 图片附件, description → 问题描述, person_name → 责任人, risk_level → 等级
+        当等级不是"低风险"时，同时写入 base2（如果有）。
+        """
         cfg = load_config()
-        webhook = cfg.get("dingtalk_webhook", "")
-        safe_print(f"[Tool] 向 {receiver} 推送钉钉预警...")
-        if not webhook:
-            safe_print("[Tool] 未配置钉钉 Webhook，跳过实际发送。")
-            return True
-        import requests
-        payload = {"msgtype": "text", "text": {"content": f"【安全隐患警报】\n接收人: {receiver}\n{detail}"}}
-        try:
-            return requests.post(webhook, json=payload, timeout=10).status_code == 200
-        except Exception as e:
-            safe_print(f"[Tool] 钉钉推送失败: {e}")
+        mcp_url = cfg.get("dingtalk_mcp_url", "")
+        if not mcp_url:
+            safe_print("[Tool] ⚠️⚠️⚠️ 钉钉 MCP 未配置，写入失败！")
             return False
+
+        safe_print("[Tool] 📊 自动写入钉钉 AI 表格...")
+
+        # 获取字段映射（缓存是 list）
+        caches = AgentTools._load_dingtalk_cache()
+        if not caches:
+            try:
+                caches = AgentTools._discover_dingtalk_fields(mcp_url)
+            except Exception as e:
+                safe_print(f"[Tool] 钉钉 AI 表格发现失败: {e}")
+                return False
+
+        if not caches:
+            safe_print("[Tool] 钉钉 AI 表格缓存不完整。")
+            return False
+
+        # 决定写入哪些 base：base1 始终写，base2 仅在 level ≠ 低风险时写
+        is_high_risk = (risk_level and risk_level != "低风险")
+        if is_high_risk:
+            safe_print(f"[Tool]   等级={risk_level} ≠ 低风险 → 双写 base1 + base2")
+
+        async def _write_one(base_id, table_id, fields):
+            cells = {}
+            fid_attachment = None
+            for fname, fid in fields.items():
+                if "编号" in fname:
+                    cells[fid] = ticket_id
+                elif "图片" in fname or "附件" in fname:
+                    fid_attachment = fid
+                elif "问题描述" in fname or ("描述" in fname and "图片" not in fname):
+                    cells[fid] = description
+                elif "责任人" in fname:
+                    cells[fid] = person_name
+                elif "等级" in fname:
+                    cells[fid] = risk_level
+
+            if not cells:
+                safe_print("[Tool]   未匹配到任何目标字段")
+                return False
+
+            from dingtalk_client import DingTalkAITableClient
+            async with DingTalkAITableClient(mcp_url) as client:
+                if fid_attachment and image_path and os.path.exists(image_path):
+                    file_name = os.path.basename(image_path)
+                    file_size = os.path.getsize(image_path)
+                    ext = os.path.splitext(file_name)[1].lower()
+                    mime_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                                ".gif": "image/gif", ".bmp": "image/bmp", ".webp": "image/webp",
+                                ".pdf": "application/pdf", ".txt": "text/plain"}
+                    mime_type = mime_map.get(ext, "image/jpeg")
+                    upload_info = await client.prepare_attachment_upload(
+                        base_id, table_id, file_name, file_size, mime_type=mime_type)
+                    file_token = None
+                    upload_url = None
+                    if isinstance(upload_info, dict):
+                        d = upload_info.get("data", {}) if "data" in upload_info else upload_info
+                        file_token = d.get("fileToken") or upload_info.get("fileToken")
+                        upload_url = d.get("uploadUrl") or upload_info.get("uploadUrl")
+                    if file_token and upload_url:
+                        import urllib.request
+                        with open(image_path, "rb") as f:
+                            file_bytes = f.read()
+                        req = urllib.request.Request(upload_url, data=file_bytes, method="PUT")
+                        req.add_header("Content-Type", mime_type)
+                        try:
+                            urllib.request.urlopen(req, timeout=30)
+                            cells[fid_attachment] = [{"fileToken": file_token}]
+                        except Exception:
+                            pass
+                    elif file_token:
+                        cells[fid_attachment] = [{"fileToken": file_token}]
+
+                resp = await client.create_records(base_id, table_id, [{"cells": cells}])
+                return resp.get("status") == "success"
+
+        success_count = 0
+        for i, cache in enumerate(caches):
+            base_id = cache.get("base_id", "")
+            table_id = cache.get("table_id", "")
+            fields = cache.get("fields", {})
+            base_name = cache.get("base_name", f"base{i+1}")
+            if not base_id or not table_id or not fields:
+                continue
+            # base2 仅在非低风险时写入
+            if i > 0 and not is_high_risk:
+                safe_print(f"[Tool]   等级=低风险，跳过 {base_name}")
+                continue
+            safe_print(f"[Tool]   写入 {base_name}/{cache.get('table_name', '?')}...")
+            try:
+                ok = AgentTools._run_async(_write_one(base_id, table_id, fields))
+                if ok:
+                    success_count += 1
+                    safe_print(f"[Tool]   {base_name} ✅")
+                else:
+                    safe_print(f"[Tool]   {base_name} ❌")
+            except Exception as e:
+                safe_print(f"[Tool]   {base_name} ❌ {e}")
+
+        safe_print(f"[Tool] 钉钉 AI 表格写入完成: {success_count}/{len(caches)}")
+        return success_count > 0
+
+    @staticmethod
+    def extract_filler_name(ocr_text: str, worker_id: str) -> str:
+        """从 OCR 原文中提取填表人第一个中文名；退回到 worker_id"""
+        if ocr_text:
+            m = re.search(r"填表人[：:]?\s*([^\n]{2,8})", ocr_text)
+            if m:
+                return m.group(1).strip()
+        # 退回：从 worker_id 提取第一个中文片段
+        if worker_id:
+            m = re.search(r"([一-龥]{2,4})", worker_id)
+            if m:
+                return m.group(1)
+        return worker_id or "未知"
 
 
 # ==========================================
@@ -1417,51 +1648,32 @@ class SecurityAgent:
         safe_print(f"[Agent Act] ⑤ 已存入 SQLite: {data.ticket_id}")
         mem.remember("执行", "💾", "数据入库", f"票号 {data.ticket_id} 已存入 SQLite")
 
-        # ---- ⑥ 双通道通知（所有路由均推送） ----
-        safe_print("[Agent Act] ⑥ 双通道通知（企微+钉钉）...")
+        # ---- ⑥ 钉钉 AI 表格写入 ----
+        safe_print("[Agent Act] ⑥ 钉钉 AI 表格...")
         cfg = load_config()
-        applicant = data.worker_id or "未知"
-        supervisor = data.approver_name or "未知"
+        filler = self.tools.extract_filler_name(ocr_text, data.worker_id or "")
 
-        # 按路由级别构建消息
-        if data.approval_level == "自动通过":
-            title = "✅ 自动通过"
-            body = (f"【{title}】{data.ticket_id}\n"
-                    f"场站:{data.station_name} 申请人:{applicant} 安全主管:{supervisor}\n"
-                    f"风险:{data.risk_level} 浓度:{data.gas_concentration}\n"
-                    f"状态:低风险，已自动审批通过")
-        elif data.approval_level == "主管审批":
-            title = "⏳ 待主管审批"
-            body = (f"【{title}】{data.ticket_id}\n"
-                    f"场站:{data.station_name} 申请人:{applicant} 安全主管:{supervisor}\n"
-                    f"风险:{data.risk_level} 浓度:{data.gas_concentration}\n"
-                    f"状态:需安全主管审批后方可作业")
+        if cfg.get("dingtalk_mcp_url"):
+            # 问题描述：LLM 结构化 JSON 摘要
+            description = json.dumps({
+                "票号": data.ticket_id,
+                "类型": data.ticket_type,
+                "场站": data.station_name,
+                "风险": data.risk_level,
+                "审批": data.approval_status,
+                "建议": data.approval_opinion[:200] if data.approval_opinion else "",
+            }, ensure_ascii=False)
+            self.tools.write_dingtalk_table(data.ticket_id, image_path, description, filler, data.risk_level or "")
+            safe_print(f"[Agent Act] ⑥ 钉钉 AI 表格 → 已写入 (责任人:{filler})")
+            notify_result = f"编号:{data.ticket_id} → 钉钉 AI 表格 责任人:{filler}"
         else:
-            title = "🚫 禁止作业"
-            issue_lines = "\n".join(f"  ·{i.item_name}({i.raw_text or '异常'})" for i in data.issues[:5])
-            body = (f"【{title}】{data.ticket_id}\n"
-                    f"场站:{data.station_name} 申请人:{applicant} 安全主管:{supervisor}\n"
-                    f"风险:{data.risk_level} 浓度:{data.gas_concentration}\n"
-                    f"隐患明细:\n{issue_lines}")
-
-        # 企业微信推送
-        if cfg.get("wechat_webhook"):
-            wx_body = body.replace("\n", "\n> ")  # markdown 格式
-            self.tools.send_wechat_alert(f"### {title}\n> {wx_body}")
-            safe_print("[Agent Act] ⑥ 企业微信 → 已推送")
-        else:
-            safe_print("[Agent Act] ⚠️ 企业微信 Webhook 未配置，跳过推送。")
-
-        # 钉钉推送
-        if cfg.get("dingtalk_webhook"):
-            self.tools.send_dingtalk_alert(body)
-            safe_print("[Agent Act] ⑥ 钉钉 → 已推送")
-        else:
-            safe_print("[Agent Act] ⚠️ 钉钉 Webhook 未配置，跳过推送。")
-
-        notify_result = f"{title} → 企微+钉钉通知 申请人:{applicant} 安全主管:{supervisor}"
+            safe_print("=" * 56)
+            safe_print("[Agent Act] ⚠️⚠️⚠️ 钉钉 MCP 未配置，写入失败！⚠️⚠️⚠️")
+            safe_print("[Agent Act]   请在侧边栏「钉钉 MCP 地址」中配置后重试。")
+            safe_print("=" * 56)
+            notify_result = f"编号:{data.ticket_id} → ⚠️ 钉钉 MCP 未配置，未写入 AI 表格"
         safe_print(f"[Agent Act] ⑥ {notify_result}")
-        mem.remember("执行", "📤", "双通道通知", notify_result)
+        mem.remember("执行", "📤", "钉钉 AI 表格", notify_result)
 
     def _report(self, mem: AgentMemory, data: SecuritySheetData = None):
         safe_print(f"[Agent Report] ===== 决策链报告 =====")
@@ -1571,7 +1783,7 @@ def load_config() -> dict:
                 cfg = json.load(f)
         except Exception:
             pass
-            
+
     # Set default values if not specified
     if not cfg.get("api_key"):
         cfg["api_key"] = os.environ.get("ONLINE_API_KEY", "ollama")
@@ -1579,7 +1791,8 @@ def load_config() -> dict:
         cfg["base_url"] = os.environ.get("ONLINE_BASE_URL", "http://localhost:11434/v1")
     if not cfg.get("model_name"):
         cfg["model_name"] = os.environ.get("ONLINE_MODEL", "qwen3.5:0.8b")
-        
+    # dingtalk_mcp_url: no default — user must configure, or push fails
+
     return cfg
 
 

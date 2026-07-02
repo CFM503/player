@@ -16,7 +16,7 @@
 | 审批建议生成 | LLM 生成专业审批建议，引用 GB 30871-2022 等安全标准条文 | `agent_core.py` SecurityAgent._generate_approval |
 | 四级风险评估 | 重大🔴/较大🟡/一般🟡/低风险🟢，综合浓度+措施+隐患评分 | `agent_core.py` SecurityAgent._assess_risk_level |
 | SQLite 数据沉淀 | 结构化数据+OCR原文+审批建议+图片路径，自动迁移旧表 | `agent_core.py` AgentTools.save_to_db |
-| 企业微信预警 | 检测到隐患自动推送企业微信 Webhook 消息 | `agent_core.py` AgentTools.send_wechat_alert |
+| 钉钉 AI 表格 | 检测到隐患自动写入钉钉多维表 `test_demo` | `agent_core.py` AgentTools.write_dingtalk_table |
 
 ### 前端功能
 
@@ -51,7 +51,7 @@
 | 创新性 | ReAct Agent 6阶段自主决策 + 反思校验自动重试 | ✅ |
 | 可落地 | 7张真实作业票测试通过，Streamlit 一键启动 | ✅ |
 | AI 技术赋能 | PaddleOCR + LLM 语义理解 + 自动化工具链 | ✅ |
-| 非结构化输入→表单 | 手机照片→JSON→SQLite→企业微信，全自动 | ✅ |
+| 非结构化输入→表单 | 手机照片→JSON→SQLite→钉钉，全自动 | ✅ |
 | 自动生成审批意见 | LLM 生成，引用 GB 30871-2022 / AQ 3022 标准条文 | ✅ |
 | 辅助决策建议 | 四级风险评估 + 高频隐患排名 + 隐患率统计 | ✅ |
 | 降本提效 | 10分钟/张→15秒/张，效率提升40倍 | ✅ |
@@ -99,7 +99,7 @@ pip install pydantic openai paddleocr opencv-python numpy requests streamlit pan
 | `paddleocr` | ≥3.7 | OCR 文字识别（中文手写/打印体） |
 | `opencv-python` | ≥4.0 | 图像预处理（CLAHE 去阴影+二值化） |
 | `numpy` | ≥1.0 | OpenCV 依赖 |
-| `requests` | ≥2.0 | 企业微信 Webhook 推送 |
+| `requests` | ≥2.0 | 钉钉 Webhook 推送 |
 | `streamlit` | ≥1.33 | Web UI 前端框架 |
 | `pandas` | ≥1.0 | 数据表格展示 |
 | `paddlepaddle` | ≥3.3 | PaddleOCR 推理引擎 |
