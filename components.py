@@ -162,7 +162,7 @@ def render_notification_btn(
             ticket_id=d.ticket_id,
             image_path="",  # 手动触发时无图片路径
             description=content[:200],
-            person_name=AgentTools.extract_filler_name("", d.worker_id or ""),
+            person_name=AgentTools.extract_filler_name(""),
             risk_level=d.risk_level or "",
         )
         if result:

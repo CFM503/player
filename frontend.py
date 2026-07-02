@@ -77,34 +77,32 @@ with st.sidebar:
     _ocr_modes = {
         "坐标聚类（默认）": "cluster",
         "自适应边框检测": "adaptive",
-        "坐标聚类（精确增强）": "precise",
-        "测试模式": "test",
     }
     ocr_mode_label = st.selectbox(
         "📋 OCR 表格模式",
         list(_ocr_modes.keys()),
         index=0,
-        help="坐标聚类：基于文字坐标重建表格行列\n自适应边框检测：OpenCV检测表格线段，按单元格组织文本\n精确增强：OpenCV边框检测+PaddleOCR，输出HTML",
+        help="坐标聚类：基于文字坐标重建表格行列\n自适应边框检测：OpenCV检测表格线段，按单元格组织文本",
     )
     ocr_mode = _ocr_modes[ocr_mode_label]
 
     # OCR 引擎选择
     _ocr_engines = {
-        "本地 PaddleOCR": "paddleocr",
+        "本地 PaddleOCR（带坐标）": "paddleocr",
         "视觉大模型": "vision",
     }
     ocr_engine_label = st.selectbox(
         "🔍 OCR 引擎",
         list(_ocr_engines.keys()),
         index=0,
-        help="本地 PaddleOCR：默认，本地推理，支持全部4种表格模式\n"
-             "视觉大模型：调用 VL 模型（如 Qwen-VL）直接读图识别，一步完成结构+文字+符号",
+        help="本地 PaddleOCR：默认，本地推理，输出带坐标，支持责任人定位\n"
+             "视觉大模型：调用 VL 模型直接读图识别，一步完成结构+文字+符号，不支持坐标定位",
     )
     ocr_engine = _ocr_engines[ocr_engine_label]
 
     # 视觉引擎下 OCR 模式不生效提示
     if ocr_engine == "vision":
-        st.caption("💡 视觉大模型直接读图返回 Markdown，OCR 表格模式不生效")
+        st.caption("💡 视觉大模型直接读图返回 Markdown，OCR 表格模式不生效，责任人定位不可用")
 
     # 视觉大模型独立配置
     vision_api_key = _cfg.get("vision_api_key", "")

@@ -2,6 +2,13 @@
 中燃"安全数字监督员"智能体核心架构 (agent_core.py)
 面向场景：巡检工人手机拍照上传 -> 自动去阴影矫正 -> 线上API语义结构化 -> 自动化闭环。
 
+v3.11.0 变更：
+  - 基于坐标的责任人定位提取：`extract_filler_name()` 升级为对特定填表坐标区域精确定位匹配。
+  - OCR flat_text 输出包含 `[x,y,w,h]` 元数据。
+  - 新增 `_ocr_crop_region()` 方法用于裁剪图片指定区域进行定向 OCR 识别。
+  - 精简 OCR 表格模式，移除 `precise` 和 `test` 模式，前端 UI 对应优化。
+  - 移除 OCR 图像去阴影兜底重试机制。
+
 v3.10.0 变更：
   - 钉钉通知从 Webhook POST 重写为 MCP Streamable HTTP 协议写入钉钉 AI 表格（多维表）。
   - AgentTools 新增 _discover_dingtalk_fields / _load_dingtalk_cache / _save_dingtalk_cache /
@@ -547,12 +554,6 @@ class AgentTools:
 
         safe_print("[Tool] PaddleOCR 识别原图...")
         entries = _do_ocr(image_path)
-        if len(entries) < 5:
-            safe_print("[Tool] 原图识别不足，预处理后重试...")
-            cleaned = AgentTools.preprocess_image(image_path)
-            entries = _do_ocr(cleaned)
-            if os.path.exists(cleaned):
-                os.remove(cleaned)
         return entries
 
     @staticmethod
@@ -596,20 +597,12 @@ class AgentTools:
 
     @staticmethod
     def ocr_tool(image_path: str, mode: str = "cluster", brain=None, progress_callback=None, engine: str = "paddleocr", vision_brain=None) -> str:
-        """PaddleOCR 文字识别，支持多种表格处理策略（基于 PaddlePaddle）"""
+        """PaddleOCR 文字识别，支持坐标聚类和自适应边框检测；可选视觉大模型"""
         def _prog(pct, msg):
             if progress_callback:
                 progress_callback(pct, msg)
 
-        mode_labels = {
-            "cluster": "坐标聚类",
-            "adaptive": "自适应边框检测",
-            "precise": "精确增强",
-            "test": "测试模式",
-        }
-        safe_print(f"[Tool] OCR 模式: {mode_labels.get(mode, mode)} | 引擎: {engine}")
-
-        # ---- 视觉大模型：直接读图，跳过 PaddleOCR ----
+        # ---- 视觉大模型（无坐标） ----
         if engine == "vision":
             vb = vision_brain or brain
             if vb is None:
@@ -618,7 +611,9 @@ class AgentTools:
             AgentTools._last_ocr_raw = ""
             return AgentTools._vision_llm_ocr(image_path, vb)
 
-        # ---- PaddleOCR 引擎（默认） ----
+        # ---- PaddleOCR（带坐标） ----
+        safe_print(f"[Tool] OCR 模式: {'自适应边框检测' if mode == 'adaptive' else '坐标聚类'}")
+
         import paddle.inference as _pi
         if not getattr(_pi.Config, "_patched_for_onednn", False):
             _orig_new_ir = _pi.Config.enable_new_ir
@@ -627,27 +622,6 @@ class AgentTools:
             _pi.Config.set_optimization_level = lambda self, lv: _orig_opt(self, 0)
             _pi.Config._patched_for_onednn = True
 
-        # 精确表格识别走独立流水线
-        if mode == "precise":
-            table_text = AgentTools._format_table_precise(image_path, brain)
-            if not table_text:
-                safe_print("[Tool] 精确识别无结果，回退坐标聚类。")
-                mode = "cluster"
-            else:
-                AgentTools._last_ocr_raw = ""  # 清除旧 raw，让前端走 HTML 渲染
-                return table_text
-
-        # 测试模式（与 precise 相同逻辑）
-        if mode == "test":
-            table_text = AgentTools._format_table_precise(image_path, brain)
-            if not table_text:
-                safe_print("[Tool] 测试模式无结果，回退坐标聚类。")
-                mode = "cluster"
-            else:
-                AgentTools._last_ocr_raw = ""
-                return table_text
-
-        # 基础 OCR 模式
         from paddleocr import PaddleOCR
         _prog(10, "PaddleOCR 加载模型")
         sim_load = _ProgressSim(progress_callback, 10, 18, "PaddleOCR 加载模型", 2, 0.8)
@@ -671,9 +645,34 @@ class AgentTools:
         else:
             table_text = AgentTools._format_table(entries)
 
-        flat_text = "\n".join(e["text"] for e in sorted(entries, key=lambda e: (e["y"] // 15, e["x"])))
+        flat_text = "\n".join(
+            f"{e['text']}  [{int(e['x'])},{int(e['y'])},{int(e['w'])},{int(e['h'])}]"
+            for e in sorted(entries, key=lambda e: (e["y"] // 15, e["x"]))
+        )
         AgentTools._last_ocr_raw = flat_text
         return f"{table_text}\n---\n{flat_text}"
+
+
+    @staticmethod
+    def _ocr_crop_region(image_path: str, x: int, y: int, w: int, h: int) -> str:
+        """裁剪图片指定区域做 PaddleOCR，返回识别文本"""
+        import cv2
+        from paddleocr import PaddleOCR
+        img = cv2.imread(image_path)
+        if img is None:
+            return ""
+        img_h, img_w = img.shape[:2]
+        x1, y1 = max(0, x), max(0, y)
+        x2, y2 = min(img_w, x + w), min(img_h, y + h)
+        if x2 <= x1 or y2 <= y1:
+            return ""
+        crop = img[y1:y2, x1:x2]
+        ocr = PaddleOCR(lang="ch")
+        result = ocr.predict(crop)
+        if result and hasattr(result[0], 'json'):
+            texts = result[0].json.get('res', {}).get('rec_texts', [])
+            return " ".join(texts)
+        return ""
 
 
     @staticmethod
@@ -1285,18 +1284,30 @@ class AgentTools:
         return success_count > 0
 
     @staticmethod
-    def extract_filler_name(ocr_text: str, worker_id: str) -> str:
-        """从 OCR 原文中提取填表人第一个中文名；退回到 worker_id"""
+    def extract_filler_name(ocr_text: str, worker_id: str = "") -> str:
+        """从 OCR 带坐标结果中提取责任人姓名
+        绝对坐标 [355,93]/[440,110] ±30px → 填表人标签
+        """
+        _LABEL_KW = ("责任", "填表", "编号", "票号", "日期", "场站", "部位", "作业",
+                     "动火", "检测", "采样", "确认", "签批", "盖章", "部门", "时间",
+                     "地点", "内容", "方式", "单位", "人员", "完工", "验收")
         if ocr_text:
+            for line in ocr_text.split("\n"):
+                m = re.match(r"(.+?)\s+\[(\d+),(\d+),(\d+),(\d+)\]", line.strip())
+                if m:
+                    text, x, y = m.group(1).strip(), int(m.group(2)), int(m.group(3))
+                    if any(kw in text for kw in _LABEL_KW):
+                        continue
+                    if (abs(x - 355) <= 30 and abs(y - 93) <= 30) or \
+                       (abs(x - 440) <= 30 and abs(y - 110) <= 30):
+                        name_m = re.search(r"([一-龥]{2,4})", text)
+                        if name_m:
+                            return name_m.group(1)
+                        return text.strip()
             m = re.search(r"填表人[：:]?\s*([^\n]{2,8})", ocr_text)
             if m:
                 return m.group(1).strip()
-        # 退回：从 worker_id 提取第一个中文片段
-        if worker_id:
-            m = re.search(r"([一-龥]{2,4})", worker_id)
-            if m:
-                return m.group(1)
-        return worker_id or "未知"
+        return "未知"
 
 
 # ==========================================
@@ -1651,7 +1662,7 @@ class SecurityAgent:
         # ---- ⑥ 钉钉 AI 表格写入 ----
         safe_print("[Agent Act] ⑥ 钉钉 AI 表格...")
         cfg = load_config()
-        filler = self.tools.extract_filler_name(ocr_text, data.worker_id or "")
+        filler = self.tools.extract_filler_name(ocr_text)
 
         if cfg.get("dingtalk_mcp_url"):
             # 问题描述：LLM 结构化 JSON 摘要
