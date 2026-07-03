@@ -262,7 +262,6 @@ player/
 ├── CHANGELOG.md       # 更新日志
 ├── PROJECT.md         # 项目详细说明
 ├── games.md           # 赛道三合规分析
-├── test_e2e.py        # 端到端测试脚本
 ├── security_data.db   # SQLite 数据库（运行时生成）
 └── uploads/           # 测试图片
 ```
