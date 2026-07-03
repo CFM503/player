@@ -128,8 +128,9 @@ def render_notification_btn(  # 定义用于将作业数据写入钉钉 MCP AI �
         return  # 提前阻断返回，跳过后续真实的交互行为
 
     if st.button(f"{emoji} 写入{platform}", key=key, use_container_width=True):  # 当检测到用户真实点击了这一行对应的写入按钮时
-        # 导入 agent 工具写表格
-        from agent_core import AgentTools  # 在点击事件触发时动态按需引入智能体核心工具模块
+        # 导入 agent 模块以获取运行期实时更新的全局变量
+        import agent_core  # 动态按需引入智能体核心模块以读取全局坐标
+        AgentTools = agent_core.AgentTools
         if hasattr(d, "image_path") and d.image_path:
             AgentTools._last_image_path = d.image_path
         _, content = msg_fmt(d)  # 解包获取回调格式化器生成的隐患详细报告文字
@@ -138,7 +139,7 @@ def render_notification_btn(  # 定义用于将作业数据写入钉钉 MCP AI �
             ticket_id=d.ticket_id,  # 传入识别所得的作业票编号
             image_path="",  # 手动点击触发时通常无局部大图文件缓存，传递空字符串
             description=content[:200],  # 截取报告文本前 200 字存入问题描述字段中
-            person_name=AgentTools.extract_filler_name(420, 120, 200, 110),  # 调用名字解析函数提取对应的责任人姓名
+            person_name=AgentTools.extract_filler_name(agent_core.ssx, agent_core.ssy, 260, 150),  # 通过模块读取全局变量提取对应的责任人姓名
             risk_level=d.risk_level or "",  # 写入识别并给出的安全风险级别
         )  # 结束调用并接收布尔返回值状态
         if result:  # 如果底层 MCP 返回成功写入的确认

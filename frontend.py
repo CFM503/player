@@ -9,6 +9,8 @@ import sys  # 导入系统接口模块用于修改标准输出流
 import os  # 导入操作系统接口模块用于处理文件路径及环境变量
 import time  # 导入时间时间戳模块用于生成唯一图名及模拟延时
 import json  # 导入 JSON 数据解析库以加载/保存本地运行配置参数
+import warnings  # 导入警告过滤模块以屏蔽第三方库的多余警告信息
+warnings.filterwarnings("ignore", category=UserWarning, module="paddle")  # 忽略 Paddle 内部关于 ccache 等非致命性用户警告
 
 import check_deps  # 引入启动自检模块，自动检查环境及第三方库版本
 import streamlit as st  # 导入 Streamlit 前端渲染框架
@@ -85,6 +87,25 @@ st.html("""
     }
     // 每 300 毫秒执行一次，保持稳定贴合
     setInterval(moveHeader, 300);
+
+    // 自动滚动日志终端到底部
+    function scrollLogs() {
+        var root = window.parent.document;
+        var logs = root.querySelectorAll('.hlog');
+        logs.forEach(function(log) {
+            var isAtBottom = (log.scrollHeight - log.clientHeight - log.scrollTop) < 50;
+            var lastHeight = log.getAttribute('data-last-height') || 0;
+            var currentHeight = log.scrollHeight;
+            if (currentHeight !== parseInt(lastHeight)) {
+                log.setAttribute('data-last-height', currentHeight);
+                if (isAtBottom || lastHeight === 0) {
+                    log.scrollTop = log.scrollHeight;
+                }
+            }
+        });
+    }
+    // 每 300 毫秒执行一次，保持终端滚动到底部
+    setInterval(scrollLogs, 300);
 })();
 </script>
 """, unsafe_allow_javascript=True)  # 注入页面执行脚本，并使能 JavaScript 允许机制
@@ -99,9 +120,9 @@ if "upload_done" not in st.session_state: st.session_state.upload_done = False  
 
 # ---- 侧边栏配置面板 ----
 with st.sidebar:  # 进入侧边栏渲染上下文本环境
-    _logo_path = os.path.join(os.path.dirname(__file__), "logo.jpg")
+    _logo_path = os.path.join(os.path.dirname(__file__), "logo.png")
     if os.path.exists(_logo_path):
-        st.image(_logo_path, use_container_width=True)
+        st.image(_logo_path, use_container_width=False)
     st.caption(f"**🛡️ 牡丹江中燃 HSE · AI Agent** `v{_ver}`")  # 渲染侧边栏主标题及对应版本号
 
     # API 基本信息配置
@@ -386,7 +407,7 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
                 log_buf.append(_ts + line)  # 拼接时间戳与输出日志内容，并存入日志缓存中
                 import html as _h  # 导入自带的 html 工具包对日志中可能存在的特殊符号进行实体字元安全编码，防样式崩塌
                 parts = []  # 初始化拼接的 HTML 行列表
-                for l in log_buf[-30:]:  # 限制终端只滚动展示最新输出的 30 行日志数据，防止页面拉长
+                for l in log_buf:  # 展示完整的日志数据，防止日志截断
                     # 检测当前日志文本中是否包含表示阶段进度的特征括号，如 "[规划]" 或 "[感知]"
                     stage = ""  # 初始化匹配阶段为空
                     if "[" in l and "]" in l:  # 若左右括号同时存在
@@ -447,6 +468,12 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
                 _dt = time.time() - _t0_img  # 计算时长
                 _mm, _ss = divmod(int(_dt), 60)  # 转成分秒
                 status_text.caption(f"[{idx+1}/{len(final_files)}] {msg} ({pct}%) {_mm:02d}:{_ss:02d}")  # 精准呈现当前底层的动作及时间信息
+
+            # 屏蔽后台线程调用 Streamlit 时触发的 ScriptRunContext 警告日志，防止污染控制台与终端日志
+            import logging
+            for name in list(logging.root.manager.loggerDict.keys()):
+                if "streamlit" in name:
+                    logging.getLogger(name).setLevel(logging.ERROR)
 
             sys.stdout = Cap()  # 重定向 python 全局的标准输出流 sys.stdout 至我们自定义的 Cap 捕获器类
             try:  # 开启安全防崩溃守护

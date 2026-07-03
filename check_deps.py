@@ -22,6 +22,8 @@ _DEPS = [  # 构建要求校验的依赖包元数据列表
     ("pandas",         "pandas",         "3.0.3",        "pandas"),  # Pandas 表格分析库版本控制
     ("paddlepaddle",   "paddle",         "3.3.1",        "paddlepaddle"),  # 百度飞桨推理引擎底座版本控制
     ("requests",       "requests",       "2.34.2",       "requests"),  # HTTP 网络请求库版本控制
+    ("mcp",            "mcp",            "1.0.0",        "mcp"),  # Model Context Protocol 协议库版本控制
+    ("httpx",          "httpx",          "0.28.0",       "httpx"),  # HTTPX 客户端库版本控制
     # paddlex[ocr] 精确表格识别依赖
     ("paddlex",        "paddlex",        "3.7.1",        "paddlex[ocr]"),  # PaddleX 开发套件包及其依赖控制
 ]  # 结束列表定义

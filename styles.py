@@ -197,7 +197,7 @@ section[data-testid="stSidebar"] [data-testid="stSidebarHeader"] {
     position: relative !important;
     height: 30px !important;
     min-height: 0px !important;
-    padding: 0px !important;
+    padding: 15px !important;
     margin: 15px 2rem !important;
     display: flex !important;
     justify-content: flex-end !important; /* 让折叠按钮靠右对齐 */
@@ -212,7 +212,7 @@ section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
 }
 section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"],
 section[data-testid="stSidebar"] .block-container {
-    padding: 0px !important;
+    padding: 15px !important;
 }
 section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
     gap: var(--sidebar-gap) !important; /* 调整侧边栏内组件上下垂直间距 */

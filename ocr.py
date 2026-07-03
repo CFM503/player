@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# 警告：永远不要修改这个文件！ (WARNING: NEVER MODIFY THIS FILE!)
 """
 中燃"安全数字监督员" OCR 处理器模块 (ocr.py)
 面向场景：支持全图扫描/指定坐标区域裁剪扫描，保存裁剪子图及 Markdown 文本结果，支持指定使用 CPU 或 GPU，以及选择不同的 OCR 引擎（本地 PaddleOCR 或 视觉大模型）。

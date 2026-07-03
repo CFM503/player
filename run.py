@@ -29,7 +29,11 @@ def main():  # 定义主运行控制函数
         p.wait()  # 阻塞当前线程，等待 Streamlit 前端子进程运行结束或关闭
     except KeyboardInterrupt:  # 捕获用户在终端按下 Ctrl+C 触发的中断退出信号
         p.terminate()  # 向 Streamlit 子进程发送安全退出指令 (SIGTERM)
-        p.wait(timeout=5)  # 阻塞等待最多 5 秒，以允许子进程完成资源清理工作
+        try:
+            p.wait(timeout=5)  # 阻塞等待最多 5 秒，以允许子进程完成资源清理工作
+        except subprocess.TimeoutExpired:  # 如果子进程在5秒内没有响应 SIGTERM 退出
+            p.kill()  # 强行杀掉子进程 (SIGKILL)
+            p.wait()  # 再次等待，确保彻底释放进程资源
         sys.exit(0)  # 主进程退出，返回状态码 0，完成优雅停机
 
 
