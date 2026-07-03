@@ -2,6 +2,9 @@
 中燃"安全数字监督员"智能体核心架构 (agent_core.py)
 面向场景：巡检工人手机拍照上传 -> 自动去阴影矫正 -> 线上API语义结构化 -> 自动化闭环。
 
+v3.12.4 变更：
+  - 局部裁剪坐标 OCR 定向人名提取：重构并简化 `extract_filler_name()`，移除了低效的全局 OCR 坐标范围匹配和正则兜底，改为利用缓存的 `_last_image_path` 直接调用 `_ocr_crop_region` 裁剪指定区域进行定向 PaddleOCR 识别提取。
+
 v3.12.3 变更：
   - 核心架构代码逐行中文注释：对核心引擎 `agent_core.py` 内部所有数据结构、LLM 大脑提取规整校验逻辑、Agent 执行工具（去阴影预处理、天气探针、SQLite 存储、钉钉 AI 表格 MCP 写入）及 ReAct 编排流水线的每一行代码添加了详尽的中文行级注释，实现项目 100% 逐行中文注释覆盖。
 
@@ -562,6 +565,7 @@ class AgentTools:
     @staticmethod
     def ocr_tool(image_path: str, mode: str = "cluster", brain=None, progress_callback=None, engine: str = "paddleocr", vision_brain=None) -> str:  # 核心OCR引擎调用门面方法，支持切换本地 PaddleOCR 和 Vision LLM
         """调用 ocr 模块进行 OCR 识别，支持坐标聚类和自适应边框检测；可选视觉大模型"""
+        AgentTools._last_image_path = image_path
         def _prog(pct, msg):  # 定义内部进度更新辅助回调
             if progress_callback:  # 如果主线程注册了进度通知函数
                 progress_callback(pct, msg)  # 执行进度通知更新
@@ -972,29 +976,27 @@ class AgentTools:
         return success_count > 0
 
     @staticmethod
-    def extract_filler_name(ocr_text: str, worker_id: str = "") -> str:
-        """从 OCR 带坐标结果中提取责任人姓名
-        绝对坐标 [355,93]/[440,110] ±30px → 填表人标签
-        """
-        _LABEL_KW = ("责任", "填表", "编号", "票号", "日期", "场站", "部位", "作业",
-                     "动火", "检测", "采样", "确认", "签批", "盖章", "部门", "时间",
-                     "地点", "内容", "方式", "单位", "人员", "完工", "验收")
-        if ocr_text:
-            for line in ocr_text.split("\n"):
-                m = re.match(r"(.+?)\s+\[(\d+),(\d+),(\d+),(\d+)\]", line.strip())
-                if m:
-                    text, x, y = m.group(1).strip(), int(m.group(2)), int(m.group(3))
-                    if any(kw in text for kw in _LABEL_KW):
-                        continue
-                    if (abs(x - 355) <= 30 and abs(y - 93) <= 30) or \
-                       (abs(x - 440) <= 30 and abs(y - 110) <= 30):
-                        name_m = re.search(r"([一-龥]{2,4})", text)
-                        if name_m:
-                            return name_m.group(1)
-                        return text.strip()
-            m = re.search(r"填表人[：:]?\s*([^\n]{2,8})", ocr_text)
-            if m:
-                return m.group(1).strip()
+    def extract_filler_name(tx: int, ty: int, tw: int, th: int) -> str:
+        """根据指定坐标裁剪图片并运行 PaddleOCR 识别文本，提取责任人姓名"""
+        image_path = getattr(AgentTools, "_last_image_path", "")
+        if not image_path or not os.path.exists(image_path):
+            safe_print(f"[Tool] extract_filler_name 失败: 图片路径无效或不存在: {image_path}")
+            return "坐标识别图片未知"
+            
+        safe_print(f"[Tool] extract_filler_name 触发局部裁剪 OCR: x={tx}, y={ty}, w={tw}, h={th}")
+        crop_text = AgentTools._ocr_crop_region(image_path, tx, ty, tw, th)
+        
+        if crop_text:
+            _LABEL_KW = ("责任", "填表", "编号", "票号", "日期", "场站", "部位", "作业",
+                         "动火", "检测", "采样", "确认", "签批", "盖章", "部门", "时间",
+                         "地点", "内容", "方式", "单位", "人员", "完工", "验收")
+            clean_text = crop_text
+            for kw in _LABEL_KW:
+                clean_text = clean_text.replace(kw, "")
+            name_m = re.search(r"([一-龥]{2,4})", clean_text)
+            if name_m:
+                return name_m.group(1)
+            return clean_text.strip()
         return "未知"
 
 
@@ -1350,7 +1352,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         # ---- ⑥ 钉钉 AI 表格写入 ----
         safe_print("[Agent Act] ⑥ 钉钉 AI 表格...")
         cfg = load_config()
-        filler = self.tools.extract_filler_name(ocr_text)
+        filler = self.tools.extract_filler_name(420, 120, 200, 110)
 
         if cfg.get("dingtalk_mcp_url"):
             # 问题描述：LLM 结构化 JSON 摘要

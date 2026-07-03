@@ -39,6 +39,9 @@ CUSTOM_CSS = """
     --glass-shadow: 0 6px 24px rgba(15, 23, 42, 0.06); /* 设定大范围柔和的微阴影 */
     --neon-red-shadow: 0 0 12px rgba(255, 30, 39, 0.15), 0 0 24px rgba(255, 30, 39, 0.06); /* 红色按钮的霓虹外发光投影 */
     --neon-blue-shadow: 0 0 12px rgba(0, 82, 204, 0.18), 0 0 24px rgba(0, 82, 204, 0.06); /* 蓝色及选中页签的霓虹外发光投影 */
+
+    /* ============== 间距可调参数 ============== */
+    --sidebar-gap: 0.35rem; /* 侧边栏组件之间上下间距参数，可根据需要调大或调小（例如 0.2rem 至 1.0rem） */
 }
 
 /* ============== 全局背景：白底 + 微网格 + 色斑 ============== */
@@ -190,13 +193,53 @@ section[data-testid="stSidebar"] {
 * { font-family: 'Inter', sans-serif; } /* 绑定全局中英文字体为高端无衬线 Inter 字体 */
 
 /* ============== 侧边栏修饰 ============== */
+section[data-testid="stSidebar"] [data-testid="stSidebarHeader"] {
+    position: relative !important;
+    height: 30px !important;
+    min-height: 0px !important;
+    padding: 0px !important;
+    margin: 15px 2rem !important;
+    display: flex !important;
+    justify-content: flex-end !important; /* 让折叠按钮靠右对齐 */
+    background: transparent !important;
+    border: none !important;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
+    position: relative !important;
+    top: 0px !important;
+    right: 0px !important;
+    z-index: 99 !important;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"],
+section[data-testid="stSidebar"] .block-container {
+    padding: 0px !important;
+}
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+    gap: var(--sidebar-gap) !important; /* 调整侧边栏内组件上下垂直间距 */
+}
+section[data-testid="stSidebar"] .block-container > [data-testid="stVerticalBlock"] > div {
+    padding-left: 1.5rem !important;
+    padding-right: 1.5rem !important;
+}
+section[data-testid="stSidebar"] .block-container > [data-testid="stVerticalBlock"] > div:first-child {
+    padding: 0px !important;
+    margin: 0px !important;
+}
+section[data-testid="stSidebar"] [data-testid="stImage"] img {
+    border-radius: 0px !important;
+    border: none !important;
+    transform: none !important;
+    cursor: default !important;
+    box-shadow: none !important;
+}
+section[data-testid="stSidebar"] [data-testid="stImage"] img:hover {
+    transform: none !important;
+    box-shadow: none !important;
+    opacity: 1 !important;
+}
 section[data-testid="stSidebar"] {
     background: var(--sidebar) !important;
     border-right: 1px solid var(--border) !important; /* 在右侧划出细线与主页面分割 */
-}
-section[data-testid="stSidebar"] .block-container {
-    padding-top: 1.5rem !important;
-    color: var(--text);
 }
 section[data-testid="stSidebar"] label {
     color: var(--text-muted) !important; /* 将侧边栏的表单标签统一置灰显示，看起来专业而有秩序 */

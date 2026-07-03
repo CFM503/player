@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-安全数字监督员 - AI Agent 安全监控面板
+数字化安全监督员 - AI Agent 安全监控面板
 启动: streamlit run frontend.py
 """
 
@@ -24,7 +24,7 @@ from agent_core import load_config  # 从智能体核心层中引入加载配置
 _cfg = load_config()  # 执行配置加载，读取字典数据并存入局部 _cfg 变量中
 _ver = open(os.path.join(os.path.dirname(__file__), "VERSION"), encoding="utf-8").read().strip()  # 从 VERSION 文件读取当前小版本号并剥离换行
 
-st.set_page_config(page_title="安全数字监督员", page_icon="🛡️", layout="wide", initial_sidebar_state="expanded")  # 强制初始化 Streamlit 页面配置，布局设为宽看板模式
+st.set_page_config(page_title="数字化安全监督员", page_icon="🛡️", layout="wide", initial_sidebar_state="expanded")  # 强制初始化 Streamlit 页面配置，布局设为宽看板模式
 
 # ---- 自定义主题 ----
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)  # 注入全局自定义的 CSS 样式代码到本页面以获得顶级科技白底风外观
@@ -56,6 +56,35 @@ st.html("""
     setTimeout(function() {
         if (!tryExpand()) setTimeout(tryExpand, 500);
     }, 300);
+
+    // 3. 将 stSidebarHeader 移动到 stCaptionContainer (副标题) 的下方
+    function moveHeader() {
+        var root = window.parent.document;
+        var header = root.querySelector('[data-testid="stSidebarHeader"]');
+        var sidebar = root.querySelector('[data-testid="stSidebar"]');
+        if (!sidebar || !header) return;
+        
+        var captions = sidebar.querySelectorAll('[data-testid="stCaptionContainer"]');
+        var targetCaption = null;
+        for (var i = 0; i < captions.length; i++) {
+            if (captions[i].textContent.indexOf('HSE') !== -1) {
+                targetCaption = captions[i];
+                break;
+            }
+        }
+        
+        if (targetCaption) {
+            var container = targetCaption;
+            while (container && container.parentNode && container.parentNode.getAttribute('data-testid') !== 'stVerticalBlock') {
+                container = container.parentNode;
+            }
+            if (container && container.parentNode && header.previousSibling !== container) {
+                container.parentNode.insertBefore(header, container.nextSibling);
+            }
+        }
+    }
+    // 每 300 毫秒执行一次，保持稳定贴合
+    setInterval(moveHeader, 300);
 })();
 </script>
 """, unsafe_allow_javascript=True)  # 注入页面执行脚本，并使能 JavaScript 允许机制
@@ -70,9 +99,10 @@ if "upload_done" not in st.session_state: st.session_state.upload_done = False  
 
 # ---- 侧边栏配置面板 ----
 with st.sidebar:  # 进入侧边栏渲染上下文本环境
-    st.markdown(f"**🛡️ 安全数字监督员** `v{_ver}`")  # 渲染侧边栏主标题及对应版本号
-    st.caption("🛡️ 牡丹江中燃 HSE · AI Agent")  # 渲染侧边栏辅助灰色副标题
-    st.markdown("---")  # 渲染侧边栏第一条视觉分割线
+    _logo_path = os.path.join(os.path.dirname(__file__), "logo.jpg")
+    if os.path.exists(_logo_path):
+        st.image(_logo_path, use_container_width=True)
+    st.caption(f"**🛡️ 牡丹江中燃 HSE · AI Agent** `v{_ver}`")  # 渲染侧边栏主标题及对应版本号
 
     # API 基本信息配置
     api_key = st.text_input("API Key", _cfg.get("api_key", ""), type="password")  # 渲染主大模型密钥输入框，设定为密码类型隐藏字符
@@ -123,11 +153,23 @@ with st.sidebar:  # 进入侧边栏渲染上下文本环境
             st.warning("⚠️ 请配置视觉模型名称")  # 在下方给出黄色的警告气泡框提醒
 
     # 代理服务器设置
-    st.markdown("---")  # 渲染第二条侧边栏分割横线
     proxy_enabled = st.checkbox("🌐 使用代理访问 AI 模型", value=bool(_cfg.get("proxy", "")), key="_proxy_on", help="勾选后通过代理服务器访问 Google/Gemini 等海外 AI 模型")  # 提供代理使能多选复选框
     proxy_url = ""  # 初始化代理地址变量为空
     if proxy_enabled:  # 如果用户勾选启用了网络代理
         proxy_url = st.text_input("代理地址", _cfg.get("proxy", "http://127.0.0.1:9192"), key="_proxy_url", help="格式: http://127.0.0.1:端口")  # 渲染代理具体地址输入框，默认提供 9192 端口
+
+    # 钉钉 AI 多维表配置
+    st.markdown("---")
+    dingtalk_mcp_url = st.text_input(  # 渲染钉钉多维表 MCP 写入基地址输入框
+        "钉钉 MCP 地址",  # 输入框说明
+        _cfg.get("dingtalk_mcp_url", ""),  # 从配置字典中提取默认值
+        type="password",  # 密码模式屏蔽明文
+        help="钉钉 AI 表格 MCP Streamable HTTP 地址",  # 气泡解释
+        key="_dd",  # 绑定状态 key
+        placeholder="https://mcp-gw.dingtalk.com/server/...?key=...",  # 示例占位字符
+    )  # 结束文本框定义
+    if not dingtalk_mcp_url:  # 检查如果钉钉多维表 MCP 地址为空
+        st.markdown("<div style='font-size: 11.5px; color: #D97706; background-color: rgba(217, 119, 6, 0.08); border: 1px solid rgba(217, 119, 6, 0.2); padding: 8px; border-radius: 6px; margin-top: 4px; line-height: 1.4;'>⚠️ 未配置钉钉 MCP 地址，将无法写入 AI 表格，请在上方设置后点击「💾 保存设置」</div>", unsafe_allow_html=True)
 
     # 保存配置按钮逻辑段
     st.markdown("---")  # 渲染第三条侧边栏分割横线
@@ -139,7 +181,7 @@ with st.sidebar:  # 进入侧边栏渲染上下文本环境
         _cfg["vision_base_url"] = vision_base_url  # 保存视觉模型的基础 URL 参数
         _cfg["vision_model_name"] = vision_model_name  # 保存视觉模型的名字参数
         _cfg["proxy"] = proxy_url if proxy_enabled else ""  # 根据代理勾选状态写入代理字符串或清空配置
-        _cfg["dingtalk_mcp_url"] = st.session_state.get("_dd", _cfg.get("dingtalk_mcp_url", ""))  # 保存写入的钉钉 MCP 数据库网关地址
+        _cfg["dingtalk_mcp_url"] = st.session_state.get("_dd", _cfg.get("dingtalk_mcp_url", ""))  # 保存写入 of 钉钉 MCP 数据库网关地址
         # 将配置同步到全局 Python 环境变量，保证 Agent 可直接读取
         if api_key: os.environ["ONLINE_API_KEY"] = api_key  # 同步 API Key 到系统环境变量
         if base_url: os.environ["ONLINE_BASE_URL"] = base_url  # 同步 API Base URL 到系统环境变量
@@ -159,20 +201,6 @@ with st.sidebar:  # 进入侧边栏渲染上下文本环境
             st.stop()  # 阻断当前 Streamlit 页面的执行
         st.success("已保存（环境变量 + 配置文件）")  # 报绿色成功保存状态气泡提示
 
-    # 钉钉 AI 多维表通知参数展开项
-    with st.expander("⚙️ 通知设置", expanded=False):  # 创建侧栏折叠设置面板，默认不展开
-        pass  # 仅作为视觉逻辑空项
-    dingtalk_mcp_url = st.text_input(  # 渲染钉钉多维表 MCP 写入基地址输入框
-        "钉钉 MCP 地址",  # 输入框说明
-        _cfg.get("dingtalk_mcp_url", ""),  # 从配置字典中提取默认值
-        type="password",  # 密码模式屏蔽明文
-        help="钉钉 AI 表格 MCP Streamable HTTP 地址",  # 气泡解释
-        key="_dd",  # 绑定状态 key
-        placeholder="https://mcp-gw.dingtalk.com/server/...?key=...",  # 示例占位字符
-    )  # 结束文本框定义
-    if not dingtalk_mcp_url:  # 检查如果钉钉多维表 MCP 地址为空
-        st.warning("⚠️ 未配置钉钉 MCP 地址，将无法写入 AI 表格，请在左侧设置后点击「💾 保存设置」")  # 在侧栏最底部给出黄色高亮警告框
-
 # ---- 主面板顶部：Hero 巨幅渐变装饰性横幅 ----
 _status_ok = bool(api_key)  # 以 API 密钥是否已配置作为引擎是否准备就绪的布尔标记
 st.markdown(f"""
@@ -180,7 +208,7 @@ st.markdown(f"""
     <div class="hero-left">
         <div class="hero-icon">🛡️</div>
         <div>
-            <div class="hero-title">安全数字监督员</div>
+            <div class="hero-title">数字化安全监督员</div>
             <div class="hero-sub">牡丹江中燃 · HSE AI Agent 安全监控系统</div>
         </div>
     </div>
