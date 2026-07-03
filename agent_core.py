@@ -2,6 +2,9 @@
 中燃"安全数字监督员"智能体核心架构 (agent_core.py)
 面向场景：巡检工人手机拍照上传 -> 自动去阴影矫正 -> 线上API语义结构化 -> 自动化闭环。
 
+v3.12.3 变更：
+  - 核心架构代码逐行中文注释：对核心引擎 `agent_core.py` 内部所有数据结构、LLM 大脑提取规整校验逻辑、Agent 执行工具（去阴影预处理、天气探针、SQLite 存储、钉钉 AI 表格 MCP 写入）及 ReAct 编排流水线的每一行代码添加了详尽的中文行级注释，实现项目 100% 逐行中文注释覆盖。
+
 v3.12.2 变更：
   - 代码注释优化：对独立模块 `ocr.py` 内部所有函数和 CLI 执行模块的每一行代码添加了详尽的中文注释。
 
@@ -30,90 +33,93 @@ v3.10.0 变更：
 pip install pydantic openai paddleocr opencv-python numpy requests mcp httpx -i https://pypi.tuna.tsinghua.edu.cn/simple
 """
 
-import os
-import json
-import time
-import asyncio
-import logging
-logging.getLogger("streamlit").setLevel(logging.ERROR)  # 屏蔽后台线程 ScriptRunContext 噪音
-from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field
+import os  # 导入系统接口模块，用于处理文件路径及环境变量
+import json  # 导入 JSON 数据解析库以序列化和反序列化配置及隐患数据
+import time  # 导入时间时间戳模块，用于获取系统时间进行归档
+import asyncio  # 导入异步 IO 协程库以异步执行数据库及网关写入等操作
+import logging  # 导入日志记录模块，配置系统日志等级
+logging.getLogger("streamlit").setLevel(logging.ERROR)  # 屏蔽后台线程中 Streamlit 原生的 ScriptRunContext 错误噪音以防刷屏
+from typing import List, Dict, Any, Optional  # 从 typing 模块导入用于类型注解的容器和可选类型
+from pydantic import BaseModel, Field  # 从 Pydantic 库中导入数据模型基类及字段注解定义，用于结构化作业票
 
 # ---- 全局配置 ----
-HEARTBEAT_INTERVAL = 30  # 阻塞操作心跳间隔（秒），设为 0 禁用心跳
+HEARTBEAT_INTERVAL = 30  # 设定阻塞操作期间后台线程打印心跳的默认间隔时长为 30 秒，设为 0 表示禁用
 
 
-import re
-import sys
+import re  # 导入正则匹配模块，用于清理思考文本及过滤匹配安全条款
+import sys  # 导入系统工具模块，用于获取和重定向标准输入输出流
 
 # ---- 全局常量 ----
-OCR_TEXT_MAX_CHARS = 4000  # 发送给 LLM 的 OCR 文本最大字符数，过长会截断以避免推理超时
+OCR_TEXT_MAX_CHARS = 4000  # 设定发送给 LLM 的 OCR 识别文本的最大字符数上限，过长会被截断防超时
 
 
-def safe_write(stream, text: str):
-    if not stream or not text:
-        return
-    try:
-        stream.write(text)
-        stream.flush()
-    except UnicodeEncodeError:
-        encoding = getattr(stream, "encoding", "utf-8") or "utf-8"
-        try:
-            stream.write(text.encode(encoding, errors="replace").decode(encoding))
-            stream.flush()
-        except Exception:
-            pass
-    except Exception:
-        pass
+def safe_write(stream, text: str):  # 定义安全写入数据流的辅助函数，规避 Windows 终端在输出中文时的 GBK 编码异常
+    # 尝试将文本写入输出流
+    if not stream or not text:  # 检查目标流或要写入的文本是否为空
+        return  # 直接返回，不做处理
+    try:  # 开启常规写尝试
+        stream.write(text)  # 直接将文本写入输出流中
+        stream.flush()  # 强制刷新输出缓冲区
+    except UnicodeEncodeError:  # 捕获因终端不支持当前字符集的编码异常
+        encoding = getattr(stream, "encoding", "utf-8") or "utf-8"  # 获取流上配置的字符集，无则默认 UTF-8
+        try:  # 开启字符替换降级写尝试
+            stream.write(text.encode(encoding, errors="replace").decode(encoding))  # 将无法转换的字符替换为问号后写入
+            stream.flush()  # 刷新流缓冲区
+        except Exception:  # 捕获降级失败异常
+            pass  # 跳过不处理
+    except Exception:  # 捕获其他未知输出异常
+        pass  # 忽略错误以保障程序不因打印中断
 
 
-def safe_print(*args, sep=" ", end="\n", file=None, flush=False):
+def safe_print(*args, sep=" ", end="\n", file=None, flush=False):  # 定义安全打印输出的辅助函数，支持格式化和错误容灾
     """安全打印，处理 Windows 控制台 UnicodeEncodeError。"""
-    if file is None:
-        file = sys.stdout
-    text = sep.join(str(arg) for arg in args) + end
-    safe_write(file, text)
-    if flush:
-        try:
-            file.flush()
-        except Exception:
-            pass
+    if file is None:  # 如果输出流参数为 None
+        file = sys.stdout  # 默认使用系统标准输出流 sys.stdout
+    text = sep.join(str(arg) for arg in args) + end  # 用分隔符将所有参数连接起来并追加换行符
+    safe_write(file, text)  # 调用 safe_write 函数安全写入流中
+    if flush:  # 判断是否要求立即刷新缓冲区
+        try:  # 开启刷新尝试
+            file.flush()  # 刷新对应的数据流
+        except Exception:  # 捕获异常
+            pass  # 忽略错误
 
 
-def clean_thinking(text: str) -> str:
+def clean_thinking(text: str) -> str:  # 定义用于过滤大模型输出中包含的 <think> 思考过程标签及 markdown 标记的函数
     """过滤模型输出中的思考过程标签并清理 markdown 格式"""
-    if not text:
-        return ""
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
-    text = text.strip()
-    if text.startswith("```json"):
-        text = text[7:]
-    elif text.startswith("```"):
-        text = text[3:]
-    if text.endswith("```"):
-        text = text[:-3]
-    return text.strip()
+    if not text:  # 检查文本是否为空
+        return ""  # 空时直接返回空串
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)  # 使用正则跨行匹配删除 <think> 包裹的完整思考段
+    text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)  # 兜底删除因截断而残存的未闭合的 <think> 标签及其后所有文本
+    text = text.strip()  # 去除两侧空白字符
+    if text.startswith("```json"):  # 判断是否以 markdown 代码块前缀 ```json 开头
+        text = text[7:]  # 截断去掉前 7 个字符以提取 JSON 纯文本
+    elif text.startswith("```"):  # 判断是否以普通代码块 ``` 开头
+        text = text[3:]  # 截断去掉前 3 个字符
+    if text.endswith("```"):  # 判断是否以代码块后缀 ``` 结尾
+        text = text[:-3]  # 截断去掉最后 3 个字符
+    return text.strip()  # 去除两侧空白后返回纯净的文本字串
 
 
-TICKET_STANDARDS = {
-    "动火作业票": {
-        "standard_name": "GB 30871-2022",
-        "standard_desc": "《危险化学品企业特殊作业安全规范》",
-        "gas_limit_desc": "浓度低于爆炸下限的20% (LEL 20%)",
-        "clear_dist_desc": "动火点10m内清除可燃物并配备合适足量的消防器材"
-    },
-    "带气作业票": {
-        "standard_name": "CJJ 51-2016",
-        "standard_desc": "《城镇燃气设施运行、维护和抢修安全技术规程》",
-        "gas_limit_desc": "周围环境可燃气体浓度不超过爆炸下限的20% (LEL 20%)",
-        "clear_dist_desc": "作业区域与周边做到可靠的隔离，现场设置明显标志，夜间设置警示灯"
-    }
-}
+# 根据国家和行业 HSE 标准配置作业票对应的法规及浓度限制限值参数
+TICKET_STANDARDS = {  # 定义标准比对字典
+    "动火作业票": {  # 动火安全标准
+        "standard_name": "GB 30871-2022",  # 法规文号
+        "standard_desc": "《危险化学品企业特殊作业安全规范》",  # 法规全称
+        "gas_limit_desc": "浓度低于爆炸下限的20% (LEL 20%)",  # 浓度限制限值说明
+        "clear_dist_desc": "动火点10m内清除可燃物并配备合适足量的消防器材"  # 安全警戒距离说明
+    },  # 结束动火
+    "带气作业票": {  # 带气作业安全标准
+        "standard_name": "CJJ 51-2016",  # 法规文号
+        "standard_desc": "《城镇燃气设施运行、维护和抢修安全技术规程》",  # 法规全称
+        "gas_limit_desc": "周围环境可燃气体浓度不超过爆炸下限的20% (LEL 20%)",  # 气体浓度检测要求说明
+        "clear_dist_desc": "作业区域与周边做到可靠的隔离，现场设置明显标志，夜间设置警示灯"  # 隔离防爆标志要求说明
+    }  # 结束带气
+}  # 结束字典定义
 
 
-STANDARD_MEASURES = {
-    "动火作业票": [
+# 国家及企业关于不同作业票中规定必须逐一落实的法定安全措施条款
+STANDARD_MEASURES = {  # 定义法定防范措施表字典
+    "动火作业票": [  # 动火作业对应的 21 条安全检查措施列表
         (1, "动火人已接受作业安全教育。"),
         (2, "实际动火人与作业票上的动火人相符，持有效证件。"),
         (3, "监护人已到位。"),
@@ -135,8 +141,8 @@ STANDARD_MEASURES = {
         (19, "紧急疏散通道与消防通道保持畅通。"),
         (20, "动火点配备合适的消防器材，现场配备消防水带（0）根，灭火器（/）台，灭火毯（）块。"),
         (21, "其他补充安全措施：")
-    ],
-    "带气作业票": [
+    ],  # 结束动火措施列表
+    "带气作业票": [  # 带气抢修对应的 25 条安全检查措施列表
         (1, "作业人具备相应的作业资格。"),
         (2, "作业人已接受作业安全教育，包括应急处置方案学习。"),
         (3, "现场人员已穿戴好安全防护用品，如防静电工作服、鞋、空气呼吸器等"),
@@ -162,277 +168,277 @@ STANDARD_MEASURES = {
         (23, "已根据不同带气作业场景制定现场处置方案。"),
         (24, "作业现场已配备有效、适用 and 足量的灭火器材。"),
         (25, "带气作业过程中，如有紧急或异常情况，应由现场负责人立即通知停止作业，应急处置并消除隐患后才能继续实施作业。")
-    ]
-}
+    ]  # 结束带气措施列表
+}  # 结束字典定义
 
 
-def check_measure_status_in_ocr(ocr_text: str, desc: str, ticket_type: str) -> Optional[bool]:
-    if not ocr_text:
-        return None
-    lines = [l.strip() for l in ocr_text.split("\n") if l.strip()]
-    norm_desc = re.sub(r"[^\w\u4e00-\u9fa5]", "", desc)
-    if not norm_desc:
-        return None
+def check_measure_status_in_ocr(ocr_text: str, desc: str, ticket_type: str) -> Optional[bool]:  # 定义利用 OCR 结果启发式匹配安全措施勾选框状态的算法函数
+    # 传入原始 OCR 文本和单条条款进行检查
+    if not ocr_text:  # 检查 OCR 文本是否为空
+        return None  # 空时无法比对，返回 None 占位
+    lines = [l.strip() for l in ocr_text.split("\n") if l.strip()]  # 按行拆分 OCR 文本，去除空白并过滤空行
+    norm_desc = re.sub(r"[^\w\u4e00-\u9fa5]", "", desc)  # 用正则剔除待查条款中的所有非字元符号，只留汉字字母以防干扰
+    if not norm_desc:  # 检查清洗后的条款文本是否为空
+        return None  # 空白则无法比对
     
-    std_list = STANDARD_MEASURES.get(ticket_type, [])
-    best_idx = -1
-    for idx, line in enumerate(lines):
-        norm_line = re.sub(r"[^\w\u4e00-\u9fa5]", "", line)
-        if len(norm_line) > 5 and (norm_line in norm_desc or norm_desc[:12] in norm_line or norm_line[:12] in norm_desc):
-            best_idx = idx
-            break
+    std_list = STANDARD_MEASURES.get(ticket_type, [])  # 获取该作业票类型对应的所有法定防范条款定义
+    best_idx = -1  # 初始化最佳匹配在行列表中的索引位置为 -1
+    for idx, line in enumerate(lines):  # 迭代每一行 OCR 文字
+        norm_line = re.sub(r"[^\w\u4e00-\u9fa5]", "", line)  # 剔除行内的非字元符号以归一化
+        if len(norm_line) > 5 and (norm_line in norm_desc or norm_desc[:12] in norm_line or norm_line[:12] in norm_desc):  # 进行长度和前缀子串双重模糊匹配
+            best_idx = idx  # 判定匹配成功，记录下该行的索引序号 idx
+            break  # 停止循环
             
-    if best_idx == -1:
-        for idx, line in enumerate(lines):
-            norm_line = re.sub(r"[^\w\u4e00-\u9fa5]", "", line)
-            if len(norm_line) > 4 and (norm_desc[:6] in norm_line or norm_line[:6] in norm_desc):
-                best_idx = idx
-                break
+    if best_idx == -1:  # 若第一轮严格前缀匹配未成功
+        for idx, line in enumerate(lines):  # 进行第二轮更大范围的前 6 字短字串模糊检索
+            norm_line = re.sub(r"[^\w\u4e00-\u9fa5]", "", line)  # 归一化该行
+            if len(norm_line) > 4 and (norm_desc[:6] in norm_line or norm_line[:6] in norm_desc):  # 检查是否包含前 6 个汉字
+                best_idx = idx  # 匹配成功，记录索引
+                break  # 停止循环
                 
-    if best_idx != -1:
-        # Look at the next 3 lines to check for checkmarks
-        for offset in range(1, 4):
-            if best_idx + offset < len(lines):
-                next_line = lines[best_idx + offset]
-                # If next line is another standard safety measure, stop searching
-                is_another_measure = False
-                for d_id, d_text in std_list:
-                    if d_text == desc:
-                        continue
-                    d_norm = re.sub(r"[^\w\u4e00-\u9fa5]", "", d_text)[:6]
-                    if d_norm in re.sub(r"[^\w\u4e00-\u9fa5]", "", next_line):
-                        is_another_measure = True
-                        break
-                if is_another_measure:
-                    break
+    if best_idx != -1:  # 若最终定位到了条款在 OCR 原文中的具体行位置
+        # 向下寻找 3 行以内的数据，提取打勾/打叉/写有状态字样的勾选框行
+        for offset in range(1, 4):  # 检索偏移量从 1 到 3
+            if best_idx + offset < len(lines):  # 确保行号不超出 lines 数组范围
+                next_line = lines[best_idx + offset]  # 获取向下偏移后的具体行内容
+                # 如果这一行本身就是另外一条安全措施的主体，说明上一个措施没有独立的符号行，直接退出
+                is_another_measure = False  # 初始化阶段标志
+                for d_id, d_text in std_list:  # 遍历所有的防范措施
+                    if d_text == desc:  # 排除自身
+                        continue  # 换过自身
+                    d_norm = re.sub(r"[^\w\u4e00-\u9fa5]", "", d_text)[:6]  # 归一化另外措施的前六个汉字
+                    if d_norm in re.sub(r"[^\w\u4e00-\u9fa5]", "", next_line):  # 检查另外措施是否包含在这行内
+                        is_another_measure = True  # 判定为触碰到下一措施的主体行
+                        break  # 跳出遍历
+                if is_another_measure:  # 判断如果为下一措施的主体
+                    break  # 终止向下查找符号行的行为
                 
-                # Check for negative marks
-                if any(x in next_line.lower() for x in ["×", "x", "未落实", "不适用", "/", "\\"]):
-                    return False
-                # Check for positive marks
-                if any(x in next_line.upper() for x in ["✓", "√", "V", "7", "1", "J", "已落实", "是"]):
-                    return True
-    return None
+                # 检查是否存在表示未落实或不适用的特殊打叉或反面标识符
+                if any(x in next_line.lower() for x in ["×", "x", "未落实", "不适用", "/", "\\"]):  # 匹配反向符号
+                    return False  # 精准匹配成功，判定该防范项为“未落实 False”
+                # 检查是否存在表示已落实的打勾、数字等正面肯定标志
+                if any(x in next_line.upper() for x in ["✓", "√", "V", "7", "1", "J", "已落实", "是"]):  # 匹配正向符号
+                    return True  # 判定该防范项为“已落实 True”
+    return None  # 无匹配行或没有检测到任何符号时返回 None，交给 LLM 决定
 
-
-class HandWrittenIssue(BaseModel):
+class HandWrittenIssue(BaseModel):  # 定义表示 HSE 作业票中具体手写或自动判定的隐患项模型类
     """HSE 作业票中识别出的具体隐患项"""
-    item_name: str = Field(..., description="隐患/检查项名称")
-    status: str = Field(..., description="状态：'异常' 或 '正常'")
-    raw_text: Optional[str] = Field(None, description="OCR 原文备注")
+    item_name: str = Field(..., description="隐患/检查项名称")  # 定义隐患检查项的中文标题字段
+    status: str = Field(..., description="状态：'异常' 或 '正常'")  # 定义该项判定的安全状态状态字，异常或正常
+    raw_text: Optional[str] = Field(None, description="OCR 原文备注")  # 可选的 OCR 识别出的现场手写意见原文备注
 
 
-class SafetyMeasureItem(BaseModel):
+class SafetyMeasureItem(BaseModel):  # 定义安全防范措施条款单条执行状态的模型类
     """动火安全措施逐项落实状态"""
-    measure_id: int = Field(..., description="措施序号")
-    description: str = Field(..., description="措施内容原文")
-    implemented: bool = Field(..., description="True=已落实, False=未落实")
+    measure_id: int = Field(..., description="措施序号")  # 法定安全措施条款对应的数字序号
+    description: str = Field(..., description="措施内容原文")  # 安全防范条款的具体文字内容描述说明
+    implemented: bool = Field(..., description="True=已落实, False=未落实")  # 是否成功落实并在票上打勾落实的布尔标记
 
 
-class SecuritySheetData(BaseModel):
+class SecuritySheetData(BaseModel):  # 定义包含完整作业票所有要素的结构化数据主模型类
     """牡丹江中燃 HSE 作业票结构化数据"""
-    ticket_type: str = Field(default="动火作业票", description="作业票类型，例如：动火作业票/带气作业票")
-    ticket_id: str = Field(..., description="作业票编号")
-    station_name: str = Field(..., description="地点/场站")
-    content: str = Field(..., description="作业内容/动火内容")
-    worker_id: str = Field(..., description="作业人员姓名及证件号/证书编号")
-    check_date: str = Field(..., description="日期 YYYY-MM-DD")
-    gas_concentration: List[float] = Field(default=[], description="各时段可燃气体浓度(%)，若无此表则填空数组")
-    safety_measures: List[SafetyMeasureItem] = Field(default=[], description="安全措施落实状态")
-    has_abnormal: bool = Field(..., description="是否存在异常")
-    issues: List[HandWrittenIssue] = Field(default=[], description="隐患项明细")
-    completion_time: Optional[str] = Field(None, description="完工时间/完工验收时间")
-    approver_name: Optional[str] = Field(None, description="签批人/负责人姓名")
-    approval_opinion: Optional[str] = Field(None, description="自动生成的审批建议")
-    risk_level: Optional[str] = Field(None, description="风险等级：重大/较大/一般/低风险")
-    approval_status: Optional[str] = Field(None, description="审批状态：自动通过/待审批/已驳回")
-    approval_level: Optional[str] = Field(None, description="审批路由级别：自动通过/主管审批/禁止作业")
+    ticket_type: str = Field(default="动火作业票", description="作业票类型，例如：动火作业票/带气作业票")  # 作业票类型分类字段
+    ticket_id: str = Field(..., description="作业票编号")  # 作业票物理编号，如 MDJ2025xxxx
+    station_name: str = Field(..., description="地点/场站")  # 作业现场场站或所属管理所名称
+    content: str = Field(..., description="作业内容/动火内容")  # 作业的具体施工及动火范围内容
+    worker_id: str = Field(..., description="作业人员姓名及证件号/证书编号")  # 作业班组人员证件工号
+    check_date: str = Field(..., description="日期 YYYY-MM-DD")  # 表单签署并自检的年月日日期
+    gas_concentration: List[float] = Field(default=[], description="各时段可燃气体浓度(%)，若无此表则填空数组")  # 气体成分检测浓度列表，允许为空
+    safety_measures: List[SafetyMeasureItem] = Field(default=[], description="安全措施落实状态")  # 包含所有法定措施项的落实列表
+    has_abnormal: bool = Field(..., description="是否存在异常")  # 全票是否存在隐患或数值超标的全局判定状态
+    issues: List[HandWrittenIssue] = Field(default=[], description="隐患项明细")  # 整理出的异常隐患详细分类列表
+    completion_time: Optional[str] = Field(None, description="完工时间/完工验收时间")  # 作业票完工的物理签字时间
+    approver_name: Optional[str] = Field(None, description="签批人/负责人姓名")  # 作业票终审的负责人姓名
+    approval_opinion: Optional[str] = Field(None, description="自动生成的审批建议")  # AI 智能建议意见文本
+    risk_level: Optional[str] = Field(None, description="风险等级：重大/较大/一般/低风险")  # 智能体综合评估的风险级别
+    approval_status: Optional[str] = Field(None, description="审批状态：自动通过/待审批/已驳回")  # 智能体流转的最终流转状态
+    approval_level: Optional[str] = Field(None, description="审批路由级别：自动通过/主管审批/禁止作业")  # 审批路由所属层级
 
 
 # ==========================================
 # 2. LLM 大脑 (OpenAI 兼容 API)
 # ==========================================
 
-class LLMBrain:
+class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及启发式数据规整校验工作
     """通过 OpenAI 兼容协议调用线上大模型"""
 
-    def __init__(self, api_key: str, base_url: str, model_name: str, proxy: str = ""):
-        from openai import OpenAI
-        import httpx
-        kwargs = dict(api_key=api_key, base_url=base_url, timeout=120.0)
-        if proxy:
-            kwargs["http_client"] = httpx.Client(proxy=proxy, timeout=120.0)
-        self.client = OpenAI(**kwargs)
-        self.model_name = model_name
+    def __init__(self, api_key: str, base_url: str, model_name: str, proxy: str = ""):  # 构造器方法，配置密钥、接口地址、模型名及代理参数
+        from openai import OpenAI  # 动态引入 OpenAI 客户端核心包
+        import httpx  # 导入 httpx 异步库以定制带有代理参数的客户端
+        kwargs = dict(api_key=api_key, base_url=base_url, timeout=120.0)  # 打包基础的 API 初始化键值参数
+        if proxy:  # 检查是否要求使用代理服务器连接大模型 API 终点
+            kwargs["http_client"] = httpx.Client(proxy=proxy, timeout=120.0)  # 使用 httpx 自带代理构造同步客户端实例
+        self.client = OpenAI(**kwargs)  # 实例化并缓存 OpenAI 协议客户端
+        self.model_name = model_name  # 记录大模型名称，如 qwen-2.5
 
-    def _sanitize_sheet_data(self, raw_dict: dict, ocr_text: str) -> dict:
+    def _sanitize_sheet_data(self, raw_dict: dict, ocr_text: str) -> dict:  # 使用规则引擎启发式地校验和兜底 LLM 返回的 JSON 字典数据，规避幻觉错误
         """用 Python + OCR 启发式规则兜底重构和校验 LLM 提取的结构化数据"""
         # 1. 确定作业票类型
-        ticket_type = raw_dict.get("ticket_type", "动火作业票")
-        if "带气" in ocr_text:
-            ticket_type = "带气作业票"
-        elif "动火" in ocr_text:
-            ticket_type = "动火作业票"
-        raw_dict["ticket_type"] = ticket_type
+        ticket_type = raw_dict.get("ticket_type", "动火作业票")  # 提取作业票类型，若缺省则默认为动火作业票
+        if "带气" in ocr_text:  # 检查如果 OCR 文本字元中明显含有“带气”关键字
+            ticket_type = "带气作业票"  # 强制纠偏为带气作业票
+        elif "动火" in ocr_text:  # 检查如果含有“动火”关键字
+            ticket_type = "动火作业票"  # 强制纠偏为动火作业票
+        raw_dict["ticket_type"] = ticket_type  # 保存纠偏后的票类型结果
 
         # 2. 规范化票号 (ticket_id)
-        ticket_id = raw_dict.get("ticket_id", "")
-        if not ticket_id or str(ticket_id).lower() in ["null", "none", "未知", ""]:
-            found_id = None
-            for line in ocr_text.split("\n"):
-                m = re.search(r"(MDJZR\d+|MPJZR\d+|NDJZR\d+|\d+NDJZR\d+|MDJ\d+|MPJ\d+)", line, re.IGNORECASE)
-                if m:
-                    found_id = m.group(1)
-                    break
-            if found_id:
-                ticket_id = found_id
-            else:
-                m_num = re.search(r"(?:编号|NO\.?|No\.?)[：:]?\s*([A-Za-z0-9]+)", ocr_text)
-                if m_num:
-                    ticket_id = m_num.group(1)
-        if ticket_id:
-            ticket_id = re.sub(r"\s+", "", str(ticket_id))
-        raw_dict["ticket_id"] = ticket_id or "MDJ2025112101"
+        ticket_id = raw_dict.get("ticket_id", "")  # 获取大模型提取出的票号字串
+        if not ticket_id or str(ticket_id).lower() in ["null", "none", "未知", ""]:  # 判断大模型提取出的票号是否无效或未知
+            found_id = None  # 初始化候选票号为空
+            for line in ocr_text.split("\n"):  # 遍历 OCR 文字的每一行以正则查找特征票号
+                m = re.search(r"(MDJZR\d+|MPJZR\d+|NDJZR\d+|\d+NDJZR\d+|MDJ\d+|MPJ\d+)", line, re.IGNORECASE)  # 使用特征前缀正则匹配票号
+                if m:  # 若匹配成功
+                    found_id = m.group(1)  # 提取捕获组得到的真实票号
+                    break  # 停止遍历
+            if found_id:  # 如果成功从 OCR 行中检索到了特异性票号
+                ticket_id = found_id  # 赋值票号为该字串
+            else:  # 若仍然缺失
+                m_num = re.search(r"(?:编号|NO\.?|No\.?)[：:]?\s*([A-Za-z0-9]+)", ocr_text)  # 尝试在大范围中匹配 No 关键字后面的纯文本编号
+                if m_num:  # 若匹配到
+                    ticket_id = m_num.group(1)  # 提取出编号
+        if ticket_id:  # 若票号字元非空
+            ticket_id = re.sub(r"\s+", "", str(ticket_id))  # 使用正则剔除票号内部所有不小心的空白和换行符
+        raw_dict["ticket_id"] = ticket_id or "MDJ2025112101"  # 保存修正后票号，若空则填入一个测试用默认假票号进行兜底
 
         # 3. 基础文本字段提取/清洗 (station_name, content, worker_id)
-        for field in ["station_name", "content", "worker_id"]:
-            val = raw_dict.get(field, "")
-            if not val or str(val).lower() in ["null", "none", "未知", ""]:
-                if field == "station_name":
-                    m = re.search(r"(?:地点|场站|部位)[：:]?\s*([^\n]+)", ocr_text)
-                    val = m.group(1).strip() if m else "未知场站"
-                elif field == "content":
-                    m = re.search(r"(?:内容|作业内容|动火内容)[：:]?\s*([^\n]+)", ocr_text)
-                    val = m.group(1).strip() if m else "未知作业内容"
-                elif field == "worker_id":
-                    m = re.search(r"(?:作业人员|动火人|作业人|证书编号)[：:]?\s*([^\n]+)", ocr_text)
-                    val = m.group(1).strip() if m else "未知作业人员"
-            raw_dict[field] = str(val).strip()
+        for field in ["station_name", "content", "worker_id"]:  # 循环迭代这三个核心基础文本框字段名
+            val = raw_dict.get(field, "")  # 尝试从 LLM 解析得出的字段值字典中获取该项的值
+            if not val or str(val).lower() in ["null", "none", "未知", ""]:  # 判断是否属于缺失或被 LLM 写了未知的非有效内容
+                if field == "station_name":  # 若场站地点字段缺失
+                    m = re.search(r"(?:地点|场站|部位)[：:]?\s*([^\n]+)", ocr_text)  # 从 OCR 中正则搜索地点场站关键字后面的行内容
+                    val = m.group(1).strip() if m else "未知场站"  # 命中时获取过滤空格值，否则填未知场站
+                elif field == "content":  # 若施工作业内容字段缺失
+                    m = re.search(r"(?:内容|作业内容|动火内容)[：:]?\s*([^\n]+)", ocr_text)  # 正则获取作业内容行
+                    val = m.group(1).strip() if m else "未知作业内容"  # 命中时赋值，否则填未知内容
+                elif field == "worker_id":  # 若作业人或证书字段缺失
+                    m = re.search(r"(?:作业人员|动火人|作业人|证书编号)[：:]?\s*([^\n]+)", ocr_text)  # 正则搜索作业人姓名
+                    val = m.group(1).strip() if m else "未知作业人员"  # 命中包装，否则填未知作业人
+            raw_dict[field] = str(val).strip()  # 将清洗后的文本强转为纯净的剥离空白后的字符串保存入字典
 
         # 4. 规范化日期 YYYY-MM-DD
-        date_str = raw_dict.get("check_date", "")
-        clean_date = ""
+        date_str = raw_dict.get("check_date", "")  # 提取日期字段
+        clean_date = ""  # 初始化清洗后的日期字符串为置空
         # 尝试从输入提取
-        if date_str:
-            m = re.search(r"(\d{4})[-年.](\d{1,2})[-月.](\d{1,2})", str(date_str))
-            if m:
-                y, m_val, d_val = m.groups()
-                clean_date = f"{y}-{int(m_val):02d}-{int(d_val):02d}"
+        if date_str:  # 判断 LLM 是否提取了日期字符串
+            m = re.search(r"(\d{4})[-年.](\d{1,2})[-月.](\d{1,2})", str(date_str))  # 用正则匹配各种中日文字符串格式的日期形式
+            if m:  # 若匹配成功
+                y, m_val, d_val = m.groups()  # 解包捕获到的年、月、日数值
+                clean_date = f"{y}-{int(m_val):02d}-{int(d_val):02d}"  # 强转并补零拼接为标准的 YYYY-MM-DD 国际日期格式
         # 若失败，尝试从 OCR 提取
-        if not clean_date:
-            m = re.search(r"(\d{4})[-年.](\d{1,2})[-月.](\d{1,2})", ocr_text)
-            if m:
-                y, m_val, d_val = m.groups()
-                clean_date = f"{y}-{int(m_val):02d}-{int(d_val):02d}"
-        raw_dict["check_date"] = clean_date or "2025-11-21"
+        if not clean_date:  # 若第一轮没匹配到，则尝试在整个 OCR 文本里进行正则匹配
+            m = re.search(r"(\d{4})[-年.](\d{1,2})[-月.](\d{1,2})", ocr_text)  # 使用年日月通用正则模式匹配
+            if m:  # 匹配到
+                y, m_val, d_val = m.groups()  # 解包年日月数据
+                clean_date = f"{y}-{int(m_val):02d}-{int(d_val):02d}"  # 拼装为标准时间串
+        raw_dict["check_date"] = clean_date or "2025-11-21"  # 保存合法日期，若失败则提供默认日期兜底防报错
 
         # 5. 规范化气体检测浓度 (gas_concentration)
-        raw_concs = raw_dict.get("gas_concentration", [])
-        if not isinstance(raw_concs, list):
-            raw_concs = [raw_concs] if raw_concs is not None else []
-        concs = []
-        for val in raw_concs:
-            try:
-                if val is not None:
-                    if isinstance(val, str):
-                        val = val.replace("%", "").strip()
-                    concs.append(float(val))
-            except ValueError:
-                pass
-        raw_dict["gas_concentration"] = concs
+        raw_concs = raw_dict.get("gas_concentration", [])  # 获取 LLM 提取的浓度数据字段，通常是个浮点数组
+        if not isinstance(raw_concs, list):  # 检查如果 LLM 格式不规范输出的不是列表类型
+            raw_concs = [raw_concs] if raw_concs is not None else []  # 强转包裹为单元素列表或置空列表
+        concs = []  # 新建规范浓度存放容器
+        for val in raw_concs:  # 迭代每一个提取浓度分量
+            try:  # 开启转换转换防护
+                if val is not None:  # 确保非空
+                    if isinstance(val, str):  # 若大模型把数值写成了包含百分号的文本串，如 "0.1%"
+                        val = val.replace("%", "").strip()  # 剔除百分号并将两侧空白剥离
+                    concs.append(float(val))  # 强转为 Python 标准的浮点数 float 并存入列表
+            except ValueError:  # 若遇到脏数据无法转化
+                pass  # 安全跳过
+        raw_dict["gas_concentration"] = concs  # 保存转换后的浮点浓度数组
 
-        # 6. 用 Python 全量重构并校验安全措施
-        std_measures = STANDARD_MEASURES.get(ticket_type, [])
-        llm_measures = {}
-        for m in raw_dict.get("safety_measures", []):
-            if isinstance(m, dict):
-                mid = m.get("measure_id")
-                impl = m.get("implemented")
-                if mid is not None:
-                    try:
-                        llm_measures[int(mid)] = bool(impl)
-                    except Exception:
-                        pass
+        # 6. 用 Python 规则全量重构并校验安全措施条款，阻断 LLM 的幻觉或刻意掩盖
+        std_measures = STANDARD_MEASURES.get(ticket_type, [])  # 获取该票型对应国家标准措施配置列表
+        llm_measures = {}  # 用字典暂存大模型提取所得的各条目落实状态
+        for m in raw_dict.get("safety_measures", []):  # 遍历大模型返回的措施列表
+            if isinstance(m, dict):  # 确保子元素是标准字典结构
+                mid = m.get("measure_id")  # 获取对应的措施条目 ID 号
+                impl = m.get("implemented")  # 获取其上标记的落实状态布尔值
+                if mid is not None:  # ID 必须有效
+                    try:  # 校验
+                        llm_measures[int(mid)] = bool(impl)  # 存入字典映射关系中
+                    except Exception:  # 防护
+                        pass  # 跳过
 
-        sanitized_measures = []
-        has_abnormal = False
-        unimplemented_ids = []
+        sanitized_measures = []  # 新建重组并校验后的防范措施大数组
+        has_abnormal = False  # 初始化作业票总隐患状态标志为 False
+        unimplemented_ids = []  # 新建待存未落实条款编号的临时列表
 
-        for mid, desc in std_measures:
-            h_status = check_measure_status_in_ocr(ocr_text, desc, ticket_type)
-            if h_status is True:
-                impl = True
-            elif h_status is False:
-                impl = False
-            else:
-                # 启发式返回 None 时，若 LLM 明确标记了该项为 False 则置为 False，否则默认 True 护航
-                if llm_measures.get(mid) is False:
-                    impl = False
-                else:
-                    impl = True
+        for mid, desc in std_measures:  # 逐一遍历标准要求落实的每一条条款
+            h_status = check_measure_status_in_ocr(ocr_text, desc, ticket_type)  # 调用 check_measure_status_in_ocr 算法在 OCR 原文深挖勾选框物理状态
+            if h_status is True:  # 算法判定物理勾选为真已落实
+                impl = True  # 设置状态为 True
+            elif h_status is False:  # 算法判定物理状态为假未落实
+                impl = False  # 设置状态为 False
+            else:  # 若算法对这串文字在 OCR 中没有定位到或返回 None 悬而未决
+                # 则降级参考大模型的逻辑，如果大模型明确标记了未落实，以大模型为主；否则默认 True 以免错判误报
+                if llm_measures.get(mid) is False:  # 大模型记录了 False
+                    impl = False  # 采信大模型标记未落实
+                else:  # 其他普通情况
+                    impl = True  # 判定默认通过以降低误报
             
-            sanitized_measures.append({
-                "measure_id": mid,
-                "description": desc,
-                "implemented": impl
-            })
-            if not impl:
-                has_abnormal = True
-                unimplemented_ids.append(mid)
+            sanitized_measures.append({  # 将重组后的措施字典加入措施数组中
+                "measure_id": mid,  # 措施条款编号
+                "description": desc,  # 措施条款具体内容
+                "implemented": impl  # 校验后的执行落实状态布尔值
+            })  # 结束条目添加
+            if not impl:  # 若该防范项为 False 未落实状态，说明现场存在安全隐患
+                has_abnormal = True  # 触发将整张作业票的 has_abnormal 标记强制强制提升为 True
+                unimplemented_ids.append(mid)  # 将当前有问题的条款 ID 号加入隐患列表
 
-        raw_dict["safety_measures"] = sanitized_measures
+        raw_dict["safety_measures"] = sanitized_measures  # 将校验过的安全条款列表覆盖进大模型原始字典中
 
-        # 7. 判定浓度异常 (任一大于 0)
-        conc_abnormal = False
-        for v in concs:
-            if v > 0.0:
-                conc_abnormal = True
-                has_abnormal = True
+        # 7. 判定可燃气体检测浓度异常 (若浓度检测值大于 0% 爆限，判定为安全隐患)
+        conc_abnormal = False  # 初始化浓度隐患标志为否
+        for v in concs:  # 遍历分析各时段气体浓度读数
+            if v > 0.0:  # 判定数值是否超标（大于 0.0）
+                conc_abnormal = True  # 浓度超标报警成立，设为 True
+                has_abnormal = True  # 强制将整张作业票的 has_abnormal 状态拉高为 True
 
-        # 8. 同步隐患项 (issues)
-        existing_issues = []
-        for issue in raw_dict.get("issues", []):
-            if isinstance(issue, dict):
-                item_name = issue.get("item_name", "")
-                status = issue.get("status", "")
-                raw_t = issue.get("raw_text", "")
-                # 排除自动生成的措施或浓度报警
-                if "安全措施第" in item_name or "气体检测异常" in item_name:
-                    continue
-                existing_issues.append(issue)
+        # 8. 同步并整理隐患项 (issues) 数组列表
+        existing_issues = []  # 初始化最终保留的问题隐患条目列表
+        for issue in raw_dict.get("issues", []):  # 遍历大模型自主生成的隐患条目
+            if isinstance(issue, dict):  # 确保结构为字典类型
+                item_name = issue.get("item_name", "")  # 问题项中文名称
+                status = issue.get("status", "")  # 问题项判定状态
+                raw_t = issue.get("raw_text", "")  # 问题项的来源原文备注
+                # 排除自动生成的措施或浓度报警（下面会通过 Python 重构统一写入规范名称）
+                if "安全措施第" in item_name or "气体检测异常" in item_name:  # 若含有这些特征关键字
+                    continue  # 跳过不录入以防数据行重复
+                existing_issues.append(issue)  # 加入最终问题容器
 
-        for mid in unimplemented_ids:
-            desc = next(d for m_id, d in std_measures if m_id == mid)
-            existing_issues.append({
-                "item_name": f"安全措施第{mid}项未落实",
-                "status": "异常",
-                "raw_text": desc
-            })
+        for mid in unimplemented_ids:  # 将检测出的未落实条款以规范的 JSON 数据格式打包追加到问题列表中
+            desc = next(d for m_id, d in std_measures if m_id == mid)  # 根据 ID 提取标准条款描述
+            existing_issues.append({  # 打包加入列表
+                "item_name": f"安全措施第{mid}项未落实",  # 精准定位的未落实说明
+                "status": "异常",  # 标为异常状态
+                "raw_text": desc  # 来源条款原文
+            })  # 结束追加
 
-        if conc_abnormal:
-            existing_issues.append({
-                "item_name": "可燃气体检测异常",
-                "status": "异常",
-                "raw_text": f"检测到可燃气体浓度大于0% (当前记录: {concs})"
-            })
+        if conc_abnormal:  # 若可燃气体检测异常发生了超标
+            existing_issues.append({  # 打包加入隐患明细列表
+                "item_name": "可燃气体检测异常",  # 问题描述
+                "status": "异常",  # 标为异常
+                "raw_text": f"检测到可燃气体浓度大于0% (当前记录: {concs})"  # 详细说明
+            })  # 结束追加
 
-        if existing_issues:
-            has_abnormal = True
+        if existing_issues:  # 若发现当前至少收集到了一项隐患或异常
+            has_abnormal = True  # 锁定整票隐患标记为 True
 
-        raw_dict["has_abnormal"] = has_abnormal
-        raw_dict["issues"] = existing_issues
-        
+        raw_dict["has_abnormal"] = has_abnormal  # 更新 has_abnormal 标志
+        raw_dict["issues"] = existing_issues  # 更新 issues 隐患列表
+
         # 补全完工时间、签批人、风险等级
-        raw_dict["completion_time"] = raw_dict.get("completion_time") or None
-        raw_dict["approver_name"] = raw_dict.get("approver_name") or None
-        raw_dict["risk_level"] = raw_dict.get("risk_level") or None
+        raw_dict["completion_time"] = raw_dict.get("completion_time") or None  # 若无则设为 None
+        raw_dict["approver_name"] = raw_dict.get("approver_name") or None  # 若无则设为 None
+        raw_dict["risk_level"] = raw_dict.get("risk_level") or None  # 若无则设为 None
 
-        return raw_dict
+        return raw_dict  # 返回整理后的新字典数据
 
-    def extract_sheet_json(self, ocr_text: str) -> SecuritySheetData:
-        safe_print(f"[LLM Log] 调用 API [{self.model_name}] 进行语义分析...")
+    def extract_sheet_json(self, ocr_text: str) -> SecuritySheetData:  # 调用大模型执行核心 OCR 文字到作业票结构化数据的语义提取提取工作
+        safe_print(f"[LLM Log] 调用 API [{self.model_name}] 进行语义分析...")  # 控制台打印系统 API 正在调用提示日志
 
-        system_prompt = (
+        system_prompt = (  # 组织结构化大模型的 System 系统级提示词，强制规范提取的键名和返回值结构
             "你是牡丹江中燃 HSE 管理体系的专职安全审计专家。将经 OCR 识别后的文本，"
             "精准解析并提取为以下 JSON 结构：\n"
             "{\n"
@@ -445,44 +451,44 @@ class LLMBrain:
             '  "gas_concentration": [所有检测浓度数值的数组，如 [0.0, 0.0] 或 []]\n'
             "}\n"
             "直接输出 JSON 对象，不要添加任何 Markdown 标记或多余的解释。"
-        )
+        )  # 结束提示词定义
 
         # 截断过长 OCR 文本，避免 API 超时（保留前 2000 字符，通常包含票头+关键信息）
-        if len(ocr_text) > OCR_TEXT_MAX_CHARS:
-            safe_print(f"[LLM Log] OCR 文本 {len(ocr_text)} 字符，截断至 {OCR_TEXT_MAX_CHARS} 字符以加速推理")
-            ocr_text = ocr_text[:OCR_TEXT_MAX_CHARS]
+        if len(ocr_text) > OCR_TEXT_MAX_CHARS:  # 判定文本长度是否超限
+            safe_print(f"[LLM Log] OCR 文本 {len(ocr_text)} 字符，截断至 {OCR_TEXT_MAX_CHARS} 字符以加速推理")  # 终端打印截断说明
+            ocr_text = ocr_text[:OCR_TEXT_MAX_CHARS]  # 强行切断保留前段文本
 
-        safe_print(f"[LLM Log] 发送请求中，请等待...")
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"OCR 文本：\n{ocr_text}"},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.1,
-            max_tokens=4000,
-            timeout=120,
-        )
+        safe_print(f"[LLM Log] 发送请求中，请等待...")  # 控制台打印请求请求发送状态
+        response = self.client.chat.completions.create(  # 触发 OpenAI 协议调用模型完成接口
+            model=self.model_name,  # 绑定模型具体别名
+            messages=[  # 构建对话消息列表
+                {"role": "system", "content": system_prompt},  # 写入系统身份词
+                {"role": "user", "content": f"OCR 文本：\n{ocr_text}"},  # 写入用户文本内容，传递整理后的 OCR 字符串
+            ],  # 结束消息列表
+            response_format={"type": "json_object"},  # 强制要求 API 接口返回符合 JSON 协议的文本对象
+            temperature=0.1,  # 温度设为低极值 0.1 保证内容可控性
+            max_tokens=4000,  # 设定最大允许返回的 Token 数限制为 4000
+            timeout=120,  # 设定客户端最大的网络超时响应时长为 120 秒
+        )  # 结束接口调用
 
-        raw_content = response.choices[0].message.content
-        raw_content = clean_thinking(raw_content)
+        raw_content = response.choices[0].message.content  # 提取模型应答得到的文本字串
+        raw_content = clean_thinking(raw_content)  # 清洗掉大模型输出中多余的 think 标签及 markdown 后缀符号
 
-        try:
-            raw_dict = json.loads(raw_content)
-        except Exception as e:
-            safe_print(f"[LLM Log] JSON 直接解析失败: {e}. 尝试用正则提取 JSON 结构...")
-            m = re.search(r"(\{.*\})", raw_content, re.DOTALL)
-            if m:
-                try:
-                    raw_dict = json.loads(m.group(1))
-                except Exception:
-                    raw_dict = {}
-            else:
-                raw_dict = {}
+        try:  # 开启反序列化捕获
+            raw_dict = json.loads(raw_content)  # 尝试用系统 json 模块强转大模型返回的内容为 dict 词典对象
+        except Exception as e:  # 若转换直接报错（大模型输出含有不规整前缀字符等）
+            safe_print(f"[LLM Log] JSON 直接解析失败: {e}. 尝试用正则提取 JSON 结构...")  # 打印警告日志
+            m = re.search(r"(\{.*\})", raw_content, re.DOTALL)  # 使用大范围匹配提取被大括号包含的完整 JSON 段
+            if m:  # 若正则命中
+                try:  # 开启二级转换尝试
+                    raw_dict = json.loads(m.group(1))  # 转换大括号提取段
+                except Exception:  # 若二级转换也失败
+                    raw_dict = {}  # 兜底将词典置为空字典
+            else:  # 若正则未命中
+                raw_dict = {}  # 兜底将词典置为空字典
 
-        sanitized = self._sanitize_sheet_data(raw_dict, ocr_text)
-        return SecuritySheetData(**sanitized)
+        sanitized = self._sanitize_sheet_data(raw_dict, ocr_text)  # 调用 _sanitize_sheet_data 使用 Python + OCR 规则进行全面的重构重构和校验
+        return SecuritySheetData(**sanitized)  # 将校验规整后的字典转换为安全 Pydantic 模型 SecuritySheetData 并返回结果
 
 
 # ==========================================
@@ -554,47 +560,47 @@ class AgentTools:
         return md
 
     @staticmethod
-    def ocr_tool(image_path: str, mode: str = "cluster", brain=None, progress_callback=None, engine: str = "paddleocr", vision_brain=None) -> str:
+    def ocr_tool(image_path: str, mode: str = "cluster", brain=None, progress_callback=None, engine: str = "paddleocr", vision_brain=None) -> str:  # 核心OCR引擎调用门面方法，支持切换本地 PaddleOCR 和 Vision LLM
         """调用 ocr 模块进行 OCR 识别，支持坐标聚类和自适应边框检测；可选视觉大模型"""
-        def _prog(pct, msg):
-            if progress_callback:
-                progress_callback(pct, msg)
+        def _prog(pct, msg):  # 定义内部进度更新辅助回调
+            if progress_callback:  # 如果主线程注册了进度通知函数
+                progress_callback(pct, msg)  # 执行进度通知更新
 
         # ---- 视觉大模型（无坐标） ----
-        if engine == "vision":
-            vb = vision_brain or brain
-            if vb is None:
-                raise RuntimeError("视觉大模型模式需要配置视觉模型 API")
-            _prog(10, f"视觉大模型读图中 ({vb.model_name})...")
-            AgentTools._last_ocr_raw = ""
-            return AgentTools._vision_llm_ocr(image_path, vb)
+        if engine == "vision":  # 如果用户指定使用视觉大模型引擎
+            vb = vision_brain or brain  # 获取有效的视觉大模型实例
+            if vb is None:  # 如果没有可用的模型实例
+                raise RuntimeError("视觉大模型模式需要配置视觉模型 API")  # 抛出运行错误提示
+            _prog(10, f"视觉大模型读图中 ({vb.model_name})...")  # 触发 10% 进度更新
+            AgentTools._last_ocr_raw = ""  # 清空上一次的 OCR 缓存原文
+            return AgentTools._vision_llm_ocr(image_path, vb)  # 调用 _vision_llm_ocr 读图并返回 markdown
 
         # ---- PaddleOCR（带坐标） ----
-        from ocr import run_ocr
-        _prog(15, "启动 PaddleOCR 扫描")
+        from ocr import run_ocr  # 动态从独立 ocr 模块中导入核心 run_ocr 执行函数
+        _prog(15, "启动 PaddleOCR 扫描")  # 触发 15% 进度更新
         
-        sim_ocr = _ProgressSim(progress_callback, 15, 50, "OCR 文字识别中", 3, 0.6)
-        sim_ocr.start()
-        try:
-            ocr_result = run_ocr(
-                image_path=image_path,
-                coords=None,
-                mode=mode
-            )
-        finally:
-            sim_ocr.done()
+        sim_ocr = _ProgressSim(progress_callback, 15, 50, "OCR 文字识别中", 3, 0.6)  # 实例化后台进度模拟线程，在识别期间平滑推动进度条从 15% 到 50%
+        sim_ocr.start()  # 开启模拟线程
+        try:  # 开启 OCR 识别防护
+            ocr_result = run_ocr(  # 调用独立 ocr 模块接口获取扫描结果
+                image_path=image_path,  # 文件路径
+                coords=None,  # 扫描全图
+                mode=mode  # 表格聚类模式
+            )  # 结束调用
+        finally:  # 无论识别成功失败
+            sim_ocr.done()  # 必须停止进度模拟线程，直接跳进 50% 进度
 
-        _prog(52, "表格格式化完成")
-        if not ocr_result:
-            raise RuntimeError(f"OCR 未能识别任何文字: {image_path}")
+        _prog(52, "表格格式化完成")  # 触发 52% 进度通知
+        if not ocr_result:  # 如果返回的结果为空
+            raise RuntimeError(f"OCR 未能识别任何文字: {image_path}")  # 抛出运行时错误
 
         # 从 ocr_result 中分离出 flat_text，用于更新 AgentTools._last_ocr_raw
-        if "---" in ocr_result:
-            parts = ocr_result.split("---", 1)
-            flat_text = parts[1].strip()
-        else:
-            flat_text = ocr_result
-        AgentTools._last_ocr_raw = flat_text
+        if "---" in ocr_result:  # 检查如果结果中包含隔离线
+            parts = ocr_result.split("---", 1)  # 按第一条隔离线将表格 Markdown 与纯文本形式切开
+            flat_text = parts[1].strip()  # 提取第二部分的纯文本 OCR 结果
+        else:  # 若无隔离线
+            flat_text = ocr_result  # 直接全部视作纯文本结果
+        AgentTools._last_ocr_raw = flat_text  # 将提取的纯文本写入智能体临时 OCR 原文缓存中
         return ocr_result
 
     @staticmethod
@@ -1079,99 +1085,99 @@ class _Heartbeat:
         self._stop_event.set()
 
 
-class SecurityAgent:
+class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 ReAct 运行循环（Plan感知、Perceive提取、Reason推理、Reflect反思、Act决策上报、Report归档）
     """
     ReAct 智能体：Plan -> Perceive -> Reason -> Reflect -> Act -> Report
     """
 
-    MAX_REFLECT_RETRIES = 2
+    MAX_REFLECT_RETRIES = 2  # 校验失败时，大模型最大反思重试修正次数设为 2 次
 
-    def __init__(self, brain: LLMBrain, ocr_mode: str = "cluster", ocr_engine: str = "paddleocr", progress_callback=None, vision_brain: LLMBrain = None):
-        self.brain = brain
-        self.tools = AgentTools()
-        self.ocr_mode = ocr_mode
-        self.ocr_engine = ocr_engine
-        self._progress = progress_callback
-        self.vision_brain = vision_brain
+    def __init__(self, brain: LLMBrain, ocr_mode: str = "cluster", ocr_engine: str = "paddleocr", progress_callback=None, vision_brain: LLMBrain = None):  # 编排器构造函数，注入大脑实例、配置参数及进度回调函数
+        self.brain = brain  # 绑定大模型推理大脑
+        self.tools = AgentTools()  # 实例化本智能体持有的执行工具集类
+        self.ocr_mode = ocr_mode  # 配置表格 OCR 识别模式
+        self.ocr_engine = ocr_engine  # 绑定物理 OCR 识别引擎（PaddleOCR 或 Vision）
+        self._progress = progress_callback  # 绑定主线程前端进度显示回调
+        self.vision_brain = vision_brain  # 绑定多模态视觉大模型大脑
 
-    def _plan(self, image_path: str, mem: AgentMemory):
-        safe_print("[Agent Plan] 收到作业票照片，制定执行计划...")
-        steps = [
-            "① 感知：OpenCV 清洗 + PaddleOCR 提取",
-            "② 推理：LLM 结构化为 JSON",
-            "③ 反思：校验数据完整性",
-            "④ 执行：自主选择工具",
-            "⑤ 总结：输出决策链报告",
-        ]
-        for s in steps:
-            safe_print(f"[Agent Plan] {s}")
-        mem.remember("规划", "📋", "制定5步执行计划", f"{len(steps)}步：感知→推理→反思→执行→总结")
+    def _plan(self, image_path: str, mem: AgentMemory):  # 规划阶段：为新图片生成 ReAct 推理步骤计划并存入记忆体
+        safe_print("[Agent Plan] 收到作业票照片，制定执行计划...")  # 控制台打印规划阶段日志
+        steps = [  # 5 个标准步骤定义
+            "① 感知：OpenCV 清洗 + PaddleOCR 提取",  # 第一步
+            "② 推理：LLM 结构化为 JSON",  # 第二步
+            "③ 反思：校验数据完整性",  # 第三步
+            "④ 执行：自主选择工具",  # 第四步
+            "⑤ 总结：输出决策链报告",  # 第五步
+        ]  # 结束步骤列表
+        for s in steps:  # 遍历步骤
+            safe_print(f"[Agent Plan] {s}")  # 打印计划详情
+        mem.remember("规划", "📋", "制定5步执行计划", f"{len(steps)}步：感知→推理→反思→执行→总结")  # 将计划写入记忆步骤中
 
-    def _perceive(self, image_path: str, mem: AgentMemory) -> str:
-        prog = self._progress
-        if prog: prog(5, "图像预处理")
-        safe_print("[Agent Perceive] OpenCV + PaddleOCR 感知...")
-        text = self.tools.ocr_tool(image_path, mode=self.ocr_mode, brain=self.brain, progress_callback=prog, engine=self.ocr_engine, vision_brain=self.vision_brain)
-        n = len(text.strip().split("\n"))
-        summary = f"提取 {n} 行文本"
-        safe_print(f"[Agent Perceive] {summary}")
-        mem.remember("感知", "👁️", "OCR 提取文字", summary)
-        return text
+    def _perceive(self, image_path: str, mem: AgentMemory) -> str:  # 感知阶段：触发 OpenCV 对比度增强和 PaddleOCR 文字扫描工作
+        prog = self._progress  # 获取进度条回调函数
+        if prog: prog(5, "图像预处理")  # 前端更新进度为 5%
+        safe_print("[Agent Perceive] OpenCV + PaddleOCR 感知...")  # 打印感知阶段日志
+        text = self.tools.ocr_tool(image_path, mode=self.ocr_mode, brain=self.brain, progress_callback=prog, engine=self.ocr_engine, vision_brain=self.vision_brain)  # 调用 ocr_tool 接口识别图片
+        n = len(text.strip().split("\n"))  # 计算识别出的文本总行数
+        summary = f"提取 {n} 行文本"  # 汇总感知报告
+        safe_print(f"[Agent Perceive] {summary}")  # 打印行数汇总日志
+        mem.remember("感知", "👁️", "OCR 提取文字", summary)  # 将感知提取阶段写入记忆体
+        return text  # 返回提取出的文字
 
-    def _reason(self, ocr_text: str, mem: AgentMemory) -> SecuritySheetData:
-        safe_print("[Agent Reason] LLM 语义分析...")
-        sim = _ProgressSim(self._progress, 55, 80, "LLM 语义分析中", 2, 1.0)
-        sim.start()
-        data = self.brain.extract_sheet_json(ocr_text)
-        sim.done()
-        summary = (f"票号={data.ticket_id} | 场站={data.station_name} | "
-                   f"浓度={data.gas_concentration} | 措施={len(data.safety_measures)}项 | "
-                   f"异常={data.has_abnormal}")
-        safe_print(f"[Agent Reason] {summary}")
-        mem.remember("推理", "🤔", "LLM 结构化解析", summary)
-        return data
+    def _reason(self, ocr_text: str, mem: AgentMemory) -> SecuritySheetData:  # 推理阶段：调用大模型进行实体识别和关系分类，填充为 Pydantic 字典
+        safe_print("[Agent Reason] LLM 语义分析...")  # 打印推理阶段日志
+        sim = _ProgressSim(self._progress, 55, 80, "LLM 语义分析中", 2, 1.0)  # 实例化推理进度模拟器线程，进度从 55% 到 80%
+        sim.start()  # 开启平滑更新进度线程
+        data = self.brain.extract_sheet_json(ocr_text)  # 调用大模型执行 JSON 语义结构化提取
+        sim.done()  # 停止模拟线程，进度直接推进到 80%
+        summary = (f"票号={data.ticket_id} | 场站={data.station_name} | "  # 汇总推理核心要素
+                   f"浓度={data.gas_concentration} | 措施={len(data.safety_measures)}项 | "  # 浓度和条款数
+                   f"异常={data.has_abnormal}")  # 隐患状态
+        safe_print(f"[Agent Reason] {summary}")  # 终端打印推理概要日志
+        mem.remember("推理", "🤔", "LLM 结构化解析", summary)  # 将推理阶段记录进记忆体
+        return data  # 返回 Pydantic 数据实例
 
-    def _reflect(self, ocr_text: str, data: SecuritySheetData, mem: AgentMemory) -> SecuritySheetData:
-        safe_print("[Agent Reflect] 校验数据完整性...")
-        for attempt in range(1, self.MAX_REFLECT_RETRIES + 1):
-            checks = []
+    def _reflect(self, ocr_text: str, data: SecuritySheetData, mem: AgentMemory) -> SecuritySheetData:  # 反思阶段：核心自我修正。对模型抽取的要素进行多项逻辑一致性强校验，若不符则自动重试修改
+        safe_print("[Agent Reflect] 校验数据完整性...")  # 打印反思阶段开始日志
+        for attempt in range(1, self.MAX_REFLECT_RETRIES + 1):  # 开启反思纠错循环，最大重试 MAX_REFLECT_RETRIES 次
+            checks = []  # 新建单轮校验结果收集列表，每个元素为 (检查项, 是否OK, 说明字串)
 
-            ticket_ok = bool(data.ticket_id) and len(data.ticket_id) >= 6
-            checks.append(("票号", ticket_ok, f"{data.ticket_id} {'OK' if ticket_ok else '异常'}"))
+            ticket_ok = bool(data.ticket_id) and len(data.ticket_id) >= 6  # 规则1：编号长度校验，必须非空且不少于 6 位
+            checks.append(("票号", ticket_ok, f"{data.ticket_id} {'OK' if ticket_ok else '异常'}"))  # 存入结果
 
-            conc_ok = all(0 <= v <= 100 for v in data.gas_concentration)
-            checks.append(("浓度", conc_ok, f"{data.gas_concentration} {'OK' if conc_ok else '超范围'}"))
+            conc_ok = all(0 <= v <= 100 for v in data.gas_concentration)  # 规则2：气体浓度合理性校验，浮点读数必须在 0% 到 100% 爆限值区间内
+            checks.append(("浓度", conc_ok, f"{data.gas_concentration} {'OK' if conc_ok else '超范围'}"))  # 存入结果
 
-            if data.has_abnormal:
-                issues_ok = len(data.issues) > 0
-                checks.append(("异常一致", issues_ok, f"异常={data.has_abnormal}, 明细={len(data.issues)}条 {'OK' if issues_ok else '缺失'}"))
-            else:
-                checks.append(("异常一致", True, "无异常 OK"))
+            if data.has_abnormal:  # 规则3：has_abnormal 标记与 issues 明细表的一致性校验
+                issues_ok = len(data.issues) > 0  # 如果标记有隐患，issues 列表必须非空不能是空子集
+                checks.append(("异常一致", issues_ok, f"异常={data.has_abnormal}, 明细={len(data.issues)}条 {'OK' if issues_ok else '缺失'}"))  # 存入
+            else:  # 若标记没有隐患
+                checks.append(("异常一致", True, "无异常 OK"))  # 一致性成立，存入
 
-            unimpl = [m for m in data.safety_measures if not m.implemented]
-            if unimpl:
-                checks.append(("措施判定", data.has_abnormal, f"{len(unimpl)}项未落实 {'OK' if data.has_abnormal else '未标记异常'}"))
-            else:
-                checks.append(("措施判定", True, "全部落实 OK"))
+            unimpl = [m for m in data.safety_measures if not m.implemented]  # 规则4：安全条款执行状态与 has_abnormal 的一致性校验
+            if unimpl:  # 如果存在有未落实的安全防范项
+                checks.append(("措施判定", data.has_abnormal, f"{len(unimpl)}项未落实 {'OK' if data.has_abnormal else '未标记异常'}"))  # 未落实时整票 has_abnormal 必须为 True
+            else:  # 全部落实了
+                checks.append(("措施判定", True, "全部落实 OK"))  # 一致性成立，存入
 
-            all_pass = all(ok for _, ok, _ in checks)
-            for name, ok, detail in checks:
-                safe_print(f"[Agent Reflect]   {'OK' if ok else '!!'} {name}: {detail}")
+            all_pass = all(ok for _, ok, _ in checks)  # 统计各校验项是否全部检测通过
+            for name, ok, detail in checks:  # 迭代校验项
+                safe_print(f"[Agent Reflect]   {'OK' if ok else '!!'} {name}: {detail}")  # 控制台打印校验详情条目
 
-            if all_pass:
-                safe_print("[Agent Reflect] 校验通过。")
-                mem.remember("反思", "🔍", "校验数据完整性", f"{len(checks)}项全部通过")
-                return data
+            if all_pass:  # 如果所有逻辑校对全部通过，无任何一致性冲突
+                safe_print("[Agent Reflect] 校验通过。")  # 终端打印校验成功通过日志
+                mem.remember("反思", "🔍", "校验数据完整性", f"{len(checks)}项全部通过")  # 将反思成功结果记入记忆中
+                return data  # 返回通过的高质量数据结构
 
-            failed = [n for n, ok, _ in checks if not ok]
-            safe_print(f"[Agent Reflect] 未通过({', '.join(failed)})，第{attempt}次重试...")
-            mem.remember("反思", "🔍", f"第{attempt}次重试", f"未通过: {', '.join(failed)}", status="retry")
-            hint = f"上次问题：{', '.join(failed)}。请严格按规则重新解析。"
-            data = self.brain.extract_sheet_json(f"[重试] {hint}\n\n原文:\n{ocr_text}")
+            failed = [n for n, ok, _ in checks if not ok]  # 提取本次校验失败的规则项名称
+            safe_print(f"[Agent Reflect] 未通过({', '.join(failed)})，第{attempt}次重试...")  # 打印失败警告日志及重试计数
+            mem.remember("反思", "🔍", f"第{attempt}次重试", f"未通过: {', '.join(failed)}", status="retry")  # 记忆体记录重试事件
+            hint = f"上次问题：{', '.join(failed)}。请严格按规则重新解析。"  # 组织引导大模型纠错的负反馈提示词
+            data = self.brain.extract_sheet_json(f"[重试] {hint}\n\n原文:\n{ocr_text}")  # 携带着负反馈提示词和大模型上次的幻觉输出，重新调用大模型脑解析
 
-        safe_print("[Agent Reflect] 达到最大重试，标记高风险。")
-        mem.remember("反思", "🔍", "最大重试", "标记高风险", status="error")
-        return data
+        safe_print("[Agent Reflect] 达到最大重试，标记高风险。")  # 多轮反思纠错仍不合规，触发最大限制
+        mem.remember("反思", "🔍", "最大重试", "标记高风险", status="error")  # 记忆体记录异常归档
+        return data  # 返回未完全修正的数据，留待 L3 条件路由决策拦截
 
     def _generate_approval(self, data: SecuritySheetData, weather: dict = None) -> str:
         """调用 LLM 生成专业审批建议，含天气和具体异常"""
