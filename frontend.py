@@ -135,10 +135,13 @@ with st.sidebar:  # 进入侧边栏渲染上下文本环境
         "坐标聚类（默认）": "cluster",
         "自适应边框检测": "adaptive",
     }  # 结束模式字典定义
+    _saved_mode = _cfg.get("ocr_mode", "cluster")
+    _mode_values = list(_ocr_modes.values())
+    _default_mode_idx = _mode_values.index(_saved_mode) if _saved_mode in _mode_values else 0
     ocr_mode_label = st.selectbox(  # 渲染下拉单选框以供用户切换 OCR 算法类型选择
         "📋 OCR 表格模式",
         list(_ocr_modes.keys()),  # 传入中文选项列表
-        index=0,  # 默认选中第一项：坐标聚类模式
+        index=_default_mode_idx,  # 动态设置默认索引
         help="坐标聚类：基于文字坐标重建表格行列\n自适应边框检测：OpenCV检测表格线段，按单元格组织文本",  # 气泡帮助帮助说明
     )  # 结束下拉框渲染
     ocr_mode = _ocr_modes[ocr_mode_label]  # 从映射字典中提取当前选中的底层处理模式参数
@@ -148,10 +151,13 @@ with st.sidebar:  # 进入侧边栏渲染上下文本环境
         "本地 PaddleOCR（带坐标）": "paddleocr",
         "视觉大模型": "vision",
     }  # 结束引擎字典定义
+    _saved_engine = _cfg.get("ocr_engine", "paddleocr")
+    _engine_values = list(_ocr_engines.values())
+    _default_engine_idx = _engine_values.index(_saved_engine) if _saved_engine in _engine_values else 0
     ocr_engine_label = st.selectbox(  # 渲染下拉单选框以供切换核心 OCR 技术选型
         "🔍 OCR 引擎",
         list(_ocr_engines.keys()),  # 传入中文引擎选项列表
-        index=0,  # 默认选中第一项：本地 PaddleOCR 推理模式
+        index=_default_engine_idx,  # 动态设置默认索引
         help="本地 PaddleOCR：默认，本地推理，输出带坐标，支持责任人定位\n"
              "视觉大模型：调用 VL 模型直接读图识别，一步完成结构+文字+符号，不支持坐标定位",  # 气泡说明
     )  # 结束下拉框渲染
@@ -162,10 +168,13 @@ with st.sidebar:  # 进入侧边栏渲染上下文本环境
         "CPU（默认）": "cpu",
         "GPU 加速": "gpu",
     }  # 结束设备字典定义
+    _saved_device = _cfg.get("ocr_device", "cpu")
+    _device_values = list(_ocr_devices.values())
+    _default_device_idx = _device_values.index(_saved_device) if _saved_device in _device_values else 0
     ocr_device_label = st.selectbox(  # 渲染下拉单选框以供切换 OCR 推理硬件设备
         "⚡ OCR 推理设备",
         list(_ocr_devices.keys()),  # 传入中文设备选项列表
-        index=0,  # 默认选中第一项：CPU 模式
+        index=_default_device_idx,  # 动态设置默认索引
         help="CPU：兼容性最佳，无需额外依赖\nGPU 加速：需安装 paddlepaddle-gpu，推理速度提升 5~10 倍",  # 气泡帮助说明
     )  # 结束下拉框渲染
     ocr_device = _ocr_devices[ocr_device_label]  # 从映射字典中提取当前选中的底层设备参数
@@ -226,6 +235,9 @@ with st.sidebar:  # 进入侧边栏渲染上下文本环境
         _cfg["vision_model_name"] = vision_model_name  # 保存视觉模型的名字参数
         _cfg["proxy"] = proxy_url if proxy_enabled else ""  # 根据代理勾选状态写入代理字符串或清空配置
         _cfg["dingtalk_mcp_url"] = st.session_state.get("_dd", _cfg.get("dingtalk_mcp_url", ""))  # 保存写入 of 钉钉 MCP 数据库网关地址
+        _cfg["ocr_mode"] = ocr_mode  # 保存 OCR 模式配置
+        _cfg["ocr_engine"] = ocr_engine  # 保存 OCR 引擎配置
+        _cfg["ocr_device"] = ocr_device  # 保存 OCR 推理硬件设备配置 (cpu/gpu)
         # 将配置同步到全局 Python 环境变量，保证 Agent 可直接读取
         if api_key: os.environ["ONLINE_API_KEY"] = api_key  # 同步 API Key 到系统环境变量
         if base_url: os.environ["ONLINE_BASE_URL"] = base_url  # 同步 API Base URL 到系统环境变量
