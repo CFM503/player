@@ -10,5 +10,6 @@ paddlepaddle>=3.3.1  # CPU 版；如需 GPU 加速请替换为: pip install padd
 requests>=2.34.2
 mcp>=1.0.0
 httpx>=0.28.0
+httpx-sse>=0.4.0
 # 精确表格识别依赖 (paddlex[ocr])
 paddlex[ocr]>=3.7.1

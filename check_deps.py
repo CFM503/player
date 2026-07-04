@@ -23,6 +23,7 @@ _DEPS = [  # 构建要求校验的依赖包元数据列表
     ("requests",       "requests",       "2.34.2",       "requests"),  # HTTP 网络请求库版本控制
     ("mcp",            "mcp",            "1.0.0",        "mcp"),  # Model Context Protocol 协议库版本控制
     ("httpx",          "httpx",          "0.28.0",       "httpx"),  # HTTPX 客户端库版本控制
+    ("httpx-sse",      "httpx_sse",      "0.4.0",        "httpx-sse"),  # HTTPX SSE 客户端库版本控制 (dingtalk_client 依赖)
     # paddlex[ocr] 精确表格识别依赖
     ("paddlex",        "paddlex",        "3.7.1",        "paddlex[ocr]"),  # PaddleX 开发套件包及其依赖控制
 ]  # 结束列表定义

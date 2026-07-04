@@ -83,9 +83,9 @@ def get_ocr_instance(device: str = "cpu", det_db_box_thresh: Optional[float] = N
         from paddleocr import PaddleOCR  # 导入官方 PaddleOCR 核心包
         kwargs = {"lang": "ch", "device": device}
         if det_db_box_thresh is not None:
-            kwargs["det_db_box_thresh"] = det_db_box_thresh
+            kwargs["text_det_box_thresh"] = det_db_box_thresh
         if drop_score is not None:
-            kwargs["drop_score"] = drop_score
+            kwargs["text_rec_score_thresh"] = drop_score
         _ocr_cache[device] = PaddleOCR(**kwargs)  # 实例化支持中文识别的本地模型，动态传入参数
         
     return _ocr_cache[device]  # 返回缓存字典中获取到的 PaddleOCR 实例对象
