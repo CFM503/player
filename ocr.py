@@ -54,79 +54,10 @@ def format_table_cluster(entries: List[Dict[str, Any]]) -> str:  # 定义基于�
         lines.append(line)  # 将拼接好的一行字符串添加到行列表中
     return "\n".join(lines)  # 用换行符连接各行字符串，并返回最终结构化的多行表格字符串
 
-def format_table_adaptive(img: Any, entries: List[Dict[str, Any]]) -> str:  # 定义自适应边框检测的表格格式化函数
-    # 利用 OpenCV 形态学操作提取表格分割线
-    import numpy as np  # 导入 NumPy 科学计算库，用于矩阵及数组相关计算
-    try:  # 开启异常处理块，避免图像处理过程中因特殊结构崩溃
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)  # 将输入彩色图像转换为灰度图像，减少通道影响
-        bw = cv2.adaptiveThreshold(~gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 15, -2)  # 对反色灰度图进行自适应二值化处理
-        h, w = bw.shape  # 获取二值化图像的高度和宽度尺寸，用于后续线段检测核计算
-        
-        # 水平与垂直结构元素提取
-        h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(w // 30, 1), 1))  # 创建水平方向的矩形结构元素作为检测核
-        h_lines = cv2.morphologyEx(bw, cv2.MORPH_OPEN, h_kernel)  # 进行开运算以提取图像中的所有水平线条结构
-        h_lines = cv2.dilate(h_lines, h_kernel, iterations=1)  # 对水平线进行膨胀处理以加粗和连接断开的线段
-        
-        v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(h // 30, 1)))  # 创建垂直方向的矩形结构元素作为检测核
-        v_lines = cv2.morphologyEx(bw, cv2.MORPH_OPEN, v_kernel)  # 进行开运算以提取图像中的所有垂直线条结构
-        v_lines = cv2.dilate(v_lines, v_kernel, iterations=1)  # 对垂直线进行膨胀处理以加粗 and 连接断开的线段
-        
-        h_proj = np.sum(h_lines, axis=1)  # 在水平方向上对像素值求和，获取水平投影直方图
-        v_proj = np.sum(v_lines, axis=0)  # 在垂直方向上对像素值求和，获取垂直投影直方图
-        h_thresh = w * 128 * 0.3  # 设置水平线分割判定阈值，即非零像素占比至少 30%
-        v_thresh = h * 128 * 0.3  # 设置垂直线分割判定阈值，即非零像素占比至少 30%
-        row_splits = [i for i in range(len(h_proj)) if h_proj[i] > h_thresh]  # 筛选超过阈值的索引，作为潜在的行边界候选点
-        col_splits = [i for i in range(len(v_proj)) if v_proj[i] > v_thresh]  # 筛选超过阈值的索引，作为潜在的列边界候选点
-        
-        def merge_splits(splits, min_gap=10):  # 定义合并相邻相近分割线的内部辅助函数
-            if not splits:  # 如果传入的分割线坐标列表为空
-                return []  # 直接返回空列表
-            groups = [[splits[0]]]  # 用第一个坐标点初始化分组容器的第一个子组
-            for s in splits[1:]:  # 循环遍历剩余的坐标点
-                if s - groups[-1][-1] < min_gap:  # 若当前坐标与上一个分组的最后一个点的距离小于设定的最小跨度
-                    groups[-1].append(s)  # 将当前坐标归入上一个分组中
-                else:  # 若距离大于最小跨度，说明是新的线条
-                    groups.append([s])  # 创建新的坐标子组并添加到分组容器中
-            return [int(np.mean(g)) for g in groups]  # 计算每组内所有点的平均值并转为整数，表示合并后的单根分割线位置
-            
-        row_splits = merge_splits(row_splits)  # 合并邻近的行分割坐标，得到最终的行分割点集合
-        col_splits = merge_splits(col_splits)  # 合并邻近的列分割坐标，得到最终的列分割点集合
-        
-        if len(row_splits) < 2 or len(col_splits) < 2:  # 判断是否检测出足够划分一个单元格的行列分割线（至少各需两根线）
-            return format_table_cluster(entries)  # 若分割线不足，则降级使用坐标聚类模式并返回
-            
-        def find_cell(pos, splits):  # 定义映射坐标到网格区间索引的内部辅助函数
-            for i in range(len(splits) - 1):  # 遍历所有合并后的分割线区间
-                if splits[i] <= pos <= splits[i + 1]:  # 判断文本中心坐标 pos 是否落在当前线段区间内
-                    return i  # 若落在区间内，则返回当前区间序号 i
-            return 0 if pos < splits[0] else len(splits) - 2  # 若坐标在第一根线左侧则返回 0，在最后一根线右侧则返回最大索引
-            
-        grid = {}  # 初始化单元格字典，使用 (row_idx, col_idx) 二元组作为主键
-        for e in entries:  # 循环处理 OCR 识别出的每一个文本条目
-            row_idx = find_cell(e["y"], row_splits)  # 计算该文本块中心点 Y 轴对应的行索引序号
-            col_idx = find_cell(e["x"], col_splits)  # 计算该文本块中心点 X 轴对应的列索引序号
-            key = (row_idx, col_idx)  # 生成用于标记网格位置的主键元组
-            grid[key] = grid.get(key, "") + " " + e["text"] if key in grid else e["text"]  # 合并或新增该网格里的文本内容
-            
-        if not grid:  # 如果未能将任何文本成功映射到网格中
-            return format_table_cluster(entries)  # 退回坐标聚类算法进行表格化格式并返回结果
-            
-        max_r = max(k[0] for k in grid)  # 计算获取已填充单元格的最大行索引号
-        max_c = max(k[1] for k in grid)  # 计算获取已填充单元格的最大列索引号
-        lines = []  # 初始化表格字符串行列表
-        for r in range(max_r + 1):  # 按行顺序逐行构建表格
-            cells = [grid.get((r, c), "").strip() for c in range(max_c + 1)]  # 获取当前行中每一列对应的网格文本，无内容时默认为空串
-            if any(cells):  # 检查这一行是否包含任何非空文本单元格
-                lines.append(" | ".join(cells))  # 使用竖线 " | " 将该行的各个单元格拼接为一行字符串并添加到行列表中
-        print(f"[OCR] 自适应边框检测：{len(row_splits)}行 x {len(col_splits)}列")  # 控制台打印输出检测出的网格划分规模
-        return "\n".join(lines) if lines else format_table_cluster(entries)  # 拼接行并返回结构化表格文本，若无结果则回退坐标聚类
-    except Exception as ex:  # 捕获以上边框分割算法中的所有可能异常
-        print(f"[OCR] 边框检测失败: {ex}，回退至坐标聚类")  # 打印错误提示信息，说明异常类型及回退方案
-        return format_table_cluster(entries)  # 发生异常时直接回退到坐标聚类算法以保障基础可用性
 
 _ocr_cache = {}  # 初始化全局 OCR 缓存字典，键为 device 类型，值为初始化好的 PaddleOCR 实例对象
 
-def get_ocr_instance(device: str = "cpu"):  # 定义获取或缓存 PaddleOCR 实例单例的函数
+def get_ocr_instance(device: str = "cpu", det_db_box_thresh: Optional[float] = None, drop_score: Optional[float] = None):  # 定义获取或缓存 PaddleOCR 实例单例的函数
     # 保证同一个计算设备下的模型只被初始化和加载一次
     global _ocr_cache  # 声明全局变量以在函数内部修改 _ocr_cache 字典
     if device not in _ocr_cache:  # 检测请求的设备对应的 OCR 实例是否尚未加载在缓存中
@@ -150,8 +81,12 @@ def get_ocr_instance(device: str = "cpu"):  # 定义获取或缓存 PaddleOCR �
                 del os.environ["CUDA_VISIBLE_DEVICES"]  # 从系统环境变量中删除禁用项，使显卡在 runtime 下可见
             
         from paddleocr import PaddleOCR  # 导入官方 PaddleOCR 核心包
-        # 初始化 PaddleOCR 实例并缓存在 _ocr_cache 字典中
-        _ocr_cache[device] = PaddleOCR(lang="ch", device=device)  # 实例化支持中文识别的本地模型，指定运算硬件环境并将其存入全局缓存
+        kwargs = {"lang": "ch", "device": device}
+        if det_db_box_thresh is not None:
+            kwargs["det_db_box_thresh"] = det_db_box_thresh
+        if drop_score is not None:
+            kwargs["drop_score"] = drop_score
+        _ocr_cache[device] = PaddleOCR(**kwargs)  # 实例化支持中文识别的本地模型，动态传入参数
         
     return _ocr_cache[device]  # 返回缓存字典中获取到的 PaddleOCR 实例对象
 
@@ -251,12 +186,14 @@ def run_ocr(  # 定义 OCR 扫描最核心的总控制运行调度函数
     coords: Optional[tuple] = None,  # 参数二：可选的裁剪区域坐标元组 (x, y, w, h)，默认为 None 扫描全图
     save_crop_path: Optional[str] = None,  # 参数三：可选的裁剪出的子图像保存路径，默认不保存
     save_markdown_path: Optional[str] = None,  # 参数四：可选的扫描完成后的 Markdown 文本文件保存目标路径
-    mode: str = "cluster",  # 参数五：表格聚类还原算法类型选择 (cluster 或 adaptive)
+    mode: str = "cluster",  # 参数五：已废弃，保留用于兼容性
     device: str = "cpu",  # 参数六：本地 OCR 执行所选的硬件计算设备 (cpu 或 gpu)
     engine: str = "paddleocr",  # 参数七：核心检测引擎种类类型 ('paddleocr' 本地，或 'vision' 云端大模型)
     api_key: Optional[str] = None,  # 参数八：视觉大模型鉴权 Key，仅在 engine='vision' 下有效
     base_url: Optional[str] = None,  # 参数九：视觉大模型接口的基础基地址域名路径
-    model_name: Optional[str] = None  # 参数十：所选取的具体云端大模型工程别名
+    model_name: Optional[str] = None,  # 参数十：所选取的具体云端大模型工程别名
+    det_db_box_thresh: Optional[float] = None,  # 参数十一：文本框检测阈值，为空则使用原生默认值
+    drop_score: Optional[float] = None  # 参数十二：识别文本输出的置信度丢弃阈值，为空则使用原生默认值
 ) -> str:  # 表明函数最终返回为扫描出的字符串内容结果
     # 1. 运行视觉大模型（不需要裁剪和 PaddleOCR 识别）
     if engine == "vision":  # 检查设置的核心引擎是否选择为视觉大模型模式
@@ -285,7 +222,7 @@ def run_ocr(  # 定义 OCR 扫描最核心的总控制运行调度函数
         x_offset, y_offset = 0, 0  # 偏移值设为 0，因为图像就是原始图像，坐标无需修正偏移量
 
     # 3. 获取 PaddleOCR 实例并运行识别
-    ocr = get_ocr_instance(device=device)  # 从单例方法中获取该设备对应的 PaddleOCR 实例对象
+    ocr = get_ocr_instance(device=device, det_db_box_thresh=det_db_box_thresh, drop_score=drop_score)  # 从单例方法中获取该设备对应的 PaddleOCR 实例对象
     result = ocr.predict(img_for_ocr)  # 运行 PaddleOCR 模型，预测得出图片中文字的包围框及文本内容结果
     
     entries = []  # 初始化临时识别条目列表
@@ -310,10 +247,7 @@ def run_ocr(  # 定义 OCR 扫描最核心的总控制运行调度函数
         ocr_result = ""  # 初始化结果为空字符串
     else:  # 若有文本识别成功
         # 4. 表格结构化
-        if mode == "adaptive":  # 检测选择的表格化识别模式是否为自适应边框模式
-            table_text = format_table_adaptive(img_for_ocr, entries)  # 执行自适应形态学网格算法，格式化获取表格文本
-        else:  # 若为默认的坐标聚类模式
-            table_text = format_table_cluster(entries)  # 执行基于行高度落差聚类还原算法，格式化获取表格文本
+        table_text = format_table_cluster(entries)  # 执行基于行高度落差聚类还原算法，格式化获取表格文本
             
         # 5. 输出绝对坐标（基于原始大图的绝对坐标）
         flat_text = "\n".join(  # 用换行符将所有的详细文字坐标块串联拼接起来
@@ -337,12 +271,13 @@ if __name__ == "__main__":  # 判断当前是否为终端直接执行该脚本�
     parser.add_argument("--coord", help="Crop coordinates in format x,y,w,h (e.g. 300,80,200,100). Default is scanning the entire image.")  # 添加局部裁剪坐标参数，用于定位填表人等位置
     parser.add_argument("--save-crop", help="File path to save the cropped region image")  # 添加保存裁剪的局部子图像图片的路径参数
     parser.add_argument("--save-markdown", help="File path to save the OCR scanned Markdown result")  # 添加保存识别出来的 markdown 文本路径参数
-    parser.add_argument("--mode", choices=["cluster", "adaptive"], default="cluster", help="Formatting table mode: cluster (coordinate clustering, default) or adaptive (adaptive border detection)")  # 添加聚类策略的枚举配置参数
     parser.add_argument("--device", choices=["cpu", "gpu"], default="cpu", help="Running device type: cpu (default) or gpu")  # 添加运行硬件设备 CPU / GPU 的枚举配置参数
     parser.add_argument("--engine", choices=["paddleocr", "vision"], default="paddleocr", help="OCR engine type: paddleocr (default) or vision (Vision LLM)")  # 添加引擎的参数配置
     parser.add_argument("--api-key", help="API key for Vision LLM (required if engine is vision)")  # 添加 Vision API 鉴权所需的 API 密码参数
     parser.add_argument("--base-url", default="https://api.siliconflow.cn/v1", help="API base URL for Vision LLM")  # 添加 Vision 大模型的默认基地址参数（默认使用硅基流动）
     parser.add_argument("--model-name", default="Qwen/Qwen2.5-7B-Instruct", help="Model name for Vision LLM")  # 添加 Vision 大模型默认的模型名称（默认使用 Qwen）
+    parser.add_argument("--det-thresh", type=float, default=None, help="Detection threshold for DB box (det_db_box_thresh)")
+    parser.add_argument("--drop-score", type=float, default=None, help="Drop score for text recognition")
     
     args = parser.parse_args()  # 触发解析，捕获并保存命令行中所有的输入参数属性
     
@@ -362,12 +297,13 @@ if __name__ == "__main__":  # 判断当前是否为终端直接执行该脚本�
             coords=coords,  # 传入裁剪坐标元组或默认的 None值
             save_crop_path=args.save_crop,  # 传入裁剪出的子图保存路径或者默认的 None 值
             save_markdown_path=args.save_markdown,  # 传入保存文本的 markdown 路径
-            mode=args.mode,  # 传入表格还原的算法模式
             device=args.device,  # 传入指定的 CPU 或 GPU 计算设备
             engine=args.engine,  # 传入选定的本地或大模型检测引擎
             api_key=args.api_key if hasattr(args, "api_key") else getattr(args, "api_key", None),  # 传入 API Key，不存在时返回 None
             base_url=args.base_url,  # 传入基地址参数
-            model_name=args.model_name  # 传入模型具体名称参数
+            model_name=args.model_name,  # 传入模型具体名称参数
+            det_db_box_thresh=args.det_thresh,  # 传入文本框检测阈值
+            drop_score=args.drop_score  # 传入识别结果置信度阈值
         )  # 结束 run_ocr 主控运行调用
         print("\n=== OCR Scanned Result ===")  # 终端打印输出结果展示头部装饰线
         print(res)  # 打印输出最终的识别文本表格及原文坐标详情信息结果

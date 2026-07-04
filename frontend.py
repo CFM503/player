@@ -130,21 +130,7 @@ with st.sidebar:  # 进入侧边栏渲染上下文本环境
     base_url = st.text_input("API URL", _cfg.get("base_url", ""))  # 渲染主大模型 API 服务域名路由基地址输入框
     model_name = st.text_input("模型", _cfg.get("model_name", ""))  # 渲染主推理大模型的模型具体别名输入框
 
-    # OCR 表格识别模式切换选择
-    _ocr_modes = {  # 映射中文选择别名到程序底层所要求的模式代码字典
-        "坐标聚类（默认）": "cluster",
-        "自适应边框检测": "adaptive",
-    }  # 结束模式字典定义
-    _saved_mode = _cfg.get("ocr_mode", "cluster")
-    _mode_values = list(_ocr_modes.values())
-    _default_mode_idx = _mode_values.index(_saved_mode) if _saved_mode in _mode_values else 0
-    ocr_mode_label = st.selectbox(  # 渲染下拉单选框以供用户切换 OCR 算法类型选择
-        "📋 OCR 表格模式",
-        list(_ocr_modes.keys()),  # 传入中文选项列表
-        index=_default_mode_idx,  # 动态设置默认索引
-        help="坐标聚类：基于文字坐标重建表格行列\n自适应边框检测：OpenCV检测表格线段，按单元格组织文本",  # 气泡帮助帮助说明
-    )  # 结束下拉框渲染
-    ocr_mode = _ocr_modes[ocr_mode_label]  # 从映射字典中提取当前选中的底层处理模式参数
+    ocr_mode = "cluster"  # 现已固定为坐标聚类模式，移除冗余的 UI 选项
 
     # OCR 底层推理引擎选择
     _ocr_engines = {  # 映射中文引擎别名到底层引擎代码字典

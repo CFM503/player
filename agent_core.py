@@ -54,10 +54,7 @@ from pydantic import BaseModel, Field  # 从 Pydantic 库中导入数据模型�
 HEARTBEAT_INTERVAL = 30  # 设定阻塞操作期间后台线程打印心跳的默认间隔时长为 30 秒，设为 0 表示禁用
 
 # ---- 全局变量 ----
-ssx = 0  # 存储识别到的作业票主标题绝对 X 坐标
-ssy = 0  # 存储识别到的作业票主标题绝对 Y 坐标
-fq_x = 0  # 存储识别到的发起人签字绝对 X 坐标
-fq_y = 0  # 存储识别到的发起人签字绝对 Y 坐标
+# 全局坐标变量已废弃，提取操作现在使用对齐后的模板固定坐标
 
 
 import re  # 导入正则匹配模块，用于清理思考文本及过滤匹配安全条款
@@ -652,10 +649,9 @@ class AgentTools:
             flat_text = ocr_result  # 直接全部视作纯文本结果
         AgentTools._last_ocr_raw = flat_text  # 将提取的纯文本写入智能体临时 OCR 原文缓存中
 
-        # 首次感知全图扫描分类检测：从识别文本中提取 3 种作业票类型与“发起人签字”并标出绝对坐标打印在日志窗口
+        # 首次感知全图扫描分类检测：从识别文本中提取 3 种作业票类型并标出绝对坐标打印在日志窗口
         import re  # 导入正则表达式模块
         detected_type = None  # 初始化识别的作业票类型为 None
-        fqr_found = False  # 初始化是否找到发起人签字的标志为 False
         for line in flat_text.split("\n"):  # 遍历扁平 OCR 文本的每一行
             line_str = line.strip()  # 去除首尾空格
             # 匹配包含 "文本 [x,y,w,h]" 格式的行
@@ -665,38 +661,20 @@ class AgentTools:
                 coords_val = (int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5)))  # 解包转换坐标元组为整数类型
                 clean_txt = re.sub(r"[^\u4e00-\u9fa5a-zA-Z0-9]", "", text_part)  # 清洗文本，只保留中文、英文字母及数字
                 
-                global ssx, ssy, fq_x, fq_y  # 声明全局变量
                 abs_x, abs_y, abs_w, abs_h = coords_val  # 解包坐标值
                 
-                # 1. 判定并匹配是否属于三大类作业票
+                # 判定并匹配是否属于三大类作业票
                 if not detected_type:  # 若尚未匹配到作业票类型
                     if "动火作业票" in clean_txt:  # 判定并匹配是否属于动火作业票
-                        ssx = abs_x  # 存储绝对 X 坐标到全局变量
-                        ssy = abs_y  # 存储绝对 Y 坐标到全局变量
                         detected_type = "动火作业票"  # 设定类型名称
                     elif "带气作业票" in clean_txt:  # 判定并匹配是否属于带气作业票
-                        ssx = abs_x  # 存储绝对 X 坐标到全局变量
-                        ssy = abs_y  # 存储绝对 Y 坐标到全局变量
                         detected_type = "带气作业票"  # 设定类型名称
                     elif "临时用电作业票" in clean_txt or "用电作业票" in clean_txt:  # 判定并匹配是否属于临时用电作业票
-                        ssx = abs_x  # 存储绝对 X 坐标到全局变量
-                        ssy = abs_y  # 存储绝对 Y 坐标到全局变量
                         detected_type = "临时用电作业票"  # 设定类型名称
                     
-                    if detected_type:  # 若成功匹配并完成了坐标赋值
+                    if detected_type:  # 若成功匹配
                         safe_print(f"[OCR 检测] 首次扫描识别到作业票类型: 【{detected_type}】 | 坐标: x={abs_x}, y={abs_y}, w={abs_w}, h={abs_h}")  # 标出坐标输出到运行日志中
-                
-                # 2. 判定并匹配是否属于“发起人签字”
-                if not fqr_found:  # 若尚未匹配到发起人签字位置
-                    if "发起人签字确认" in clean_txt:  # 精确匹配“发起人签字确认”关键字，不使用模糊搜索
-                        fq_x = abs_x  # 存储绝对 X 坐标到全局变量
-                        fq_y = abs_y  # 存储绝对 Y 坐标到全局变量
-                        fqr_found = True  # 标记已检测到
-                        safe_print(f"[OCR 检测] 首次扫描识别到【发起人签字】 | 坐标: x={abs_x}, y={abs_y}, w={abs_w}, h={abs_h}")  # 标出坐标输出到运行日志中
-
-            # 如果作业票类型和发起人签字都已成功捕获，可提前退出循环以提升效率
-            if detected_type and fqr_found:
-                break
+                        break  # 类型已确定，可提前退出循环以提升效率
 
         return ocr_result
 
@@ -1448,10 +1426,8 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         # ---- ⑥ 钉钉 AI 表格写入 ----
         safe_print("[Agent Act] ⑥ 钉钉 AI 表格...")
         cfg = load_config()
-        # 优先使用精确定位到的“发起人签字确认”绝对坐标进行人名裁剪，若未匹配到则降级使用主标题坐标 ssx/ssy 作为基准
-        use_x =  ssx+376
-        use_y =  ssy+93
-        filler = self.tools.extract_filler_name(use_x, use_y, 260, 110)
+        # 直接使用对齐后模板的固定坐标 520, 140, 210, 120 裁剪并识别责任人姓名
+        filler = self.tools.extract_filler_name(520, 140, 210, 120)
 
         if cfg.get("dingtalk_mcp_url"):
             # 问题描述：LLM 结构化 JSON 摘要
