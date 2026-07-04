@@ -20,13 +20,16 @@ _DEPS = [  # 构建要求校验的依赖包元数据列表
     ("openai",         "openai",         "2.44.0",       "openai"),  # OpenAI 客户端库版本控制
     ("numpy",          "numpy",          "2.3.5",        "numpy"),  # NumPy 矩阵计算库版本控制
     ("pandas",         "pandas",         "3.0.3",        "pandas"),  # Pandas 表格分析库版本控制
-    ("paddlepaddle",   "paddle",         "3.3.1",        "paddlepaddle"),  # 百度飞桨推理引擎底座版本控制
     ("requests",       "requests",       "2.34.2",       "requests"),  # HTTP 网络请求库版本控制
     ("mcp",            "mcp",            "1.0.0",        "mcp"),  # Model Context Protocol 协议库版本控制
     ("httpx",          "httpx",          "0.28.0",       "httpx"),  # HTTPX 客户端库版本控制
     # paddlex[ocr] 精确表格识别依赖
     ("paddlex",        "paddlex",        "3.7.1",        "paddlex[ocr]"),  # PaddleX 开发套件包及其依赖控制
 ]  # 结束列表定义
+
+# paddlepaddle 支持 CPU 版 (paddlepaddle) 和 GPU 版 (paddlepaddle-gpu) 两种安装方式
+_PADDLE_MIN_VER = "3.3.1"  # 要求的 PaddlePaddle 最低版本号
+_PADDLE_PKGS = ["paddlepaddle-gpu", "paddlepaddle"]  # GPU 版优先检测，其次 CPU 版
 
 
 def _ver_tuple(v: str) -> tuple:  # 将版本号字符串拆解为可对比的数字元组，如 '2.13.4' -> (2, 13, 4)
@@ -74,6 +77,25 @@ def check_dependencies():  # 核心依赖检查与报错诊断主函数
         if not ok:  # 如果发现版本太低落后于要求
             errors.append(f"{install_name} {installed} is outdated (need >= {min_ver})")  # 记录该包需要升级的错误诊断信息
 
+    # 3) PaddlePaddle 特殊校验：支持 paddlepaddle (CPU) 或 paddlepaddle-gpu (GPU)
+    paddle_installed = None  # 初始化已安装的 PaddlePaddle 版本为空
+    paddle_variant = None  # 初始化已安装的包名变体为空
+    for pkg in _PADDLE_PKGS:  # 按优先级依次检测 GPU 版和 CPU 版
+        try:  # 尝试读取包版本
+            paddle_installed = _meta.version(pkg)  # 获取该变体的已安装版本号
+            paddle_variant = pkg  # 记录检测到的包名
+            break  # 找到即停止
+        except _meta.PackageNotFoundError:  # 若该变体未安装
+            continue  # 继续检测下一个变体
+    if paddle_installed:  # 若检测到已安装的 PaddlePaddle
+        paddle_ok = _ver_tuple(paddle_installed) >= _ver_tuple(_PADDLE_MIN_VER)  # 对比版本号是否达标
+        paddle_label = f"{paddle_variant} ({'GPU' if 'gpu' in paddle_variant else 'CPU'})"  # 构建显示标签，标注 GPU/CPU 变体
+        details.append((paddle_label, paddle_installed, _PADDLE_MIN_VER, paddle_ok))  # 保存校验详情
+        if not paddle_ok:  # 若版本过低
+            errors.append(f"{paddle_variant} {paddle_installed} is outdated (need >= {_PADDLE_MIN_VER})")  # 记录错误
+    else:  # 若两种变体均未安装
+        details.append(("paddlepaddle", "未安装", _PADDLE_MIN_VER, False))  # 标记未安装
+        errors.append(f"paddlepaddle not installed (need >= {_PADDLE_MIN_VER}), install paddlepaddle or paddlepaddle-gpu")  # 记录缺失
     # ---- 打印版本对照表 ----
     print()  # 打印空行以对齐排版
     print("=" * 60)  # 打印上边框分隔符

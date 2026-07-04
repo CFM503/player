@@ -157,6 +157,29 @@ with st.sidebar:  # 进入侧边栏渲染上下文本环境
     )  # 结束下拉框渲染
     ocr_engine = _ocr_engines[ocr_engine_label]  # 从字典提取选定的底层引擎处理类型
 
+    # OCR 推理设备选择（CPU / GPU）
+    _ocr_devices = {  # 映射中文设备别名到底层设备代码字典
+        "CPU（默认）": "cpu",
+        "GPU 加速": "gpu",
+    }  # 结束设备字典定义
+    ocr_device_label = st.selectbox(  # 渲染下拉单选框以供切换 OCR 推理硬件设备
+        "⚡ OCR 推理设备",
+        list(_ocr_devices.keys()),  # 传入中文设备选项列表
+        index=0,  # 默认选中第一项：CPU 模式
+        help="CPU：兼容性最佳，无需额外依赖\nGPU 加速：需安装 paddlepaddle-gpu，推理速度提升 5~10 倍",  # 气泡帮助说明
+    )  # 结束下拉框渲染
+    ocr_device = _ocr_devices[ocr_device_label]  # 从映射字典中提取当前选中的底层设备参数
+    if ocr_device == "gpu":  # 如果选定为 GPU 模式
+        try:  # 尝试检测 GPU 可用性
+            import paddle as _pd  # 临时导入 paddle
+            if not _pd.device.is_compiled_with_cuda():  # 检测是否安装了 GPU 版
+                st.caption("⚠️ 当前安装的是 CPU 版 PaddlePaddle，GPU 不可用，将自动回退到 CPU")  # 警告 GPU 不可用
+            else:  # 如果已安装 GPU 版
+                _gpu_count = _pd.device.cuda.device_count()  # 获取 GPU 数量
+                st.caption(f"✅ 检测到 {_gpu_count} 个 GPU 设备，已启用加速")  # 显示 GPU 可用提示
+        except Exception:  # 捕获导入失败等异常
+            st.caption("⚠️ 无法检测 GPU 状态")  # 显示未知状态提示
+
     # 视觉引擎下 OCR 模式不生效的动态高亮提示
     if ocr_engine == "vision":  # 如果当前选定为视觉大模型引擎
         st.caption("💡 视觉大模型直接读图返回 Markdown，OCR 表格模式不生效，责任人定位不可用")  # 在侧边栏渲染提示说明文字进行强调
@@ -349,7 +372,7 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
                 st.error("❌ 视觉大模型引擎需要配置视觉模型名称")  # 终端及界面报错并阻断
                 st.stop()  # 页面执行断点
             vision_brain = LLMBrain(api_key=vk, base_url=vu, model_name=vm, proxy=_proxy)  # 实例化专属视觉大模型大脑
-        agent = SecurityAgent(brain=brain, ocr_mode=ocr_mode, ocr_engine=ocr_engine, vision_brain=vision_brain)  # 传入各级大脑及模式以构造 Agent 主代理
+        agent = SecurityAgent(brain=brain, ocr_mode=ocr_mode, ocr_engine=ocr_engine, ocr_device=ocr_device, vision_brain=vision_brain)  # 传入各级大脑及模式和设备以构造 Agent 主代理
         st.session_state.results = []  # 重置并清空历史处理结果列表，只显示本次全新任务的结果
 
         # ---- 上传并持久化保存文件至 uploads 文件夹 ----
