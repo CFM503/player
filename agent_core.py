@@ -597,6 +597,24 @@ class AgentTools:
 
         # ---- PaddleOCR（带坐标） ----
         from ocr import run_ocr  # 动态从独立 ocr 模块中导入核心 run_ocr 执行函数
+        
+        # 尝试进行模板对齐（针对带气作业票模板 dq.png）
+        template_path = os.path.join(os.path.dirname(__file__), "template", "dq.png")
+        if os.path.exists(template_path):
+            from ocr import align_to_template
+            _prog(12, "匹配模板并对齐图像...")
+            aligned_img, is_aligned = align_to_template(image_path, template_path)
+            if is_aligned:
+                # 将对齐后的图像保存为临时文件，以便全图扫描和裁剪操作都基于该对齐图
+                aligned_dir = os.path.join(os.path.dirname(__file__), "uploads")
+                os.makedirs(aligned_dir, exist_ok=True)
+                aligned_path = os.path.join(aligned_dir, "aligned_" + os.path.basename(image_path))
+                import cv2
+                cv2.imwrite(aligned_path, aligned_img)
+                safe_print(f"[OCR] 特征点匹配对齐成功：使用 {os.path.basename(template_path)} 模板拉平")
+                image_path = aligned_path  # 覆盖后续全图 OCR 扫描的源图片路径
+                AgentTools._last_image_path = aligned_path  # 覆盖缓存路径，确保之后的 extract_filler_name 裁剪也使用对齐图
+        
         _prog(15, "启动 PaddleOCR 扫描")  # 触发 15% 进度更新
         
         sim_ocr = _ProgressSim(progress_callback, 15, 50, "OCR 文字识别中", 3, 0.6)  # 实例化后台进度模拟线程，在识别期间平滑推动进度条从 15% 到 50%

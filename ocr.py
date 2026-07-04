@@ -192,6 +192,60 @@ def run_vision_ocr(image_path: str, api_key: str, base_url: str, model_name: str
     )  # 结束接口调用定义
     return resp.choices[0].message.content.strip()  # 提取获取的响应内容，并去除头部尾部所有的空白符后返回结果
 
+def align_to_template(photo_path: str, template_path: str) -> tuple:  # 用 ORB 特征点匹配将实拍照片对齐到模板尺寸
+    """
+    用 ORB 特征点匹配将实拍照片对齐到模板尺寸
+    返回: (aligned_image, is_aligned)
+    """
+    import numpy as np  # 导入 NumPy
+    try:
+        tmpl = cv2.imread(template_path)  # 读取模板图
+        photo = cv2.imread(photo_path)  # 读取照片图
+        if tmpl is None or photo is None:  # 如果任意图片读取失败
+            return photo, False
+            
+        th, tw = tmpl.shape[:2]  # 获取模板的尺寸
+        
+        # 转灰度
+        gray_tmpl = cv2.cvtColor(tmpl, cv2.COLOR_BGR2GRAY)
+        gray_photo = cv2.cvtColor(photo, cv2.COLOR_BGR2GRAY)
+        
+        # ORB 特征检测
+        orb = cv2.ORB_create(nfeatures=5000)
+        kp1, des1 = orb.detectAndCompute(gray_tmpl, None)
+        kp2, des2 = orb.detectAndCompute(gray_photo, None)
+        
+        if des1 is None or des2 is None:  # 如果没有检测到特征点
+            return photo, False
+            
+        # BFMatcher 匹配
+        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+        matches = bf.knnMatch(des1, des2, k=2)
+        
+        # Lowe's ratio test 筛选匹配点
+        good = []
+        for m, n in matches:
+            if m.distance < 0.75 * n.distance:
+                good.append(m)
+                
+        if len(good) < 15:  # 如果好匹配点太少，说明并非同一种表格模板，不进行对齐
+            return photo, False
+            
+        # 计算单应性矩阵 (Homography)
+        pts_tmpl = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+        pts_photo = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+        H, mask = cv2.findHomography(pts_photo, pts_tmpl, cv2.RANSAC, 5.0)
+        
+        if H is None:  # 如果无法计算单应性矩阵
+            return photo, False
+            
+        # 进行透视变换
+        aligned = cv2.warpPerspective(photo, H, (tw, th))
+        return aligned, True
+    except Exception as e:
+        print(f"[OCR] 模板匹配对齐失败: {e}")
+        return None, False
+
 def run_ocr(  # 定义 OCR 扫描最核心的总控制运行调度函数
     image_path: str,  # 参数一：输入待扫描的主图片文件路径
     coords: Optional[tuple] = None,  # 参数二：可选的裁剪区域坐标元组 (x, y, w, h)，默认为 None 扫描全图
