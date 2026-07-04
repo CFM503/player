@@ -598,22 +598,33 @@ class AgentTools:
         # ---- PaddleOCR（带坐标） ----
         from ocr import run_ocr  # 动态从独立 ocr 模块中导入核心 run_ocr 执行函数
         
-        # 尝试进行模板对齐（针对带气作业票模板 dq.png）
-        template_path = os.path.join(os.path.dirname(__file__), "template", "dq.png")
-        if os.path.exists(template_path):
+        # 尝试进行模板对齐
+        template_dir = os.path.join(os.path.dirname(__file__), "template")
+        templates = [f for f in os.listdir(template_dir) if f.lower().endswith(".png")] if os.path.exists(template_dir) else []
+        
+        if templates:
             from ocr import align_to_template
-            _prog(12, "匹配模板并对齐图像...")
-            aligned_img, is_aligned = align_to_template(image_path, template_path)
-            if is_aligned:
-                # 将对齐后的图像保存为临时文件，以便全图扫描和裁剪操作都基于该对齐图
-                aligned_dir = os.path.join(os.path.dirname(__file__), "uploads")
-                os.makedirs(aligned_dir, exist_ok=True)
-                aligned_path = os.path.join(aligned_dir, "aligned_" + os.path.basename(image_path))
-                import cv2
-                cv2.imwrite(aligned_path, aligned_img)
-                safe_print(f"[OCR] 特征点匹配对齐成功：使用 {os.path.basename(template_path)} 模板拉平")
-                image_path = aligned_path  # 覆盖后续全图 OCR 扫描的源图片路径
-                AgentTools._last_image_path = aligned_path  # 覆盖缓存路径，确保之后的 extract_filler_name 裁剪也使用对齐图
+            matched = False
+            for t_file in templates:
+                t_path = os.path.join(template_dir, t_file)
+                _prog(12, f"匹配模板 {t_file} 中...")
+                aligned_img, is_aligned = align_to_template(image_path, t_path)
+                if is_aligned:
+                    # 将对齐后的图像保存为临时文件，以便全图扫描和裁剪操作都基于该对齐图
+                    aligned_dir = os.path.join(os.path.dirname(__file__), "uploads")
+                    os.makedirs(aligned_dir, exist_ok=True)
+                    aligned_path = os.path.join(aligned_dir, "aligned_" + os.path.basename(image_path))
+                    import cv2
+                    cv2.imwrite(aligned_path, aligned_img)
+                    safe_print(f"[OCR] 特征点匹配对齐成功：使用 {t_file} 模板拉平")
+                    image_path = aligned_path  # 覆盖后续全图 OCR 扫描的源图片路径
+                    AgentTools._last_image_path = aligned_path  # 覆盖缓存路径，确保之后的裁剪操作也使用对齐图
+                    matched = True
+                    break
+            
+            if not matched:
+                # 匹配失败，不进行任何降级，直接抛出异常提示用户
+                raise RuntimeError("上传的照片无法匹配到任何已注册的作业票模板（如带气作业票），请确保照片拍摄端正且清晰无遮挡，并重新上传正确的照片！")
         
         _prog(15, "启动 PaddleOCR 扫描")  # 触发 15% 进度更新
         
