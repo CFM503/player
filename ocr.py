@@ -187,7 +187,7 @@ def run_ocr(  # 定义 OCR 扫描最核心的总控制运行调度函数
     save_crop_path: Optional[str] = None,  # 参数三：可选的裁剪出的子图像保存路径，默认不保存
     save_markdown_path: Optional[str] = None,  # 参数四：可选的扫描完成后的 Markdown 文本文件保存目标路径
     mode: str = "cluster",  # 参数五：已废弃，保留用于兼容性
-    device: str = "cpu",  # 参数六：本地 OCR 执行所选的硬件计算设备 (cpu 或 gpu)
+    device: str = "gpu",  # 参数六：本地 OCR 执行所选的硬件计算设备 (cpu 或 gpu)
     engine: str = "paddleocr",  # 参数七：核心检测引擎种类类型 ('paddleocr' 本地，或 'vision' 云端大模型)
     api_key: Optional[str] = None,  # 参数八：视觉大模型鉴权 Key，仅在 engine='vision' 下有效
     base_url: Optional[str] = None,  # 参数九：视觉大模型接口的基础基地址域名路径

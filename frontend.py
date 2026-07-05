@@ -151,10 +151,10 @@ with st.sidebar:  # 进入侧边栏渲染上下文本环境
 
     # OCR 推理设备选择（CPU / GPU）
     _ocr_devices = {  # 映射中文设备别名到底层设备代码字典
-        "CPU（默认）": "cpu",
-        "GPU 加速": "gpu",
+        "CPU": "cpu",
+        "GPU 加速（默认）": "gpu",
     }  # 结束设备字典定义
-    _saved_device = _cfg.get("ocr_device", "cpu")
+    _saved_device = _cfg.get("ocr_device", "gpu")
     _device_values = list(_ocr_devices.values())
     _default_device_idx = _device_values.index(_saved_device) if _saved_device in _device_values else 0
     ocr_device_label = st.selectbox(  # 渲染下拉单选框以供切换 OCR 推理硬件设备
@@ -169,6 +169,7 @@ with st.sidebar:  # 进入侧边栏渲染上下文本环境
             import paddle as _pd  # 临时导入 paddle
             if not _pd.device.is_compiled_with_cuda():  # 检测是否安装了 GPU 版
                 st.caption("⚠️ 当前安装的是 CPU 版 PaddlePaddle，GPU 不可用，将自动回退到 CPU")  # 警告 GPU 不可用
+                ocr_device = "cpu"  # 强制将设备降级回 cpu
             else:  # 如果已安装 GPU 版
                 _gpu_count = _pd.device.cuda.device_count()  # 获取 GPU 数量
                 st.caption(f"✅ 检测到 {_gpu_count} 个 GPU 设备，已启用加速")  # 显示 GPU 可用提示

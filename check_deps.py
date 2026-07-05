@@ -97,6 +97,57 @@ def check_dependencies():  # 核心依赖检查与报错诊断主函数
     else:  # 若两种变体均未安装
         details.append(("paddlepaddle", "未安装", _PADDLE_MIN_VER, False))  # 标记未安装
         errors.append(f"paddlepaddle not installed (need >= {_PADDLE_MIN_VER}), install paddlepaddle or paddlepaddle-gpu")  # 记录缺失
+
+    # 4) 动态扫描本程序所有 .py 文件引用的依赖，进行全量防漏检检查
+    import ast
+    import glob
+    import importlib
+
+    project_dir = os.path.dirname(os.path.abspath(__file__))
+    local_py_files = glob.glob(os.path.join(project_dir, "*.py"))
+    local_modules = {os.path.splitext(os.path.basename(f))[0] for f in local_py_files}
+
+    known_import_names = {d[1] for d in _DEPS}
+    known_import_names.add("paddle")
+    known_import_names.add("importlib")
+
+    dynamic_imports = set()
+    for py_file in local_py_files:
+        try:
+            with open(py_file, "r", encoding="utf-8") as f:
+                tree = ast.parse(f.read(), filename=py_file)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        dynamic_imports.add(alias.name.split('.')[0])
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module:
+                        dynamic_imports.add(node.module.split('.')[0])
+        except Exception:
+            pass
+
+    stdlib = sys.stdlib_module_names if hasattr(sys, "stdlib_module_names") else set()
+    unknown_imports = dynamic_imports - stdlib - local_modules - known_import_names
+
+    for mod_name in unknown_imports:
+        try:
+            importlib.import_module(mod_name)
+            details.append((f"{mod_name} (动态扫描)", "已安装", "动态发现", True))
+        except ImportError:
+            details.append((f"{mod_name} (动态扫描)", "未安装", "动态发现", False))
+            errors.append(f"Dynamic dependency '{mod_name}' is imported in code but not installed.")
+            
+    # 5) 检查需要用到的核心模型库 (PaddleOCR Models)
+    model_dir = os.path.join(os.path.expanduser("~"), ".paddleocr", "whl")
+    for m_type in ["det", "rec", "cls"]:
+        m_path = os.path.join(model_dir, m_type)
+        m_label = f"OCR Model ({m_type})"
+        if os.path.exists(m_path) and os.listdir(m_path):
+            details.append((m_label, "已就绪", "本地缓存", True))
+        else:
+            # 模型库缺失不作为致命错误（会在运行时自动下载），但会在列表提示
+            details.append((m_label, "待下载", "运行时下载", True))
+
     # ---- 打印版本对照表 ----
     print()  # 打印空行以对齐排版
     print("=" * 60)  # 打印上边框分隔符
