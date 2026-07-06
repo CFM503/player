@@ -238,13 +238,18 @@ def check_measure_status_in_ocr(ocr_text: str, desc: str, ticket_type: str) -> O
                     for col in check_cols:
                         col_lower = col.lower()
                         col_upper = col.upper()
-                        if any(x in col_lower for x in ["×", "x", "未落实", "不适用", "/", "\\"]):
+                        # 对于带气作业票，负向标志仅匹配叉号（× 或 x）
+                        neg_list = ["×", "x"] if ticket_type == "带气作业票" else ["×", "x", "未落实", "不适用", "/", "\\"]
+                        if any(x in col_lower for x in neg_list):
                             has_neg = True
                         if any(x in col_upper for x in ["✓", "√", "v", "7", "1", "j", "已落实", "是"]):
                             has_pos = True
                     
                     if has_neg:
                         return False
+                    if ticket_type == "带气作业票":
+                        # 带气作业票只要扫描不到叉号就算落实
+                        return True
                     if has_pos:
                         return True
 
@@ -257,8 +262,13 @@ def check_measure_status_in_ocr(ocr_text: str, desc: str, ticket_type: str) -> O
         remaining_str = "".join(line_remaining).strip()
         remaining_lower = remaining_str.lower()
         remaining_upper = remaining_str.upper()
-        if any(x in remaining_lower for x in ["×", "x", "未落实", "不适用", "/", "\\"]):
+        
+        neg_list = ["×", "x"] if ticket_type == "带气作业票" else ["×", "x", "未落实", "不适用", "/", "\\"]
+        if any(x in remaining_lower for x in neg_list):
             return False
+        if ticket_type == "带气作业票":
+            # 同行只要没有叉号就算落实
+            return True
         if any(x in remaining_upper for x in ["✓", "√", "v", "7", "1", "j", "已落实", "是"]):
             return True
 
@@ -278,12 +288,19 @@ def check_measure_status_in_ocr(ocr_text: str, desc: str, ticket_type: str) -> O
                 if is_another_measure:  # 判断如果为下一措施的主体
                     break  # 终止向下查找符号行的行为
                 
-                # 检查是否存在表示未落实或不适用的特殊打叉或反面标识符
-                if any(x in next_line.lower() for x in ["×", "x", "未落实", "不适用", "/", "\\"]):  # 匹配反向符号
+                neg_list = ["×", "x"] if ticket_type == "带气作业票" else ["×", "x", "未落实", "不适用", "/", "\\"]
+                if any(x in next_line.lower() for x in neg_list):  # 匹配反向符号
                     return False  # 精准匹配成功，判定该防范项为“未落实 False”
+                if ticket_type == "带气作业票":
+                    # 对于带气抢修，向下查找行如果不含叉号就算落实
+                    return True
                 # 检查是否存在表示已落实的打勾、数字等正面肯定标志
                 if any(x in next_line.upper() for x in ["✓", "√", "V", "7", "1", "J", "已落实", "是"]):  # 匹配正向符号
                     return True  # 判定该防范项为“已落实 True”
+                    
+        if ticket_type == "带气作业票":
+            # 找到行但没匹配到任何叉号，判定为已落实 (True)
+            return True
     return None  # 无匹配行或没有检测到任何符号时返回 None，交给 LLM 决定
 
 class HandWrittenIssue(BaseModel):  # 定义表示 HSE 作业票中具体手写或自动判定的隐患项模型类
@@ -480,12 +497,16 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
                 elif h_status is False:  # 算法判定物理状态为假未落实
                     impl = False  # 设置状态为 False
                 else:  # 若算法对这串文字在 OCR 中没有定位到或返回 None 悬而未决
-                    # 安全审计: OCR 看不清且 LLM 也未明确标记时，一律判「未落实」(False)，
-                    # 宁可误报隐患触发整改，绝不默认放过任一安全措施。注释掉旧的「默认 True」放权兜底。
-                    if llm_measures.get(mid) is True:  # 仅当大模型明确标记「已落实」才采信 True
-                        impl = True  # 采信大模型标记已落实
-                    else:  # 其他全部情况（未标记 / 标记 False / OCR 丢失）
-                        impl = False  # 安全审计: 默认未落实，触发隐患上报
+                    if ticket_type == "带气作业票":
+                        # 带气作业票只要扫描不到叉号，默认为已落实
+                        impl = True
+                    else:
+                        # 安全审计: OCR 看不清且 LLM 也未明确标记时，一律判「未落实」(False)，
+                        # 宁可误报隐患触发整改，绝不默认放过任一安全措施。注释掉旧的「默认 True」放权兜底。
+                        if llm_measures.get(mid) is True:  # 仅当大模型明确标记「已落实」才采信 True
+                            impl = True  # 采信大模型标记已落实
+                        else:  # 其他全部情况（未标记 / 标记 False / OCR 丢失）
+                            impl = False  # 安全审计: 默认未落实，触发隐患上报
             
             sanitized_measures.append({  # 将重组后的措施字典加入措施数组中
                 "measure_id": mid,  # 措施条款编号
