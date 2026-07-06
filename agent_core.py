@@ -1430,6 +1430,12 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             ticket_ok = bool(data.ticket_id) and len(data.ticket_id) >= 6  # 规则1：编号长度校验，必须非空且不少于 6 位
             checks.append(("票号", ticket_ok, f"{data.ticket_id} {'OK' if ticket_ok else '异常'}"))  # 存入结果
 
+            approver_ok = bool(data.approver_name) and len(data.approver_name.strip()) >= 2
+            checks.append(("签字", approver_ok, f"{data.approver_name} {'OK' if approver_ok else '缺失'}"))
+
+            worker_ok = bool(data.worker_id) and len(data.worker_id.strip()) >= 2
+            checks.append(("作业人员", worker_ok, f"{data.worker_id} {'OK' if worker_ok else '缺失'}"))
+
             conc_ok = all(0 <= v <= 100 for v in data.gas_concentration)  # 规则2：气体浓度合理性校验，浮点读数必须在 0% 到 100% 爆限值区间内
             checks.append(("浓度", conc_ok, f"{data.gas_concentration} {'OK' if conc_ok else '超范围'}"))  # 存入结果
 
@@ -1462,6 +1468,21 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
 
         safe_print("[Agent Reflect] 达到最大重试，标记高风险。")
         mem.remember("反思", "🔍", "最大重试", "标记高风险", status="error")  # 记忆体记录异常归档
+        
+        # 将失败的校验项记录为异常隐患，防止空模版/无签字件自动通过
+        failed_checks = [name for name, ok, _ in checks if not ok]
+        if failed_checks:
+            data.has_abnormal = True
+            for name, ok, detail in checks:
+                if not ok:
+                    exists = any(f"数据完整性校验失败: {name}" in issue.item_name for issue in data.issues)
+                    if not exists:
+                        data.issues.append(HandWrittenIssue(
+                            item_name=f"数据完整性校验失败: {name}",
+                            status="异常",
+                            raw_text=detail
+                        ))
+            safe_print("[Agent Reflect] 达到最大重试，已将失败的完整性校验项强行记入隐患明细。")
         return data  # 返回未完全修正的数据，留待 L3 条件路由决策拦截
 
     def _generate_approval(self, data: SecuritySheetData, weather: dict = None) -> str:
@@ -1544,7 +1565,19 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                 score += 2
 
         score += min(len(unimpl), 3)  # 每项未落实 +1，最多 +3
-        score += min(len(data.issues), 2)
+        
+        # 统计除完整性校验之外的业务隐患
+        biz_issues = [i for i in data.issues if "数据完整性校验失败" not in i.item_name]
+        score += min(len(biz_issues), 2)
+        
+        # 针对完整性缺陷单独加分，确保无签字/空模版能被坚决拦截
+        for issue in data.issues:
+            if "数据完整性校验失败: 签字" in issue.item_name:
+                score += 2  # 签字缺失严重，加 2 分
+            elif "数据完整性校验失败: 票号" in issue.item_name:
+                score += 2  # 票号缺失严重，加 2 分
+            elif "数据完整性校验失败: 作业人员" in issue.item_name:
+                score += 1  # 作业人缺失，加 1 分
 
         if score >= 5:
             return "重大"
