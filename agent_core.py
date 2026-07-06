@@ -687,6 +687,67 @@ class AgentTools:
                     
                     if detected_type:  # 若成功匹配
                         safe_print(f"[OCR 检测] 首次扫描识别到作业票类型: 【{detected_type}】 | 坐标: x={abs_x}, y={abs_y}, w={abs_w}, h={abs_h}")  # 标出坐标输出到运行日志中
+
+                        # 纯本地 OpenCV 像素密度检测（仅带气作业票 + 对齐成功时触发）
+                        if detected_type == "带气作业票" and "aligned_" in os.path.basename(image_path):
+                            try:
+                                import numpy as np
+                                safe_print("[OpenCV Fallback] 启用纯本地 OpenCV 像素密度交叉定位符号...")
+                                img_bgr = cv2.imread(image_path)
+                                img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+                                bw = cv2.adaptiveThreshold(~img_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 15, -2)
+
+                                measures = STANDARD_MEASURES.get("带气作业票", [])
+
+                                lines_coords = []
+                                for l_str in flat_text.split("\n"):
+                                    m_coord = re.match(r"(.+?)\s+\[(\d+),(\d+),(\d+),(\d+)\]", l_str.strip())
+                                    if m_coord:
+                                        lines_coords.append((m_coord.group(1).strip(), int(m_coord.group(3)), int(m_coord.group(5))))
+
+                                def _clean_str(s):
+                                    return re.sub(r"[^\w一-龥]", "", s)
+
+                                x_bounds = [523, 551, 608, 636, 682, 760]
+                                roles = ["作业人", "现场负责人", "监理", "监护人", "现场负责人"]
+
+                                fallback_md = []
+                                for idx, desc in measures:
+                                    norm_desc = _clean_str(desc)
+                                    best_y, best_h = -1, -1
+                                    for txt, cy, ch in lines_coords:
+                                        norm_txt = _clean_str(txt)
+                                        if len(norm_txt) > 5 and (norm_txt in norm_desc or norm_desc[:12] in norm_txt or norm_txt[:12] in norm_desc):
+                                            best_y, best_h = cy, ch
+                                            break
+                                    if best_y == -1:
+                                        for txt, cy, ch in lines_coords:
+                                            norm_txt = _clean_str(txt)
+                                            if len(norm_txt) > 4 and (norm_desc[:6] in norm_txt or norm_txt[:6] in norm_desc):
+                                                best_y, best_h = cy, ch
+                                                break
+
+                                    if best_y != -1:
+                                        y1 = max(0, best_y - 2)
+                                        y2 = min(bw.shape[0], best_y + best_h + 2)
+                                        status = []
+                                        for i in range(5):
+                                            cell = bw[y1:y2, x_bounds[i]:x_bounds[i+1]]
+                                            if cell.size > 0 and (np.sum(cell > 0) / cell.size) > 0.02:
+                                                status.append(f"{roles[i]}(有笔迹)")
+                                            else:
+                                                status.append(f"{roles[i]}(空白)")
+                                        fallback_md.append(f"第{idx}条: " + ", ".join(status))
+
+                                if fallback_md:
+                                    append_text = f"\n\n--- 纯本地 OpenCV 像素密度提取结果 ---\n" + "\n".join(fallback_md) + "\n----------------------------------\n"
+                                    flat_text += append_text
+                                    ocr_result += append_text
+                                    AgentTools._last_ocr_raw = flat_text
+                                    safe_print("[OpenCV Fallback] 本地像素密度补丁融合完成！")
+                            except Exception as e:
+                                safe_print(f"[OpenCV Fallback] 降级识别异常: {e}")
+
                         break  # 类型已确定，可提前退出循环以提升效率
 
         return ocr_result
