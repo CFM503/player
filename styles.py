@@ -546,9 +546,7 @@ div[data-baseweb="notification"] { border-radius: 10px !important; }
     padding: 14px !important;
     color: #34d399 !important;
     line-height: 1.6 !important;
-    overflow-y: auto !important;
     overflow-x: hidden !important;
-    max-height: 500px !important;
     box-shadow: inset 0 2px 8px rgba(0,0,0,0.35), 0 4px 14px rgba(15,23,42,0.1) !important;
     position: relative !important;
     margin-top: 8px !important;
