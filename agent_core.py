@@ -478,7 +478,9 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
                 if m:
                     mid_val = int(m.group(1))
                     content_val = m.group(2)
-                    if "(有笔迹)" in content_val:
+                    # 只有施工班组（作业人或施工方现场负责人）确认签字的才算真正有笔迹落地的条目
+                    # 避开因右侧表格框线导致“带气现场负责人”虚警有笔迹的情况
+                    if "作业人(有笔迹)" in content_val or "施工方现场负责人(有笔迹)" in content_val:
                         matched_measures_with_handwriting.add(mid_val)
             
             if len(matched_measures_with_handwriting) == 25:
@@ -816,7 +818,7 @@ class AgentTools:
                                     return re.sub(r"[^\w一-龥]", "", s)
 
                                 x_bounds = [523, 551, 608, 636, 682, 760]
-                                roles = ["作业人", "现场负责人", "监理", "监护人", "现场负责人"]
+                                roles = ["作业人", "施工方现场负责人", "监理", "监护人", "带气现场负责人"]
 
                                 fallback_md = []
                                 for idx, desc in measures:
