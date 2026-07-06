@@ -806,6 +806,22 @@ class AgentTools:
                                 img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
                                 bw = cv2.adaptiveThreshold(~img_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 15, -2)
 
+                                # 方案 B：尝试读取空白模板 dq.png 进行差分以消解边框线/背景字的灰度及对齐残余
+                                tmpl_path = os.path.join(template_dir, "dq.png")
+                                bw_diff = None
+                                if os.path.exists(tmpl_path):
+                                    img_tmpl_bgr = cv2.imread(tmpl_path)
+                                    if img_tmpl_bgr is not None:
+                                        img_tmpl_gray = cv2.cvtColor(img_tmpl_bgr, cv2.COLOR_BGR2GRAY)
+                                        bw_tmpl = cv2.adaptiveThreshold(~img_tmpl_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 15, -2)
+                                        # 对模板网格线进行 3x3 膨胀，确保 1-2 像素对齐微偏完全被遮盖抵消
+                                        bw_tmpl_dilated = cv2.dilate(bw_tmpl, np.ones((3, 3), np.uint8), iterations=1)
+                                        # 差分：当前二值图减去膨胀后的模板，消除表格印刷线与印刷文字
+                                        bw_diff = cv2.subtract(bw, bw_tmpl_dilated)
+                                        # 做一次 2x2 极小核腐蚀处理，洗去残余的零星散点与对齐杂讯
+                                        bw_diff = cv2.erode(bw_diff, np.ones((2, 2), np.uint8), iterations=1)
+                                        safe_print("[OpenCV Fallback] 方案 B 启动：成功应用模板 dq.png 差分与降噪滤镜")
+
                                 measures = STANDARD_MEASURES.get("带气作业票", [])
 
                                 lines_coords = []
@@ -848,8 +864,14 @@ class AgentTools:
                                             cell_y1 = y1 + pad_y
                                             cell_y2 = y2 - pad_y
                                             
-                                            cell = bw[cell_y1:cell_y2, cell_x1:cell_x2]
-                                            if cell.size > 0 and (np.sum(cell > 0) / cell.size) > 0.015:
+                                            if bw_diff is not None:
+                                                cell = bw_diff[cell_y1:cell_y2, cell_x1:cell_x2]
+                                                threshold = 0.005  # 差分消除全部网格线后，只需 0.5% 墨迹占比即判定有笔迹（灵敏度高）
+                                            else:
+                                                cell = bw[cell_y1:cell_y2, cell_x1:cell_x2]
+                                                threshold = 0.04   # 方案 A 兜底阈值：无模板时设为 4% 保守阈值
+                                            
+                                            if cell.size > 0 and (np.sum(cell > 0) / cell.size) > threshold:
                                                 status.append(f"{roles[i]}(有笔迹)")
                                             else:
                                                 status.append(f"{roles[i]}(空白)")
@@ -1470,11 +1492,9 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                 else:
                     checks.append(("异常一致", True, "无异常 一致"))
 
-            # 规则4：安全条款执行状态与 has_abnormal 的一致性校验
-            if unimpl:  # 如果存在有未落实的安全防范项
-                checks.append(("措施判定", data.has_abnormal, f"{len(unimpl)}项未落实 {'OK' if data.has_abnormal else '未标记异常'}"))  # 未落实时整票 has_abnormal 必须为 True
-            else:  # 全部落实了
-                checks.append(("措施判定", True, "全部落实 OK"))  # 一致性成立，存入
+            # 规则4：安全条款本身落实状态校验
+            measures_ok = (len(unimpl) == 0)
+            checks.append(("安全措施", measures_ok, "全部落实 OK" if measures_ok else f"{len(unimpl)}项未落实"))
 
             all_pass = all(ok for _, ok, _ in checks)  # 统计各校验项是否全部检测通过
             for name, ok, detail in checks:  # 迭代校验项
