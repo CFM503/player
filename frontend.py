@@ -93,14 +93,14 @@ st.html("""
         var root = window.parent.document;
         var logs = root.querySelectorAll('.hlog');
         logs.forEach(function(log) {
-            var isAtBottom = (log.scrollHeight - log.clientHeight - log.scrollTop) < 50;
             var lastHeight = log.getAttribute('data-last-height') || 0;
             var currentHeight = log.scrollHeight;
             if (currentHeight !== parseInt(lastHeight)) {
                 log.setAttribute('data-last-height', currentHeight);
-                if (isAtBottom || lastHeight === 0) {
+                // 延迟 50ms 等待浏览器完成最新的 DOM 渲染和排版
+                setTimeout(function() {
                     log.scrollTop = log.scrollHeight;
-                }
+                }, 50);
             }
         });
     }

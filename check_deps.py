@@ -26,6 +26,9 @@ _DEPS = [  # 构建要求校验的依赖包元数据列表
     ("httpx-sse",      "httpx_sse",      "0.4.0",        "httpx-sse"),  # HTTPX SSE 客户端库版本控制 (dingtalk_client 依赖)
     # paddlex[ocr] 精确表格识别依赖
     ("paddlex",        "paddlex",        "3.7.1",        "paddlex[ocr]"),  # PaddleX 开发套件包及其依赖控制
+    # 签字格标记分类依赖
+    ("scikit-image",   "skimage",        "0.22.0",       "scikit-image"),  # skimage 用于骨架化分类
+    ("scipy",          "scipy",          "1.15.0",       "scipy"),         # scipy 用于连通域标记
 ]  # 结束列表定义
 
 # paddlepaddle 支持 CPU 版 (paddlepaddle) 和 GPU 版 (paddlepaddle-gpu) 两种安装方式

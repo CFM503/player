@@ -707,6 +707,8 @@ class AgentTools:
                 if f.lower().endswith(".png") and not f.startswith("aligned") and not f.startswith("match"):
                     templates.append(f)
         
+        matched_template_type = None
+        matched_template_type = None
         if templates:
             from ocr import align_to_template
             matched = False
@@ -725,6 +727,8 @@ class AgentTools:
                     image_path = aligned_path  # 覆盖后续全图 OCR 扫描 of 源图片路径
                     AgentTools._last_image_path = aligned_path  # 覆盖缓存路径，确保之后的裁剪操作也使用对齐图
                     matched = True
+                    if t_file == "dq.png":
+                        matched_template_type = "带气作业票"
                     break
             
             if not matched:
@@ -773,7 +777,7 @@ class AgentTools:
 
         # 首次感知全图扫描分类检测：从识别文本中提取 3 种作业票类型并标出绝对坐标打印在日志窗口
         import re  # 导入正则表达式模块
-        detected_type = None  # 初始化识别的作业票类型为 None
+        detected_type = matched_template_type  # 默认使用模板匹配推导出的票型，抗 OCR 乱码或错行能力强
         for line in flat_text.split("\n"):  # 遍历扁平 OCR 文本的每一行
             line_str = line.strip()  # 去除首尾空格
             # 匹配包含 "文本 [x,y,w,h]" 格式的行
@@ -797,96 +801,104 @@ class AgentTools:
                     if detected_type:  # 若成功匹配
                         safe_print(f"[OCR 检测] 首次扫描识别到作业票类型: 【{detected_type}】 | 坐标: x={abs_x}, y={abs_y}, w={abs_w}, h={abs_h}")  # 标出坐标输出到运行日志中
 
-                        # 纯本地 OpenCV 像素密度检测（仅带气作业票 + 对齐成功时触发）
-                        if detected_type == "带气作业票" and "aligned_" in os.path.basename(image_path):
-                            try:
-                                import numpy as np
-                                safe_print("[OpenCV Fallback] 启用纯本地 OpenCV 像素密度交叉定位符号...")
-                                img_bgr = cv2.imread(image_path)
-                                img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-                                bw = cv2.adaptiveThreshold(~img_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 15, -2)
+                        break
 
-                                # 方案 B：尝试读取空白模板 dq.png 进行差分以消解边框线/背景字的灰度及对齐残余
-                                tmpl_path = os.path.join(template_dir, "dq.png")
-                                bw_diff = None
-                                if os.path.exists(tmpl_path):
-                                    img_tmpl_bgr = cv2.imread(tmpl_path)
-                                    if img_tmpl_bgr is not None:
-                                        img_tmpl_gray = cv2.cvtColor(img_tmpl_bgr, cv2.COLOR_BGR2GRAY)
-                                        bw_tmpl = cv2.adaptiveThreshold(~img_tmpl_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 15, -2)
-                                        # 对模板网格线进行 3x3 膨胀，确保 1-2 像素对齐微偏完全被遮盖抵消
-                                        bw_tmpl_dilated = cv2.dilate(bw_tmpl, np.ones((3, 3), np.uint8), iterations=1)
-                                        # 差分：当前二值图减去膨胀后的模板，消除表格印刷线与印刷文字
-                                        bw_diff = cv2.subtract(bw, bw_tmpl_dilated)
-                                        # 做一次 2x2 极小核腐蚀处理，洗去残余的零星散点与对齐杂讯
-                                        bw_diff = cv2.erode(bw_diff, np.ones((2, 2), np.uint8), iterations=1)
-                                        safe_print("[OpenCV Fallback] 方案 B 启动：成功应用模板 dq.png 差分与降噪滤镜")
+        # 纯本地 OpenCV 像素密度检测（仅带气作业票 + 对齐成功时触发）
+        if detected_type == "带气作业票" and "aligned_" in os.path.basename(image_path):
+            try:
+                import numpy as np
+                safe_print("[OpenCV Fallback] 启用纯本地 OpenCV 像素三分类交叉定位符号...")
+                img_bgr = cv2.imread(image_path)
+                img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
-                                measures = STANDARD_MEASURES.get("带气作业票", [])
+                # 1. 动态检测水平网格线，或使用默认坐标兜底
+                def get_y_lines(img_g):
+                    binary_img = img_g < 80
+                    width = 726 - 523
+                    row_sums = np.sum(binary_img[:, 523:726], axis=1)
+                    lines_y = []
+                    for y in range(280, 890):
+                        if row_sums[y] > 0.6 * width:
+                            is_max = True
+                            for dy in range(-3, 4):
+                                if row_sums[y + dy] > row_sums[y]:
+                                    is_max = False
+                                    break
+                                elif row_sums[y + dy] == row_sums[y] and dy < 0:
+                                    is_max = False
+                                    break
+                            if is_max:
+                                lines_y.append(y)
+                    if len(lines_y) == 26:
+                        safe_print(f"[OpenCV Fallback] 动态检测到 26 条水平网格线: {lines_y}")
+                        return lines_y
+                    else:
+                        safe_print(f"[OpenCV Fallback] 动态检测到 {len(lines_y)} 条线，启用默认网格线定位")
+                        return [307, 325, 343, 360, 378, 396, 414, 431, 451, 485, 519, 541, 560, 593, 613, 632, 652, 686, 707, 725, 759, 779, 800, 822, 843, 876]
 
-                                lines_coords = []
-                                for l_str in flat_text.split("\n"):
-                                    m_coord = re.match(r"(.+?)\s+\[(\d+),(\d+),(\d+),(\d+)\]", l_str.strip())
-                                    if m_coord:
-                                        lines_coords.append((m_coord.group(1).strip(), int(m_coord.group(3)), int(m_coord.group(5))))
+                measures = STANDARD_MEASURES.get("带气作业票", [])
+                x_bounds = [523, 551, 608, 636, 682, 726]
+                roles = ["作业人", "施工方现场负责人", "监理", "监护人", "带气现场负责人"]
+                y_lines = get_y_lines(img_gray)
 
-                                def _clean_str(s):
-                                    return re.sub(r"[^\w一-龥]", "", s)
+                from mark_classifier import classify_mark
 
-                                x_bounds = [523, 551, 608, 636, 682, 760]
-                                roles = ["作业人", "施工方现场负责人", "监理", "监护人", "带气现场负责人"]
+                fallback_md = []
+                for idx, desc in measures:
+                    r = idx - 1  # 0-based grid row index
+                    y1, y2 = y_lines[r], y_lines[r+1]
+                    
+                    row_labels = []
+                    row_dbgs = []
+                    for i in range(5):
+                        pad_x = min(6, (x_bounds[i+1] - x_bounds[i]) // 3)
+                        pad_y = min(3, (y2 - y1) // 3)
+                        cell_x1 = x_bounds[i] + pad_x
+                        cell_x2 = x_bounds[i+1] - pad_x
+                        cell_y1 = y1 + pad_y
+                        cell_y2 = y2 - pad_y
+                        
+                        cell_gray = img_gray[cell_y1:cell_y2, cell_x1:cell_x2]
+                        # 调用三分类算法：inset=0, min_component_area=12 为调优后的最优高鲁棒参数
+                        label, dbg = classify_mark(cell_gray, inset=0, min_component_area=12)
+                        row_labels.append(label)
+                        row_dbgs.append(dbg)
+                        safe_print(f"[Classifier] Row {idx}, {roles[i]}: label={label}, dbg={dbg}")
+                    
+                    # 检查当前行内是否有任意格被判为叉号 (cross)
+                    has_cross = any(lbl == 'cross' for lbl in row_labels)
+                    
+                    status = []
+                    for i in range(5):
+                        label = row_labels[i]
+                        role = roles[i]
+                        if label == 'cross':
+                            # 叉号映射为 role(x) 以供 has_neg 判定为 False (不通过)
+                            status.append(f"{role}(x)")
+                        elif label == 'stroke':
+                            # 有笔迹映射为 role(有笔迹) 以供正常通过。
+                            # 如果同行中包含叉号，则避开匹配，防止整行被一键审批全部通过。
+                            if has_cross:
+                                status.append(f"{role}(有笔迹但含叉号)")
+                            else:
+                                status.append(f"{role}(有笔迹)")
+                        else:
+                            # 空格映射为 ""，全部为空时触发 all_empty (不通过)
+                            status.append("")
+                    
+                    # 拼装为带条款文本 of Markdown 表格行，从而使 check_measure_status_in_ocr 能完美对齐定位
+                    col_str = " | ".join(status)
+                    fallback_md.append(f"第{idx}条: {desc} | " + col_str)
 
-                                fallback_md = []
-                                for idx, desc in measures:
-                                    norm_desc = _clean_str(desc)
-                                    best_y, best_h = -1, -1
-                                    for txt, cy, ch in lines_coords:
-                                        norm_txt = _clean_str(txt)
-                                        if len(norm_txt) > 5 and (norm_txt in norm_desc or norm_desc[:12] in norm_txt or norm_txt[:12] in norm_desc):
-                                            best_y, best_h = cy, ch
-                                            break
-                                    if best_y == -1:
-                                        for txt, cy, ch in lines_coords:
-                                            norm_txt = _clean_str(txt)
-                                            if len(norm_txt) > 4 and (norm_desc[:6] in norm_txt or norm_txt[:6] in norm_desc):
-                                                best_y, best_h = cy, ch
-                                                break
+                if fallback_md:
+                    append_text = f"\n\n--- 纯本地 OpenCV 像素密度提取结果 ---\n" + "\n".join(fallback_md) + "\n----------------------------------\n"
+                    flat_text = append_text + flat_text
+                    ocr_result = append_text + ocr_result
+                    AgentTools._last_ocr_raw = flat_text
+                    safe_print("[OpenCV Fallback] 本地像素三分类补丁前插融合完成！")
+            except Exception as e:
+                safe_print(f"[OpenCV Fallback] 降级识别异常: {e}")
 
-                                    if best_y != -1:
-                                        y1 = max(0, best_y - 2)
-                                        y2 = min(bw.shape[0], best_y + best_h + 2)
-                                        status = []
-                                        for i in range(5):
-                                            pad_x = min(6, (x_bounds[i+1] - x_bounds[i]) // 3)
-                                            pad_y = min(3, (y2 - y1) // 3)
-                                            cell_x1 = x_bounds[i] + pad_x
-                                            cell_x2 = x_bounds[i+1] - pad_x
-                                            cell_y1 = y1 + pad_y
-                                            cell_y2 = y2 - pad_y
-                                            
-                                            if bw_diff is not None:
-                                                cell = bw_diff[cell_y1:cell_y2, cell_x1:cell_x2]
-                                                threshold = 0.005  # 差分消除全部网格线后，只需 0.5% 墨迹占比即判定有笔迹（灵敏度高）
-                                            else:
-                                                cell = bw[cell_y1:cell_y2, cell_x1:cell_x2]
-                                                threshold = 0.04   # 方案 A 兜底阈值：无模板时设为 4% 保守阈值
-                                            
-                                            if cell.size > 0 and (np.sum(cell > 0) / cell.size) > threshold:
-                                                status.append(f"{roles[i]}(有笔迹)")
-                                            else:
-                                                status.append(f"{roles[i]}(空白)")
-                                        fallback_md.append(f"第{idx}条: " + ", ".join(status))
-
-                                if fallback_md:
-                                    append_text = f"\n\n--- 纯本地 OpenCV 像素密度提取结果 ---\n" + "\n".join(fallback_md) + "\n----------------------------------\n"
-                                    flat_text += append_text
-                                    ocr_result += append_text
-                                    AgentTools._last_ocr_raw = flat_text
-                                    safe_print("[OpenCV Fallback] 本地像素密度补丁融合完成！")
-                            except Exception as e:
-                                safe_print(f"[OpenCV Fallback] 降级识别异常: {e}")
-
-                        break  # 类型已确定，可提前退出循环以提升效率
 
         return ocr_result
 

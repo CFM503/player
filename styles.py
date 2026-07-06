@@ -547,6 +547,9 @@ div[data-baseweb="notification"] { border-radius: 10px !important; }
     color: #34d399 !important;
     line-height: 1.6 !important;
     overflow-x: hidden !important;
+    overflow-y: auto !important;
+    height: calc(100vh - 160px) !important;
+    min-height: 350px !important;
     box-shadow: inset 0 2px 8px rgba(0,0,0,0.35), 0 4px 14px rgba(15,23,42,0.1) !important;
     position: relative !important;
     margin-top: 8px !important;
@@ -554,6 +557,23 @@ div[data-baseweb="notification"] { border-radius: 10px !important; }
     box-sizing: border-box !important;
     width: 100% !important;
     max-width: 100% !important;
+}
+/* 自定义黑客绿科技滚动条 */
+.hlog::-webkit-scrollbar {
+    width: 6px !important;
+    height: 6px !important;
+}
+.hlog::-webkit-scrollbar-track {
+    background: #0b0f17 !important;
+    border-radius: 10px !important;
+}
+.hlog::-webkit-scrollbar-thumb {
+    background: rgba(52,211,153,0.25) !important;
+    border-radius: 3px !important;
+    transition: all 0.25s ease !important;
+}
+.hlog::-webkit-scrollbar-thumb:hover {
+    background: rgba(52,211,153,0.6) !important;
 }
 /* 模拟古老终端的极细扫描线横波滤镜效果 */
 .hlog::after {

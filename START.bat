@@ -36,6 +36,8 @@ call :check paddleocr paddleocr
 call :check openai openai
 call :check pandas pandas
 call :check paddle paddlepaddle
+call :check scipy scipy
+call :check skimage scikit-image
 
 echo.
 if !MISSING! GTR 0 (
