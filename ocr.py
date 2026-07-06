@@ -82,6 +82,8 @@ def get_ocr_instance(device: str = "cpu", det_db_box_thresh: Optional[float] = N
             
         from paddleocr import PaddleOCR  # 导入官方 PaddleOCR 核心包
         kwargs = {"lang": "ch", "device": device}
+        if device == "cpu":
+            kwargs["enable_mkldnn"] = True
         if det_db_box_thresh is not None:
             kwargs["text_det_box_thresh"] = det_db_box_thresh
         if drop_score is not None:
