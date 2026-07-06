@@ -111,18 +111,16 @@ def clean_thinking(text: str) -> str:  # 定义用于过滤大模型输出中包
     return text.strip()  # 去除两侧空白后返回纯净的文本字串
 
 
-# 根据国家和行业 HSE 标准配置作业票对应的法规及浓度限制限值参数
+# 根据国家和行业 HSE 标准配置作业票对应的法规及限值参数
 TICKET_STANDARDS = {  # 定义标准比对字典
     "动火作业票": {  # 动火安全标准
         "standard_name": "GB 30871-2022",  # 法规文号
         "standard_desc": "《危险化学品企业特殊作业安全规范》",  # 法规全称
-        "gas_limit_desc": "浓度低于爆炸下限的20% (LEL 20%)",  # 浓度限制限值说明
         "clear_dist_desc": "动火点10m内清除可燃物并配备合适足量的消防器材"  # 安全警戒距离说明
     },  # 结束动火
     "带气作业票": {  # 带气作业安全标准
         "standard_name": "CJJ 51-2016",  # 法规文号
         "standard_desc": "《城镇燃气设施运行、维护和抢修安全技术规程》",  # 法规全称
-        "gas_limit_desc": "周围环境可燃气体浓度不超过爆炸下限的20% (LEL 20%)",  # 气体浓度检测要求说明
         "clear_dist_desc": "作业区域与周边做到可靠的隔离，现场设置明显标志，夜间设置警示灯"  # 隔离防爆标志要求说明
     }  # 结束带气
 }  # 结束字典定义
@@ -340,7 +338,6 @@ class SecuritySheetData(BaseModel):  # 定义包含完整作业票所有要素�
     work_time: str = Field(default="", description="作业时间")  # 作业执行的时段或时间范围
     worker_id: str = Field(..., description="作业人员姓名及证件号/证书编号")  # 作业班组人员证件工号
     check_date: str = Field(..., description="日期 YYYY-MM-DD")  # 表单签署并自检的年月日日期
-    gas_concentration: List[float] = Field(default=[], description="各时段可燃气体浓度(%)，若无此表则填空数组")  # 气体成分检测浓度列表，允许为空
     safety_measures: List[SafetyMeasureItem] = Field(default=[], description="安全措施落实状态")  # 包含所有法定措施项的落实列表
     has_abnormal: bool = Field(..., description="是否存在异常")  # 全票是否存在隐患或数值超标的全局判定状态
     issues: List[HandWrittenIssue] = Field(default=[], description="隐患项明细")  # 整理出的异常隐患详细分类列表
@@ -440,20 +437,7 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
         # 安全审计: 禁止造假兜底 —— 日期缺失则置空串，交由 _reflect 与下游处理，不填默认假日期
         raw_dict["check_date"] = clean_date or ""  # 保存清洗后日期，缺失留空不作伪
 
-        # 5. 规范化气体检测浓度 (gas_concentration)
-        raw_concs = raw_dict.get("gas_concentration", [])  # 获取 LLM 提取的浓度数据字段，通常是个浮点数组
-        if not isinstance(raw_concs, list):  # 检查如果 LLM 格式不规范输出的不是列表类型
-            raw_concs = [raw_concs] if raw_concs is not None else []  # 强转包裹为单元素列表或置空列表
-        concs = []  # 新建规范浓度存放容器
-        for val in raw_concs:  # 迭代每一个提取浓度分量
-            try:  # 开启转换转换防护
-                if val is not None:  # 确保非空
-                    if isinstance(val, str):  # 若大模型把数值写成了包含百分号的文本串，如 "0.1%"
-                        val = val.replace("%", "").strip()  # 剔除百分号并将两侧空白剥离
-                    concs.append(float(val))  # 强转为 Python 标准的浮点数 float 并存入列表
-            except ValueError:  # 若遇到脏数据无法转化
-                pass  # 安全跳过
-        raw_dict["gas_concentration"] = concs  # 保存转换后的浮点浓度数组
+        # 5. 气体检测浓度处理已移除
 
         # 6. 用 Python 规则全量重构并校验安全措施条款，阻断 LLM 的幻觉或刻意掩盖
         std_measures = STANDARD_MEASURES.get(ticket_type, [])  # 获取该票型对应国家标准措施配置列表
@@ -533,12 +517,8 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
 
         raw_dict["safety_measures"] = sanitized_measures  # 将校验过的安全条款列表覆盖进大模型原始字典中
 
-        # 7. 判定可燃气体检测浓度异常 (若浓度检测值大于 0% 爆限，判定为安全隐患)
-        conc_abnormal = False  # 初始化浓度隐患标志为否
-        for v in concs:  # 遍历分析各时段气体浓度读数
-            if v > 0.0:  # 判定数值是否超标（大于 0.0）
-                conc_abnormal = True  # 浓度超标报警成立，设为 True
-                has_abnormal = True  # 强制将整张作业票的 has_abnormal 状态拉高为 True
+        # 7. 气体检测浓度异常判定已移除
+        conc_abnormal = False
 
         # 8. 同步并整理隐患项 (issues) 数组列表
         existing_issues = []  # 初始化最终保留的问题隐患条目列表
@@ -547,8 +527,8 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
                 item_name = issue.get("item_name", "")  # 问题项中文名称
                 status = issue.get("status", "")  # 问题项判定状态
                 raw_t = issue.get("raw_text", "")  # 问题项的来源原文备注
-                # 排除自动生成的措施或浓度报警（下面会通过 Python 重构统一写入规范名称）
-                if "安全措施第" in item_name or "气体检测异常" in item_name:  # 若含有这些特征关键字
+                # 排除自动生成的措施（下面会通过 Python 重构统一写入规范名称）
+                if "安全措施第" in item_name:  # 若含有这些特征关键字
                     continue  # 跳过不录入以防数据行重复
                 existing_issues.append(issue)  # 加入最终问题容器
 
@@ -558,13 +538,6 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
                 "item_name": f"安全措施第{mid}项未落实",  # 精准定位的未落实说明
                 "status": "异常",  # 标为异常状态
                 "raw_text": desc  # 来源条款原文
-            })  # 结束追加
-
-        if conc_abnormal:  # 若可燃气体检测异常发生了超标
-            existing_issues.append({  # 打包加入隐患明细列表
-                "item_name": "可燃气体检测异常",  # 问题描述
-                "status": "异常",  # 标为异常
-                "raw_text": f"检测到可燃气体浓度大于0% (当前记录: {concs})"  # 详细说明
             })  # 结束追加
 
         if existing_issues:  # 若发现当前至少收集到了一项隐患或异常
@@ -602,8 +575,7 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             '  "content": "作业内容",\n'
             '  "work_time": "作业时间",\n'
             '  "worker_id": "作业人员姓名及证件号/证书编号",\n'
-            '  "check_date": "日期 YYYY-MM-DD",\n'
-            '  "gas_concentration": [所有检测浓度数值的数组，如 [0.0, 0.0] 或 []]\n'
+            '  "check_date": "日期 YYYY-MM-DD"\n'
             "}\n"
             "直接输出 JSON 对象，不要添加任何 Markdown 标记或多余的解释。"
         )  # 结束提示词定义
@@ -1000,7 +972,7 @@ class AgentTools:
             "approval_status,approval_level,raw_ocr_text,image_path) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (data.ticket_id, data.station_name, data.content, data.work_time, data.worker_id,
-             data.check_date, json.dumps(data.gas_concentration, ensure_ascii=False),
+             data.check_date, json.dumps([], ensure_ascii=False),
              json.dumps([m.model_dump() for m in data.safety_measures], ensure_ascii=False),
              int(data.has_abnormal),
              json.dumps([i.model_dump() for i in data.issues], ensure_ascii=False),
@@ -1423,14 +1395,14 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                 ticket_type="动火作业票",  # 安全审计: 失败回退默认票型仅为构造合法对象，不影响审批结果(已标异常)
                 ticket_id="LLM提取失败",  # 占位票号，标记异常来源
                 station_name="", content="", work_time="", worker_id="",  # 关键字段一律留空，绝不编造
-                check_date="", gas_concentration=[],  # 日期与浓度留空
+                check_date="",  # 日期留空
                 safety_measures=[], has_abnormal=True,  # 强制异常，触发下游暂缓
                 issues=[{"item_name": "LLM 结构化提取失败", "status": "异常", "raw_text": str(e)}],  # 隐患明细记录失败原因
             )
             return data  # 直接返回失败体，跳过后续正常路径
         sim.done()  # 停止模拟线程，进度直接推进到 80%
         summary = (f"票号={data.ticket_id} | 场站={data.station_name} | "  # 汇总推理核心要素
-                   f"浓度={data.gas_concentration} | 措施={len(data.safety_measures)}项 | "  # 浓度和条款数
+                   f"措施={len(data.safety_measures)}项 | "  # 条款数
                    f"异常={data.has_abnormal}")  # 隐患状态
         safe_print(f"[Agent Reason] {summary}")  # 终端打印推理概要日志
         mem.remember("推理", "🤔", "LLM 结构化解析", summary)  # 将推理阶段记录进记忆体
@@ -1471,8 +1443,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             station_ok = bool(station_clean) and len(station_clean.strip()) >= 2
             checks.append(("作业单位", station_ok, f"{data.station_name} {'OK' if station_ok else '缺失'}"))
 
-            conc_ok = all(0 <= v <= 100 for v in data.gas_concentration)  # 规则2：气体浓度合理性校验，浮点读数必须在 0% 到 100% 爆限值区间内
-            checks.append(("浓度", conc_ok, f"{data.gas_concentration} {'OK' if conc_ok else '超范围'}"))  # 存入结果
+            # 浓度校验已移除
 
             if data.has_abnormal:  # 规则3：has_abnormal 标记与 issues 明细表的一致性校验
                 issues_ok = len(data.issues) > 0  # 如果标记有隐患，issues 列表必须非空不能是空子集
@@ -1528,9 +1499,6 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             for m in data.safety_measures:
                 if not m.implemented:
                     items.append(f"第{m.measure_id}项「{m.description}」未落实")
-            for i, v in enumerate(data.gas_concentration):
-                if v > 0:
-                    items.append(f"第{i+1}次检测浓度{v}%超标")
             for issue in data.issues:
                 items.append(f"{issue.item_name}（{issue.raw_text or '异常'}）")
             issues_desc = "\n".join(f"- {item}" for item in items[:10])
@@ -1542,14 +1510,12 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         std_info = TICKET_STANDARDS.get(data.ticket_type, TICKET_STANDARDS["动火作业票"])
         std_name = std_info["standard_name"]
         std_desc = std_info["standard_desc"]
-        gas_limit = std_info["gas_limit_desc"]
         clear_dist = std_info["clear_dist_desc"]
 
         prompt = (
             f"你是HSE安全审计专家，生成{data.ticket_type}审批建议。\n\n"
             "【标准依据】\n"
             f"- {std_name} {std_desc}\n"
-            f"- 气体浓度限制：{gas_limit}\n"
             f"- 作业区域要求：{clear_dist}\n"
             "- 五级风及以上禁止露天作业，雷雨天气禁止作业\n\n"
             "【输出格式】\n"
@@ -1557,7 +1523,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             "有异常→【暂缓作业】+逐项列出问题（简写）+风险等级\n"
             "字数100字以内\n\n"
             f"票号：{data.ticket_id} 场站：{data.station_name}\n"
-            f"浓度：{data.gas_concentration} 措施：{len(data.safety_measures)}项\n"
+            f"措施：{len(data.safety_measures)}项\n"
             f"异常：{data.has_abnormal}\n"
             f"{issues_desc}{weather_desc}"
         )
@@ -1588,17 +1554,6 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         """根据异常严重程度评估风险等级"""
         score = 0
         unimpl = [m for m in data.safety_measures if not m.implemented]
-        conc_high = [v for v in data.gas_concentration if v > 0]
-
-        if conc_high:
-            max_conc = max(conc_high)
-            if max_conc > 1.0:
-                score += 4  # 重大
-            elif max_conc > 0.5:
-                score += 3
-            elif max_conc > 0:
-                score += 2
-
         score += min(len(unimpl), 3)  # 每项未落实 +1，最多 +3
         
         # 统计除完整性校验之外的业务隐患
@@ -1629,14 +1584,11 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         std_info = TICKET_STANDARDS.get(data.ticket_type, TICKET_STANDARDS["动火作业票"])
         std_name = std_info["standard_name"]
         if not data.has_abnormal:
-            return f"【同意作业】票号{data.ticket_id}，安全措施已落实，浓度合格。依据{std_name}批准。"
+            return f"【同意作业】票号{data.ticket_id}，安全措施已落实。依据{std_name}批准。"
         items = []
         for m in data.safety_measures:
             if not m.implemented:
                 items.append(f"第{m.measure_id}项未落实")
-        for i, v in enumerate(data.gas_concentration):
-            if v > 0:
-                items.append(f"第{i+1}次浓度{v}%超标")
         for issue in data.issues:
             items.append(f"{issue.item_name}")
         detail = "；".join(items[:5]) if items else "存在异常"
@@ -1665,10 +1617,8 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         else:
             data.risk_level = "低风险"
         unimpl_count = len([m for m in data.safety_measures if not m.implemented])
-        conc_vals = [v for v in data.gas_concentration if v > 0]
-        max_conc = max(conc_vals) if conc_vals else 0
-        safe_print(f"[Agent Act] ② 风险评估 → {data.risk_level} (未落实{unimpl_count}项, 最高浓度{max_conc}%, 隐患{len(data.issues)}条)")
-        mem.remember("执行", "📊", "风险评估", f"{data.risk_level} | 未落实{unimpl_count}项 | 浓度{max_conc}% | 隐患{len(data.issues)}条")
+        safe_print(f"[Agent Act] ② 风险评估 → {data.risk_level} (未落实{unimpl_count}项, 隐患{len(data.issues)}条)")
+        mem.remember("执行", "📊", "风险评估", f"{data.risk_level} | 未落实{unimpl_count}项 | 隐患{len(data.issues)}条")
 
         # ---- ③ L3 路由决策 ----
         safe_print("[Agent Act] ③ L3 路由决策...")

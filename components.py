@@ -70,15 +70,13 @@ def render_ticket_kpis(d) -> None:  # 定义单张作业票的完整摘要信息
     rl = d.risk_level or "-"  # 提取获取风险等级，若不存在则使用 "-" 占位
     status_color = "#d6131c" if d.has_abnormal else "#059669"  # 根据是否存在隐患判定状态卡的颜色，异常为红，正常为绿
     status_text = f"{len(d.issues)}项" if d.has_abnormal else "正常"  # 判断状态文本：有隐患时显示隐患条数，无隐患显示正常
-    conc_text = ", ".join(f"{v}%" for v in d.gas_concentration) or "无"  # 拼接并生成气体浓度展示字符串，若空则显示无
     ap_status = d.approval_status or "-"  # 提取审批状态值，不存在默认为 "-"
     ap_color = APPROVAL_COLOR.get(ap_status, "#0052CC")  # 根据状态从颜色字典中提取对应的色值
     
-    render_kpi_row([  # 调用 KPI 行渲染组件渲染这 5 个关键的作业票数据卡片
+    render_kpi_row([  # 调用 KPI 行渲染组件渲染这 4 个关键的作业票数据卡片
         ("票号", d.ticket_id, ""),  # 作业票票号指标
         ("状态", status_text, status_color),  # 隐患状态指标
         ("风险", rl, RISK_COLOR.get(rl, "#0052CC")),  # 风险评级指标
-        ("浓度", conc_text, ""),  # 气体浓度监测指标
         ("审批", ap_status, ap_color),  # 智能流程审批状态指标
     ])  # 结束数组定义
 

@@ -543,12 +543,7 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
                                 st.markdown("**安全措施未落实：**")  # 渲染子分类小标题
                                 for m in unimpl:  # 遍历这些不合规条目
                                     st.markdown(f"  🔴 第{m.measure_id}项 `{m.description}` — 标记为**未落实×**")  # 红色点点标识具体未落实的条款名称和编号
-                            # 气体浓度超出安全限值指标检查
-                            conc_high = [(i, v) for i, v in enumerate(d.gas_concentration) if v > 0]  # 检查所有测爆检测数值是否大于 0% 浓度限值
-                            if conc_high:  # 若发现超标气体残留
-                                st.markdown("**浓度异常：**")  # 渲染子小标题
-                                for i, v in conc_high:  # 遍历超标指标
-                                    st.markdown(f"  🟡 第{i+1}次检测 `{v}%` — 超过0%安全限值阈值")  # 黄色高亮显示第几次检测超标及具体数值
+
                             # 其它杂项隐患（如时间过期、无签名、错漏字等）
                             for issue in d.issues:  # 遍历其他的隐患列表
                                 reason = issue.raw_text or "OCR识别为异常标记"  # 获取隐患发生定位的上下文文本说明
