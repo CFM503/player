@@ -839,8 +839,15 @@ class AgentTools:
                                         y2 = min(bw.shape[0], best_y + best_h + 2)
                                         status = []
                                         for i in range(5):
-                                            cell = bw[y1:y2, x_bounds[i]:x_bounds[i+1]]
-                                            if cell.size > 0 and (np.sum(cell > 0) / cell.size) > 0.02:
+                                            pad_x = min(6, (x_bounds[i+1] - x_bounds[i]) // 3)
+                                            pad_y = min(3, (y2 - y1) // 3)
+                                            cell_x1 = x_bounds[i] + pad_x
+                                            cell_x2 = x_bounds[i+1] - pad_x
+                                            cell_y1 = y1 + pad_y
+                                            cell_y2 = y2 - pad_y
+                                            
+                                            cell = bw[cell_y1:cell_y2, cell_x1:cell_x2]
+                                            if cell.size > 0 and (np.sum(cell > 0) / cell.size) > 0.015:
                                                 status.append(f"{roles[i]}(有笔迹)")
                                             else:
                                                 status.append(f"{roles[i]}(空白)")
