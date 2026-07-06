@@ -712,7 +712,12 @@ class AgentTools:
 
         # 尝试进行模板对齐 (无论是 PaddleOCR 还是视觉大模型，优先对齐能确保裁剪坐标一致且读图质量更佳)
         template_dir = os.path.join(os.path.dirname(__file__), "template")
-        templates = [f for f in os.listdir(template_dir) if f.lower().endswith(".png")] if os.path.exists(template_dir) else []
+        # 过滤掉 aligned_result.png 和 match_debug.png 等调试输出文件，只使用真正的模板（如 dq.png, gc.png）
+        templates = []
+        if os.path.exists(template_dir):
+            for f in os.listdir(template_dir):
+                if f.lower().endswith(".png") and not f.startswith("aligned") and not f.startswith("match"):
+                    templates.append(f)
         
         if templates:
             from ocr import align_to_template
