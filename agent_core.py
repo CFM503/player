@@ -1445,13 +1445,23 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
 
             # 浓度校验已移除
 
-            if data.has_abnormal:  # 规则3：has_abnormal 标记与 issues 明细表的一致性校验
-                issues_ok = len(data.issues) > 0  # 如果标记有隐患，issues 列表必须非空不能是空子集
-                checks.append(("异常一致", issues_ok, f"异常={data.has_abnormal}, 明细={len(data.issues)}条 {'OK' if issues_ok else '缺失'}"))  # 存入
-            else:  # 若标记没有隐患
-                checks.append(("异常一致", True, "无异常 OK"))  # 一致性成立，存入
+            unimpl = [m for m in data.safety_measures if not m.implemented]
+            integrity_fail = not (ticket_ok and approver_ok and worker_ok and station_ok)
+            should_have_abnormal = integrity_fail or bool(unimpl)
 
-            unimpl = [m for m in data.safety_measures if not m.implemented]  # 规则4：安全条款执行状态与 has_abnormal 的一致性校验
+            # 规则3：has_abnormal 标记与实际是否存在异常的一致性校验
+            abnormal_ok = (data.has_abnormal == should_have_abnormal)
+            if not abnormal_ok:
+                detail = f"实际{'有' if should_have_abnormal else '无'}缺失/未落实，但标记异常={data.has_abnormal}"
+                checks.append(("异常一致", False, detail))
+            else:
+                if data.has_abnormal:
+                    issues_ok = (len(data.issues) > 0) or integrity_fail
+                    checks.append(("异常一致", issues_ok, f"异常={data.has_abnormal}, 明细={len(data.issues)}条 {'OK' if issues_ok else '缺失'}"))
+                else:
+                    checks.append(("异常一致", True, "无异常 一致"))
+
+            # 规则4：安全条款执行状态与 has_abnormal 的一致性校验
             if unimpl:  # 如果存在有未落实的安全防范项
                 checks.append(("措施判定", data.has_abnormal, f"{len(unimpl)}项未落实 {'OK' if data.has_abnormal else '未标记异常'}"))  # 未落实时整票 has_abnormal 必须为 True
             else:  # 全部落实了
