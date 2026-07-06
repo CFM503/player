@@ -20,3 +20,5 @@ archives/
 *.tmp
 *.log
 .dingtalk_cache.json
+_*.json
+*_final*.json
