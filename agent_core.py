@@ -1441,32 +1441,33 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         for attempt in range(1, self.MAX_REFLECT_RETRIES + 1):  # 开启反思纠错循环，最大重试 MAX_REFLECT_RETRIES 次
             checks = []  # 新建单轮校验结果收集列表，每个元素为 (检查项, 是否OK, 说明字串)
 
-            # 数据清洗：过滤掉占位模板字样
-            ticket_clean = data.ticket_id or ""
-            for ph in ["编号", "作业票", "年", "月", "日"]:
-                if ph in ticket_clean:
-                    ticket_clean = ""
-            ticket_ok = bool(ticket_clean) and len(ticket_clean.strip()) >= 6
+            # 定义防指令泄露与模板噪声数据清洗的局部辅助函数
+            def clean_field(val: str, placeholders: list) -> str:
+                if not val:
+                    return ""
+                val_str = str(val).strip()
+                # 过滤重试指令泄露的提示语关键字
+                leak_keywords = ["重新解析", "上次问题", "按规则", "重试", "数据完整性", "校验失败", "请严格", "数据完整性校验失败"]
+                if any(k in val_str for k in leak_keywords):
+                    return ""
+                # 过滤模板占位符
+                if any(p in val_str for p in placeholders):
+                    return ""
+                return val_str
+
+            ticket_clean = clean_field(data.ticket_id, ["编号", "作业票", "年", "月", "日"])
+            ticket_ok = bool(ticket_clean) and len(ticket_clean) >= 6
             checks.append(("票号", ticket_ok, f"{data.ticket_id} {'OK' if ticket_ok else '异常'}"))
 
-            approver_clean = data.approver_name or ""
-            for ph in ["签字", "盖章", "负责人", "手写"]:
-                if ph in approver_clean:
-                    approver_clean = ""
+            approver_clean = clean_field(data.approver_name, ["签字", "盖章", "负责人", "手写"])
             approver_ok = bool(approver_clean) and len(approver_clean.strip()) >= 2
             checks.append(("签字", approver_ok, f"{data.approver_name} {'OK' if approver_ok else '缺失'}"))
 
-            worker_clean = data.worker_id or ""
-            for ph in ["姓名及证书", "证书编号", "证件号", "姓名及", "证书号", "手写", "填空"]:
-                if ph in worker_clean:
-                    worker_clean = ""
+            worker_clean = clean_field(data.worker_id, ["姓名及证书", "证书编号", "证件号", "姓名及", "证书号", "手写", "填空"])
             worker_ok = bool(worker_clean) and len(worker_clean.strip()) >= 2
             checks.append(("作业人员", worker_ok, f"{data.worker_id} {'OK' if worker_ok else '缺失'}"))
 
-            station_clean = data.station_name or ""
-            for ph in ["发起人签字确认", "签字确认", "作业单位", "盖章", "项目公司"]:
-                if ph in station_clean:
-                    station_clean = ""
+            station_clean = clean_field(data.station_name, ["发起人签字确认", "签字确认", "作业单位", "盖章", "项目公司"])
             station_ok = bool(station_clean) and len(station_clean.strip()) >= 2
             checks.append(("作业单位", station_ok, f"{data.station_name} {'OK' if station_ok else '缺失'}"))
 
