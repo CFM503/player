@@ -139,7 +139,7 @@ def render_notification_btn(  # 定义用于将作业数据写入钉钉 MCP AI �
             ticket_id=d.ticket_id,  # 传入识别所得的作业票编号
             image_path="",  # 手动点击触发时通常无局部大图文件缓存，传递空字符串
             description=content[:200],  # 截取报告文本前 200 字存入问题描述字段中
-            person_name=AgentTools.extract_filler_name(agent_core.ssx, agent_core.ssy, 260, 150),  # 通过模块读取全局变量提取对应的责任人姓名
+            person_name=AgentTools.extract_filler_name(520, 140, 210, 120),  # 直接使用固定裁剪范围进行责任人姓名提取
             risk_level=d.risk_level or "",  # 写入识别并给出的安全风险级别
         )  # 结束调用并接收布尔返回值状态
         if result:  # 如果底层 MCP 返回成功写入的确认

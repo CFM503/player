@@ -540,7 +540,16 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
 
         # 补全完工时间、签批人、风险等级
         raw_dict["completion_time"] = raw_dict.get("completion_time") or None  # 若无则设为 None
-        raw_dict["approver_name"] = raw_dict.get("approver_name") or None  # 若无则设为 None
+        
+        # 自动使用固定裁剪范围进行签字区域的提取，兜底并完善负责人 approver_name 字段
+        approver = raw_dict.get("approver_name")
+        if not approver or str(approver).lower() in ["null", "none", "未知", ""]:
+            try:
+                approver = AgentTools.extract_filler_name(520, 140, 210, 120)
+            except Exception as e:
+                safe_print(f"[Sanitize] 提取签字人失败: {e}")
+        raw_dict["approver_name"] = approver or None
+        
         raw_dict["risk_level"] = raw_dict.get("risk_level") or None  # 若无则设为 None
 
         return raw_dict  # 返回整理后的新字典数据
@@ -680,19 +689,7 @@ class AgentTools:
             if progress_callback:  # 如果主线程注册了进度通知函数
                 progress_callback(pct, msg)  # 执行进度通知更新
 
-        # ---- 视觉大模型（无坐标） ----
-        if engine == "vision":  # 如果用户指定使用视觉大模型引擎
-            vb = vision_brain or brain  # 获取有效的视觉大模型实例
-            if vb is None:  # 如果没有可用的模型实例
-                raise RuntimeError("视觉大模型模式需要配置视觉模型 API")  # 抛出运行错误提示
-            _prog(10, f"视觉大模型读图中 ({vb.model_name})...")  # 触发 10% 进度更新
-            AgentTools._last_ocr_raw = ""  # 清空上一次的 OCR 缓存原文
-            return AgentTools._vision_llm_ocr(image_path, vb)  # 调用 _vision_llm_ocr 读图并返回 markdown
-
-        # ---- PaddleOCR（带坐标） ----
-        from ocr import run_ocr  # 动态从独立 ocr 模块中导入核心 run_ocr 执行函数
-        
-        # 尝试进行模板对齐
+        # 尝试进行模板对齐 (无论是 PaddleOCR 还是视觉大模型，优先对齐能确保裁剪坐标一致且读图质量更佳)
         template_dir = os.path.join(os.path.dirname(__file__), "template")
         templates = [f for f in os.listdir(template_dir) if f.lower().endswith(".png")] if os.path.exists(template_dir) else []
         
@@ -711,7 +708,7 @@ class AgentTools:
                     import cv2
                     cv2.imwrite(aligned_path, aligned_img)
                     safe_print(f"[OCR] 特征点匹配对齐成功：使用 {t_file} 模板拉平")
-                    image_path = aligned_path  # 覆盖后续全图 OCR 扫描的源图片路径
+                    image_path = aligned_path  # 覆盖后续全图 OCR 扫描 of 源图片路径
                     AgentTools._last_image_path = aligned_path  # 覆盖缓存路径，确保之后的裁剪操作也使用对齐图
                     matched = True
                     break
@@ -719,6 +716,18 @@ class AgentTools:
             if not matched:
                 # 匹配失败，不进行任何降级，直接抛出异常提示用户
                 raise RuntimeError("上传的照片无法匹配到任何已注册的作业票模板（如带气作业票），请确保照片拍摄端正且清晰无遮挡，并重新上传正确的照片！")
+
+        # ---- 视觉大模型（无坐标） ----
+        if engine == "vision":  # 如果用户指定使用视觉大模型引擎
+            vb = vision_brain or brain  # 获取有效的视觉大模型实例
+            if vb is None:  # 如果没有可用的模型实例
+                raise RuntimeError("视觉大模型模式需要配置视觉模型 API")  # 抛出运行错误提示
+            _prog(10, f"视觉大模型读图中 ({vb.model_name})...")  # 触发 10% 进度更新
+            AgentTools._last_ocr_raw = ""  # 清空上一次的 OCR 缓存原文
+            return AgentTools._vision_llm_ocr(image_path, vb)  # 调用 _vision_llm_ocr 读图并返回 markdown
+
+        # ---- PaddleOCR（带坐标） ----
+        from ocr import run_ocr  # 动态从独立 ocr 模块中导入核心 run_ocr 执行函数
         
         _prog(15, "启动 PaddleOCR 扫描")  # 触发 15% 进度更新
         
