@@ -1241,7 +1241,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
 
     MAX_REFLECT_RETRIES = 2  # 校验失败时，大模型最大反思重试修正次数设为 2 次
 
-    def __init__(self, brain: LLMBrain, ocr_mode: str = "cluster", ocr_engine: str = "paddleocr", ocr_device: str = "cpu", progress_callback=None, vision_brain: LLMBrain = None, checklist_enabled: bool = False):  # 编排器构造函数，注入大脑实例、配置参数、推理设备及进度回调函数
+    def __init__(self, brain: LLMBrain, ocr_mode: str = "cluster", ocr_engine: str = "paddleocr", ocr_device: str = "cpu", progress_callback=None, vision_brain: LLMBrain = None):  # 编排器构造函数，注入大脑实例、配置参数、推理设备及进度回调函数
         self.brain = brain  # 绑定大模型推理大脑
         self.tools = AgentTools()  # 实例化本智能体持有的执行工具集类
         self.ocr_mode = ocr_mode  # 配置表格 OCR 识别模式
@@ -1249,7 +1249,6 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         self.ocr_device = ocr_device  # 绑定推理硬件设备类型（cpu 或 gpu）
         self._progress = progress_callback  # 绑定主线程前端进度显示回调
         self.vision_brain = vision_brain  # 绑定多模态视觉大模型大脑
-        self.checklist_enabled = checklist_enabled  # 是否启用打勾矩阵校验
 
     def _plan(self, image_path: str, mem: AgentMemory):  # 规划阶段：为新图片生成 ReAct 推理步骤计划并存入记忆体
         safe_print("[Agent Plan] 收到作业票照片，制定执行计划...")  # 控制台打印规划阶段日志
@@ -1325,72 +1324,22 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             else:  # 全部落实了
                 checks.append(("措施判定", True, "全部落实 OK"))  # 一致性成立，存入
 
-            # ---- 打勾矩阵校验 ----
-            checklist_violations = []
-            if self.checklist_enabled and data.ticket_type == "带气作业票" and image_path:
-                safe_print("[Agent Reflect] 执行打勾矩阵校验...")
-                try:
-                    from checklist_ocr import run_checklist_vision_ocr, validate_checklist
-                    cfg = load_config()
-                    v_api_key = cfg.get("vision_api_key", os.environ.get("VISION_API_KEY", ""))
-                    v_base_url = cfg.get("vision_base_url", os.environ.get("VISION_BASE_URL", ""))
-                    v_model = cfg.get("vision_model_name", os.environ.get("VISION_MODEL_NAME", "gemini-2.5-flash"))
-                    if v_api_key:
-                        checklist_result = run_checklist_vision_ocr(
-                            image_path=image_path,
-                            api_key=v_api_key,
-                            base_url=v_base_url,
-                            model_name=v_model,
-                        )
-                        checklist_violations = validate_checklist(checklist_result, required_rows=25)
-                        checklist_ok = len(checklist_violations) == 0
-                        checks.append(("打勾矩阵", checklist_ok, f"{'全部通过' if checklist_ok else f'{len(checklist_violations)}项不合规'}"))
-                        if not checklist_ok:
-                            for v in checklist_violations[:5]:
-                                safe_print(f"[Agent Reflect]   !! 打勾矩阵: {v['reason']}")
-                            if len(checklist_violations) > 5:
-                                safe_print(f"[Agent Reflect]   ... 共 {len(checklist_violations)} 项，仅显示前 5 项")
-                    else:
-                        safe_print("[Agent Reflect] 打勾矩阵校验跳过：未配置 vision_api_key")
-                except Exception as e:
-                    safe_print(f"[Agent Reflect] 打勾矩阵校验异常: {e}")
-
             all_pass = all(ok for _, ok, _ in checks)  # 统计各校验项是否全部检测通过
             for name, ok, detail in checks:  # 迭代校验项
                 safe_print(f"[Agent Reflect]   {'OK' if ok else '!!'} {name}: {detail}")  # 控制台打印校验详情条目
 
             if all_pass:  # 如果所有逻辑校对全部通过，无任何一致性冲突
-                safe_print("[Agent Reflect] 校验通过。")  # 终端打印校验成功通过日志
-                mem.remember("反思", "🔍", "校验数据完整性", f"{len(checks)}项全部通过")  # 将反思成功结果记入记忆中
-                # 打勾矩阵不合规项注入到 data.issues（走已有隐患处理流程）
-                if checklist_violations:
-                    for v in checklist_violations:
-                        data.issues.append(HandWrittenIssue(
-                            item_name=f"打勾矩阵-{v['item'][:30]}",
-                            status="异常",
-                            raw_text=v['reason'],
-                        ))
-                    if not data.has_abnormal:
-                        data.has_abnormal = True
-                return data  # 返回通过的高质量数据结构
+                safe_print("[Agent Reflect] 校验通过。")
+                mem.remember("反思", "🔍", "校验数据完整性", f"{len(checks)}项全部通过")
+                return data
 
             failed = [n for n, ok, _ in checks if not ok]  # 提取本次校验失败的规则项名称
             safe_print(f"[Agent Reflect] 未通过({', '.join(failed)})，第{attempt}次重试...")  # 打印失败警告日志及重试计数
             mem.remember("反思", "🔍", f"第{attempt}次重试", f"未通过: {', '.join(failed)}", status="retry")  # 记忆体记录重试事件
             hint = f"上次问题：{', '.join(failed)}。请严格按规则重新解析。"  # 组织引导大模型纠错的负反馈提示词
-            data = self.brain.extract_sheet_json(f"[重试] {hint}\n\n原文:\n{ocr_text}")  # 携带着负反馈提示词和大模型上次的幻觉输出，重新调用大模型脑解析
+            data = self.brain.extract_sheet_json(f"[重试] {hint}\n\n原文:\n{ocr_text}")
 
-        # 达到最大重试后，仍尝试注入打勾矩阵违规项
-        if checklist_violations:
-            for v in checklist_violations:
-                data.issues.append(HandWrittenIssue(
-                    item_name=f"打勾矩阵-{v['item'][:30]}",
-                    status="异常",
-                    raw_text=v['reason'],
-                ))
-            if not data.has_abnormal:
-                data.has_abnormal = True
-        safe_print("[Agent Reflect] 达到最大重试，标记高风险。")  # 多轮反思纠错仍不合规，触发最大限制
+        safe_print("[Agent Reflect] 达到最大重试，标记高风险。")
         mem.remember("反思", "🔍", "最大重试", "标记高风险", status="error")  # 记忆体记录异常归档
         return data  # 返回未完全修正的数据，留待 L3 条件路由决策拦截
 
