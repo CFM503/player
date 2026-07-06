@@ -192,6 +192,17 @@ with st.sidebar:  # 进入侧边栏渲染上下文本环境
         if not vision_model_name:  # 检查如果用户在此处清空了视觉模型名称
             st.warning("⚠️ 请配置视觉模型名称")  # 在下方给出黄色的警告气泡框提醒
 
+    # 打勾矩阵校验开关
+    st.markdown("---")
+    checklist_enabled = st.checkbox(
+        "✅ 启用打勾矩阵校验",
+        value=_cfg.get("checklist_enabled", False),
+        key="_checklist_enabled",
+        help="针对带气作业票，用视觉大模型逐格校验「检查内容确认矩阵」中5列打勾状态 "
+             "（作业人/施工方现场负责人/监理人员/项目公司/带气现场负责人）。"
+             "默认关闭，避免影响现有流程速度。"
+    )
+
     # 代理服务器设置
     proxy_enabled = st.checkbox("🌐 使用代理访问 AI 模型", value=bool(_cfg.get("proxy", "")), key="_proxy_on", help="勾选后通过代理服务器访问 Google/Gemini 等海外 AI 模型")  # 提供代理使能多选复选框
     proxy_url = ""  # 初始化代理地址变量为空
@@ -222,7 +233,7 @@ with st.sidebar:  # 进入侧边栏渲染上下文本环境
         _cfg["vision_model_name"] = vision_model_name  # 保存视觉模型的名字参数
         _cfg["proxy"] = proxy_url if proxy_enabled else ""  # 根据代理勾选状态写入代理字符串或清空配置
         _cfg["dingtalk_mcp_url"] = st.session_state.get("_dd", _cfg.get("dingtalk_mcp_url", ""))  # 保存写入 of 钉钉 MCP 数据库网关地址
-        _cfg["ocr_mode"] = ocr_mode  # 保存 OCR 模式配置
+        _cfg["checklist_enabled"] = st.session_state.get("_checklist_enabled", False)  # 保存打勾矩阵校验开关状态
         _cfg["ocr_engine"] = ocr_engine  # 保存 OCR 引擎配置
         _cfg["ocr_device"] = ocr_device  # 保存 OCR 推理硬件设备配置 (cpu/gpu)
         # 将配置同步到全局 Python 环境变量，保证 Agent 可直接读取
@@ -371,7 +382,7 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
                 st.error("❌ 视觉大模型引擎需要配置视觉模型名称")  # 终端及界面报错并阻断
                 st.stop()  # 页面执行断点
             vision_brain = LLMBrain(api_key=vk, base_url=vu, model_name=vm, proxy=_proxy)  # 实例化专属视觉大模型大脑
-        agent = SecurityAgent(brain=brain, ocr_mode=ocr_mode, ocr_engine=ocr_engine, ocr_device=ocr_device, vision_brain=vision_brain)  # 传入各级大脑及模式和设备以构造 Agent 主代理
+        agent = SecurityAgent(brain=brain, ocr_mode=ocr_mode, ocr_engine=ocr_engine, ocr_device=ocr_device, vision_brain=vision_brain, checklist_enabled=st.session_state.get("_checklist_enabled", False))  # 传入各级大脑及模式和设备以构造 Agent 主代理
         st.session_state.results = []  # 重置并清空历史处理结果列表，只显示本次全新任务的结果
 
         # ---- 上传并持久化保存文件至 uploads 文件夹 ----
@@ -576,15 +587,15 @@ with tab2:  # 进入第二个 Tab 页签渲染上下文环境
         try:  # 开启数据库异常监视防护
             conn = sqlite3.connect(db_path)  # 建立与 security_data.db 数据库的连接句柄
             try:  # 开启首次数据拉取
-                rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,approval_opinion,risk_level,approval_status,approval_level,created_at,image_path FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()  # 降序查询所有安全监督归档行
+                rows_db = conn.execute("SELECT id,ticket_id,station_name,content,work_time,worker_id,check_date,has_abnormal,approval_opinion,risk_level,approval_status,approval_level,created_at,image_path FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()  # 降序查询所有安全监督归档行
             except Exception:  # 若查询发生字段异常（例如旧库结构版本不一致）
                 try:  # 尝试兼容查询
-                    rows_db = conn.execute("SELECT id,ticket_id,station_name,worker_id,check_date,has_abnormal,approval_opinion,risk_level,approval_status,approval_level,created_at,image_path FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()  # 降序查询
+                    rows_db = conn.execute("SELECT id,ticket_id,station_name,content,work_time,worker_id,check_date,has_abnormal,approval_opinion,risk_level,approval_status,approval_level,created_at,image_path FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()  # 降序查询
                 except Exception:  # 二次失败说明库表损坏
                     rows_db = []  # 重置数据列表为空
 
             total = len(rows_db)  # 计算库内已存储的作业票总数记录行数
-            abn_cnt = sum(1 for r in rows_db if r[5])  # 计算字段 has_abnormal(位置5) 值为真的高危隐患记录数
+            abn_cnt = sum(1 for r in rows_db if r[7])  # 计算字段 has_abnormal(位置7) 值为真的高危隐患记录数
 
             # 全局指标大横幅卡片组渲染展示
             render_kpi_row([  # 调用 KPI 卡片组件展示看板四大核心总统计数
@@ -653,15 +664,17 @@ with tab2:  # 进入第二个 Tab 页签渲染上下文环境
             rid = row[0]  # 提取数据库自增唯一 ID 号 rid
             ticket = row[1]  # 提取历史识别所得票号 ticket_id
             station = row[2]  # 提取场站中文名称 station_name
-            worker = row[3]  # 提取填表人姓名/工号 worker_id
-            date = row[4]  # 提取自检日期数据 check_date
-            abnormal = row[5]  # 提取是否存在隐患的布尔标记 has_abnormal (0/1)
-            opinion = row[6]  # 提取智能决策审核意见 approval_opinion
-            risk = row[7]  # 提取安全风险级别评估文字 risk_level
-            ap_status = row[8]  # 提取智能审批流的当前状态
-            ap_level = row[9]  # 提取智能审批审批人的建议级别
-            created = row[10]  # 提取数据库记录插入时间戳字符串 created_at
-            img_path = row[11]  # 提取原始作业票图片在本地硬盘的实际存放物理路径
+            content = row[3]  # 提取作业内容
+            work_time = row[4]  # 提取作业时间
+            worker = row[5]  # 提取填表人姓名/工号 worker_id
+            date = row[6]  # 提取自检日期数据 check_date
+            abnormal = row[7]  # 提取是否存在隐患的布尔标记 has_abnormal (0/1)
+            opinion = row[8]  # 提取智能决策审核意见 approval_opinion
+            risk = row[9]  # 提取安全风险级别评估文字 risk_level
+            ap_status = row[10]  # 提取智能审批流的当前状态
+            ap_level = row[11]  # 提取智能审批审批人的建议级别
+            created = row[12]  # 提取数据库记录插入时间戳字符串 created_at
+            img_path = row[13]  # 提取原始作业票图片在本地硬盘的实际存放物理路径
             
             if search and search.lower() not in (ticket or "").lower():  # 检查如果开启了搜索框检索，且当前行票号并不匹配所查文字
                 continue  # 跳过这一行，不予以渲染展示
@@ -673,7 +686,7 @@ with tab2:  # 进入第二个 Tab 页签渲染上下文环境
             with cm:  # 记录信息大折叠面板列
                 with st.expander(f"{icon} #{rid} | {ticket} | {station} | {date}{badge_md}", expanded=False):  # 新建默认折叠的 Expander 面板，头包含票号场站及彩色风险级标签
                     ca, cb = st.columns(2)  # 折叠内部左右 1:1 分栏以对齐排版
-                    with ca: st.markdown(f"**票号** {ticket}  \n**场站** {station}  \n**动火人** {worker}  \n**日期** {date}")  # 左侧输出识别提取的基本信息
+                    with ca: st.markdown(f"**票号** {ticket}  \n**作业单位** {station}  \n**作业时间** {work_time}  \n**作业内容** {content}  \n**动火人** {worker}  \n**日期** {date}")  # 左侧输出识别提取的基本信息
                     with cb:  # 右侧栏
                         st.markdown(f"**状态** {'🔴 有隐患' if abnormal else '🟢 正常'}")  # 高亮输出隐患等级状态
                         if risk: st.markdown(f"**风险** {risk}")  # 输出风险评级数据

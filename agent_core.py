@@ -251,7 +251,8 @@ class SecuritySheetData(BaseModel):  # 定义包含完整作业票所有要素�
     ticket_type: str = Field(default="动火作业票", description="作业票类型，例如：动火作业票/带气作业票")  # 作业票类型分类字段
     ticket_id: str = Field(..., description="作业票编号")  # 作业票物理编号，如 MDJ2025xxxx
     station_name: str = Field(..., description="地点/场站")  # 作业现场场站或所属管理所名称
-    content: str = Field(..., description="作业内容/动火内容")  # 作业的具体施工及动火范围内容
+    content: str = Field(..., description="作业内容")  # 作业的具体施工内容
+    work_time: str = Field(default="", description="作业时间")  # 作业执行的时段或时间范围
     worker_id: str = Field(..., description="作业人员姓名及证件号/证书编号")  # 作业班组人员证件工号
     check_date: str = Field(..., description="日期 YYYY-MM-DD")  # 表单签署并自检的年月日日期
     gas_concentration: List[float] = Field(default=[], description="各时段可燃气体浓度(%)，若无此表则填空数组")  # 气体成分检测浓度列表，允许为空
@@ -278,7 +279,10 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
         import httpx  # 导入 httpx 异步库以定制带有代理参数的客户端
         kwargs = dict(api_key=api_key, base_url=base_url, timeout=120.0)  # 打包基础的 API 初始化键值参数
         if proxy:  # 检查是否要求使用代理服务器连接大模型 API 终点
-            kwargs["http_client"] = httpx.Client(proxy=proxy, timeout=120.0)  # 使用 httpx 自带代理构造同步客户端实例
+            proxy_str = proxy.strip()
+            if "://" not in proxy_str:
+                proxy_str = f"http://{proxy_str}"
+            kwargs["http_client"] = httpx.Client(proxy=proxy_str, timeout=120.0)  # 使用 httpx 自带代理构造同步客户端实例
         self.client = OpenAI(**kwargs)  # 实例化并缓存 OpenAI 协议客户端
         self.model_name = model_name  # 记录大模型名称，如 qwen-2.5
 
@@ -309,21 +313,28 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
                     ticket_id = m_num.group(1)  # 提取出编号
         if ticket_id:  # 若票号字元非空
             ticket_id = re.sub(r"\s+", "", str(ticket_id))  # 使用正则剔除票号内部所有不小心的空白和换行符
-        raw_dict["ticket_id"] = ticket_id or "MDJ2025112101"  # 保存修正后票号，若空则填入一个测试用默认假票号进行兜底
+        # 安全审计: 禁止造假兜底 —— 票号缺失则置空串，交由 _reflect 反思阶段复判拦截，不填假票号骗过校验
+        raw_dict["ticket_id"] = ticket_id or ""  # 保存修正后票号，缺失留空由反思阶段触发重试
 
         # 3. 基础文本字段提取/清洗 (station_name, content, worker_id)
-        for field in ["station_name", "content", "worker_id"]:  # 循环迭代这三个核心基础文本框字段名
+        # 安全审计: 禁止「未知场站/未知作业内容/未知作业人员」造假占位。OCR 抠不到则留空串，
+        # 交由 _reflect 反思阶段与下游判定拦截，绝不编造内容蒙混过关。
+
+        for field in ["station_name", "content", "work_time", "worker_id"]:  # 循环迭代这四项核心基础文本字段
             val = raw_dict.get(field, "")  # 尝试从 LLM 解析得出的字段值字典中获取该项的值
             if not val or str(val).lower() in ["null", "none", "未知", ""]:  # 判断是否属于缺失或被 LLM 写了未知的非有效内容
                 if field == "station_name":  # 若场站地点字段缺失
-                    m = re.search(r"(?:地点|场站|部位)[：:]?\s*([^\n]+)", ocr_text)  # 从 OCR 中正则搜索地点场站关键字后面的行内容
-                    val = m.group(1).strip() if m else "未知场站"  # 命中时获取过滤空格值，否则填未知场站
+                    m = re.search(r"(?:地点|场站|部位|单位)[：:]?\s*([^\n]+)", ocr_text)  # 从 OCR 中正则搜索地点场站关键字后面的行内容
+                    val = m.group(1).strip() if m else ""  # 命中时取值，否则留空串，不填造假占位
                 elif field == "content":  # 若施工作业内容字段缺失
                     m = re.search(r"(?:内容|作业内容|动火内容)[：:]?\s*([^\n]+)", ocr_text)  # 正则获取作业内容行
-                    val = m.group(1).strip() if m else "未知作业内容"  # 命中时赋值，否则填未知内容
+                    val = m.group(1).strip() if m else ""  # 命中时赋值，否则留空串，不填造假占位
+                elif field == "work_time":  # 若作业时间字段缺失
+                    m = re.search(r"(?:作业时间|施工时间|动火时间)[：:]?\s*([^\n]+)", ocr_text)  # 正则搜索作业时间行
+                    val = m.group(1).strip() if m else ""  # 命中时取值，否则留空串，不填造假占位
                 elif field == "worker_id":  # 若作业人或证书字段缺失
                     m = re.search(r"(?:作业人员|动火人|作业人|证书编号)[：:]?\s*([^\n]+)", ocr_text)  # 正则搜索作业人姓名
-                    val = m.group(1).strip() if m else "未知作业人员"  # 命中包装，否则填未知作业人
+                    val = m.group(1).strip() if m else ""  # 命中包装，否则留空串，不填造假占位
             raw_dict[field] = str(val).strip()  # 将清洗后的文本强转为纯净的剥离空白后的字符串保存入字典
 
         # 4. 规范化日期 YYYY-MM-DD
@@ -341,7 +352,8 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             if m:  # 匹配到
                 y, m_val, d_val = m.groups()  # 解包年日月数据
                 clean_date = f"{y}-{int(m_val):02d}-{int(d_val):02d}"  # 拼装为标准时间串
-        raw_dict["check_date"] = clean_date or "2025-11-21"  # 保存合法日期，若失败则提供默认日期兜底防报错
+        # 安全审计: 禁止造假兜底 —— 日期缺失则置空串，交由 _reflect 与下游处理，不填默认假日期
+        raw_dict["check_date"] = clean_date or ""  # 保存清洗后日期，缺失留空不作伪
 
         # 5. 规范化气体检测浓度 (gas_concentration)
         raw_concs = raw_dict.get("gas_concentration", [])  # 获取 LLM 提取的浓度数据字段，通常是个浮点数组
@@ -382,11 +394,12 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             elif h_status is False:  # 算法判定物理状态为假未落实
                 impl = False  # 设置状态为 False
             else:  # 若算法对这串文字在 OCR 中没有定位到或返回 None 悬而未决
-                # 则降级参考大模型的逻辑，如果大模型明确标记了未落实，以大模型为主；否则默认 True 以免错判误报
-                if llm_measures.get(mid) is False:  # 大模型记录了 False
-                    impl = False  # 采信大模型标记未落实
-                else:  # 其他普通情况
-                    impl = True  # 判定默认通过以降低误报
+                # 安全审计: OCR 看不清且 LLM 也未明确标记时，一律判「未落实」(False)，
+                # 宁可误报隐患触发整改，绝不默认放过任一安全措施。注释掉旧的「默认 True」放权兜底。
+                if llm_measures.get(mid) is True:  # 仅当大模型明确标记「已落实」才采信 True
+                    impl = True  # 采信大模型标记已落实
+                else:  # 其他全部情况（未标记 / 标记 False / OCR 丢失）
+                    impl = False  # 安全审计: 默认未落实，触发隐患上报
             
             sanitized_measures.append({  # 将重组后的措施字典加入措施数组中
                 "measure_id": mid,  # 措施条款编号
@@ -454,9 +467,10 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             "精准解析并提取为以下 JSON 结构：\n"
             "{\n"
             '  "ticket_type": "作业票类型，填“动火作业票”或“带气作业票”",\n'
-            '  "ticket_id": "作业票编号（如 MDJ2R2025011007 或 1NDJZR2026004001）",\n'
-            '  "station_name": "地点/场站/单位",\n'
-            '  "content": "作业内容/动火内容",\n'
+            '  "ticket_id": "作业票编号（如 MDJZR2025011007 或 MDJZR2026004001）",\n'
+            '  "station_name": "作业单位",\n'
+            '  "content": "作业内容",\n'
+            '  "work_time": "作业时间",\n'
             '  "worker_id": "作业人员姓名及证件号/证书编号",\n'
             '  "check_date": "日期 YYYY-MM-DD",\n'
             '  "gas_concentration": [所有检测浓度数值的数组，如 [0.0, 0.0] 或 []]\n'
@@ -491,9 +505,9 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
                 try:  # 开启二级转换尝试
                     raw_dict = json.loads(m.group(1))  # 转换大括号提取段
                 except Exception:  # 若二级转换也失败
-                    raw_dict = {}  # 兜底将词典置为空字典
+                    raise ValueError("LLM 返回的 JSON 结构非法，安全审计拒绝静默兜底为空字典通过")  # 安全审计: 禁止造假兜底，提取彻底失败即抛错拦截
             else:  # 若正则未命中
-                raw_dict = {}  # 兜底将词典置为空字典
+                raise ValueError("LLM 未返回可解析的 JSON 结构，安全审计拒绝静默兜底为空字典通过")  # 安全审计: 禁止造假兜底，提取彻底失败即抛错拦截
 
         sanitized = self._sanitize_sheet_data(raw_dict, ocr_text)  # 调用 _sanitize_sheet_data 使用 Python + OCR 规则进行全面的重构重构和校验
         return SecuritySheetData(**sanitized)  # 将校验规整后的字典转换为安全 Pydantic 模型 SecuritySheetData 并返回结果
@@ -886,7 +900,7 @@ class AgentTools:
             CREATE TABLE IF NOT EXISTS hse_fire_work_tickets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ticket_id TEXT NOT NULL, station_name TEXT NOT NULL,
-                content TEXT NOT NULL, worker_id TEXT NOT NULL,
+                content TEXT NOT NULL, work_time TEXT, worker_id TEXT NOT NULL,
                 check_date TEXT NOT NULL, gas_concentration_json TEXT,
                 safety_measures_json TEXT, has_abnormal INTEGER NOT NULL,
                 issues_json TEXT, completion_time TEXT, approver_name TEXT,
@@ -898,19 +912,19 @@ class AgentTools:
         # 自动迁移：给旧表补列
         existing = {row[1] for row in conn.execute("PRAGMA table_info(hse_fire_work_tickets)").fetchall()}
         for col, typ in [("approval_opinion", "TEXT"), ("risk_level", "TEXT"), ("image_path", "TEXT"),
-                         ("approval_status", "TEXT"), ("approval_level", "TEXT")]:
+                         ("approval_status", "TEXT"), ("approval_level", "TEXT"), ("work_time", "TEXT")]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE hse_fire_work_tickets ADD COLUMN {col} {typ}")
                 safe_print(f"[Tool] 旧表迁移：新增列 {col}")
 
         conn.execute(
             "INSERT INTO hse_fire_work_tickets "
-            "(ticket_id,station_name,content,worker_id,check_date,"
+            "(ticket_id,station_name,content,work_time,worker_id,check_date,"
             "gas_concentration_json,safety_measures_json,has_abnormal,"
             "issues_json,completion_time,approver_name,approval_opinion,risk_level,"
             "approval_status,approval_level,raw_ocr_text,image_path) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (data.ticket_id, data.station_name, data.content, data.worker_id,
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (data.ticket_id, data.station_name, data.content, data.work_time, data.worker_id,
              data.check_date, json.dumps(data.gas_concentration, ensure_ascii=False),
              json.dumps([m.model_dump() for m in data.safety_measures], ensure_ascii=False),
              int(data.has_abnormal),
@@ -1174,7 +1188,7 @@ class AgentTools:
         image_path = getattr(AgentTools, "_last_image_path", "")
         if not image_path or not os.path.exists(image_path):
             safe_print(f"[Tool] extract_filler_name 失败: 图片路径无效或不存在: {image_path}")
-            return "坐标识别图片未知"
+            return ""  # 安全审计: 禁止「坐标识别图片未知」造假占位，留空由调用方判定
             
         safe_print(f"[Tool] extract_filler_name 触发局部裁剪 OCR: x={tx}, y={ty}, w={tw}, h={th}")
         crop_text = AgentTools._ocr_crop_region(image_path, tx, ty, tw, th)
@@ -1190,7 +1204,7 @@ class AgentTools:
             if name_m:
                 return name_m.group(1)
             return clean_text.strip()
-        return "未知"
+        return ""  # 安全审计: 禁止「未知」造假占位，OCR 识别不到人名则留空串
 
 
 # ==========================================
@@ -1287,7 +1301,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
 
     MAX_REFLECT_RETRIES = 2  # 校验失败时，大模型最大反思重试修正次数设为 2 次
 
-    def __init__(self, brain: LLMBrain, ocr_mode: str = "cluster", ocr_engine: str = "paddleocr", ocr_device: str = "cpu", progress_callback=None, vision_brain: LLMBrain = None):  # 编排器构造函数，注入大脑实例、配置参数、推理设备及进度回调函数
+    def __init__(self, brain: LLMBrain, ocr_mode: str = "cluster", ocr_engine: str = "paddleocr", ocr_device: str = "cpu", progress_callback=None, vision_brain: LLMBrain = None, checklist_enabled: bool = False):  # 编排器构造函数，注入大脑实例、配置参数、推理设备及进度回调函数
         self.brain = brain  # 绑定大模型推理大脑
         self.tools = AgentTools()  # 实例化本智能体持有的执行工具集类
         self.ocr_mode = ocr_mode  # 配置表格 OCR 识别模式
@@ -1295,6 +1309,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         self.ocr_device = ocr_device  # 绑定推理硬件设备类型（cpu 或 gpu）
         self._progress = progress_callback  # 绑定主线程前端进度显示回调
         self.vision_brain = vision_brain  # 绑定多模态视觉大模型大脑
+        self.checklist_enabled = checklist_enabled  # 是否启用打勾矩阵校验
 
     def _plan(self, image_path: str, mem: AgentMemory):  # 规划阶段：为新图片生成 ReAct 推理步骤计划并存入记忆体
         safe_print("[Agent Plan] 收到作业票照片，制定执行计划...")  # 控制台打印规划阶段日志
@@ -1324,7 +1339,21 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         safe_print("[Agent Reason] LLM 语义分析...")  # 打印推理阶段日志
         sim = _ProgressSim(self._progress, 55, 80, "LLM 语义分析中", 2, 1.0)  # 实例化推理进度模拟器线程，进度从 55% 到 80%
         sim.start()  # 开启平滑更新进度线程
-        data = self.brain.extract_sheet_json(ocr_text)  # 调用大模型执行 JSON 语义结构化提取
+        try:  # 安全审计: 提取彻底失败不再静默造假，捕获并转成明确的高风险失败体交由反思/执行拦截
+            data = self.brain.extract_sheet_json(ocr_text)  # 调用大模型执行 JSON 语义结构化提取
+        except Exception as e:  # LLM 返回无法解析或网络异常
+            safe_print(f"[Agent Reason] LLM 提取失败，标记高风险拦截: {e}")  # 打印失败原因，不造假兜底
+            mem.remember("推理", "⚠️", "LLM 提取失败", f"高风险拦截: {e}", status="error")  # 记忆体记录提取失败
+            sim.done()  # 停止模拟线程
+            data = SecuritySheetData(  # 构造明确的高风险失败体，has_abnormal=True 强制走暂缓/拦截分支
+                ticket_type="动火作业票",  # 安全审计: 失败回退默认票型仅为构造合法对象，不影响审批结果(已标异常)
+                ticket_id="LLM提取失败",  # 占位票号，标记异常来源
+                station_name="", content="", work_time="", worker_id="",  # 关键字段一律留空，绝不编造
+                check_date="", gas_concentration=[],  # 日期与浓度留空
+                safety_measures=[], has_abnormal=True,  # 强制异常，触发下游暂缓
+                issues=[{"item_name": "LLM 结构化提取失败", "status": "异常", "raw_text": str(e)}],  # 隐患明细记录失败原因
+            )
+            return data  # 直接返回失败体，跳过后续正常路径
         sim.done()  # 停止模拟线程，进度直接推进到 80%
         summary = (f"票号={data.ticket_id} | 场站={data.station_name} | "  # 汇总推理核心要素
                    f"浓度={data.gas_concentration} | 措施={len(data.safety_measures)}项 | "  # 浓度和条款数
@@ -1333,7 +1362,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         mem.remember("推理", "🤔", "LLM 结构化解析", summary)  # 将推理阶段记录进记忆体
         return data  # 返回 Pydantic 数据实例
 
-    def _reflect(self, ocr_text: str, data: SecuritySheetData, mem: AgentMemory) -> SecuritySheetData:  # 反思阶段：核心自我修正。对模型抽取的要素进行多项逻辑一致性强校验，若不符则自动重试修改
+    def _reflect(self, ocr_text: str, data: SecuritySheetData, mem: AgentMemory, image_path: str = "") -> SecuritySheetData:  # 反思阶段：核心自我修正。对模型抽取的要素进行多项逻辑一致性强校验，若不符则自动重试修改
         safe_print("[Agent Reflect] 校验数据完整性...")  # 打印反思阶段开始日志
         for attempt in range(1, self.MAX_REFLECT_RETRIES + 1):  # 开启反思纠错循环，最大重试 MAX_REFLECT_RETRIES 次
             checks = []  # 新建单轮校验结果收集列表，每个元素为 (检查项, 是否OK, 说明字串)
@@ -1356,6 +1385,36 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             else:  # 全部落实了
                 checks.append(("措施判定", True, "全部落实 OK"))  # 一致性成立，存入
 
+            # ---- 打勾矩阵校验 ----
+            checklist_violations = []
+            if self.checklist_enabled and data.ticket_type == "带气作业票" and image_path:
+                safe_print("[Agent Reflect] 执行打勾矩阵校验...")
+                try:
+                    from checklist_ocr import run_checklist_vision_ocr, validate_checklist
+                    cfg = load_config()
+                    v_api_key = cfg.get("vision_api_key", os.environ.get("VISION_API_KEY", ""))
+                    v_base_url = cfg.get("vision_base_url", os.environ.get("VISION_BASE_URL", ""))
+                    v_model = cfg.get("vision_model_name", os.environ.get("VISION_MODEL_NAME", "gemini-2.5-flash"))
+                    if v_api_key:
+                        checklist_result = run_checklist_vision_ocr(
+                            image_path=image_path,
+                            api_key=v_api_key,
+                            base_url=v_base_url,
+                            model_name=v_model,
+                        )
+                        checklist_violations = validate_checklist(checklist_result, required_rows=25)
+                        checklist_ok = len(checklist_violations) == 0
+                        checks.append(("打勾矩阵", checklist_ok, f"{'全部通过' if checklist_ok else f'{len(checklist_violations)}项不合规'}"))
+                        if not checklist_ok:
+                            for v in checklist_violations[:5]:
+                                safe_print(f"[Agent Reflect]   !! 打勾矩阵: {v['reason']}")
+                            if len(checklist_violations) > 5:
+                                safe_print(f"[Agent Reflect]   ... 共 {len(checklist_violations)} 项，仅显示前 5 项")
+                    else:
+                        safe_print("[Agent Reflect] 打勾矩阵校验跳过：未配置 vision_api_key")
+                except Exception as e:
+                    safe_print(f"[Agent Reflect] 打勾矩阵校验异常: {e}")
+
             all_pass = all(ok for _, ok, _ in checks)  # 统计各校验项是否全部检测通过
             for name, ok, detail in checks:  # 迭代校验项
                 safe_print(f"[Agent Reflect]   {'OK' if ok else '!!'} {name}: {detail}")  # 控制台打印校验详情条目
@@ -1363,6 +1422,16 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             if all_pass:  # 如果所有逻辑校对全部通过，无任何一致性冲突
                 safe_print("[Agent Reflect] 校验通过。")  # 终端打印校验成功通过日志
                 mem.remember("反思", "🔍", "校验数据完整性", f"{len(checks)}项全部通过")  # 将反思成功结果记入记忆中
+                # 打勾矩阵不合规项注入到 data.issues（走已有隐患处理流程）
+                if checklist_violations:
+                    for v in checklist_violations:
+                        data.issues.append(HandWrittenIssue(
+                            item_name=f"打勾矩阵-{v['item'][:30]}",
+                            status="异常",
+                            raw_text=v['reason'],
+                        ))
+                    if not data.has_abnormal:
+                        data.has_abnormal = True
                 return data  # 返回通过的高质量数据结构
 
             failed = [n for n, ok, _ in checks if not ok]  # 提取本次校验失败的规则项名称
@@ -1371,6 +1440,16 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             hint = f"上次问题：{', '.join(failed)}。请严格按规则重新解析。"  # 组织引导大模型纠错的负反馈提示词
             data = self.brain.extract_sheet_json(f"[重试] {hint}\n\n原文:\n{ocr_text}")  # 携带着负反馈提示词和大模型上次的幻觉输出，重新调用大模型脑解析
 
+        # 达到最大重试后，仍尝试注入打勾矩阵违规项
+        if checklist_violations:
+            for v in checklist_violations:
+                data.issues.append(HandWrittenIssue(
+                    item_name=f"打勾矩阵-{v['item'][:30]}",
+                    status="异常",
+                    raw_text=v['reason'],
+                ))
+            if not data.has_abnormal:
+                data.has_abnormal = True
         safe_print("[Agent Reflect] 达到最大重试，标记高风险。")  # 多轮反思纠错仍不合规，触发最大限制
         mem.remember("反思", "🔍", "最大重试", "标记高风险", status="error")  # 记忆体记录异常归档
         return data  # 返回未完全修正的数据，留待 L3 条件路由决策拦截
@@ -1598,7 +1677,12 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             m = re.search(r"(?:编号|NO\.?|No\.?)[：:]?\s*([A-Za-z0-9]+)", ocr_text)
             if m:
                 ticket_id = m.group(1)
-        ticket_id = re.sub(r"\s+", "", ticket_id) if ticket_id else "未知票号"
+        # 安全审计: 禁止「未知票号」造假兜底，缺票号则归档失败，不编造占位
+        if not ticket_id:
+            safe_print("[Agent Archive] 票号缺失，无法归档，跳过")
+            return
+        ticket_id = re.sub(r"\s+", "", ticket_id)  # 剔除票号内部空白
+        # 安全审计: 禁止「未知票号」造假兜底，缺票号则归档失败，不编造占位
 
         prefix = f"{ticket_id}_{ts}"
 
@@ -1654,7 +1738,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         if prog: prog(55, "推理阶段")
         data = self._reason(ocr_text, mem)
         if prog: prog(80, "反思阶段")
-        data = self._reflect(ocr_text, data, mem)
+        data = self._reflect(ocr_text, data, mem, image_path=image_path)
         if prog: prog(88, "执行阶段")
         self._act(data, ocr_text, mem, image_path=image_path)
         if prog: prog(96, "生成报告")
