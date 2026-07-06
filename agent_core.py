@@ -194,21 +194,75 @@ def check_measure_status_in_ocr(ocr_text: str, desc: str, ticket_type: str) -> O
     
     std_list = STANDARD_MEASURES.get(ticket_type, [])  # 获取该作业票类型对应的所有法定防范条款定义
     best_idx = -1  # 初始化最佳匹配在行列表中的索引位置为 -1
-    for idx, line in enumerate(lines):  # 迭代每一行 OCR 文字
-        norm_line = re.sub(r"[^\w\u4e00-\u9fa5]", "", line)  # 剔除行内的非字元符号以归一化
-        if len(norm_line) > 5 and (norm_line in norm_desc or norm_desc[:12] in norm_line or norm_line[:12] in norm_desc):  # 进行长度和前缀子串双重模糊匹配
-            best_idx = idx  # 判定匹配成功，记录下该行的索引序号 idx
-            break  # 停止循环
-            
-    if best_idx == -1:  # 若第一轮严格前缀匹配未成功
-        for idx, line in enumerate(lines):  # 进行第二轮更大范围的前 6 字短字串模糊检索
-            norm_line = re.sub(r"[^\w\u4e00-\u9fa5]", "", line)  # 归一化该行
-            if len(norm_line) > 4 and (norm_desc[:6] in norm_line or norm_line[:6] in norm_desc):  # 检查是否包含前 6 个汉字
-                best_idx = idx  # 匹配成功，记录索引
-                break  # 停止循环
+    
+    # 优先使用最长公共子串启发式匹配，抗 OCR 识别/轻微错字能力强
+    match_len = max(5, min(8, len(norm_desc)))
+    for idx, line in enumerate(lines):
+        norm_line = re.sub(r"[^\w\u4e00-\u9fa5]", "", line)
+        if len(norm_line) >= match_len:
+            has_common = False
+            for i in range(len(norm_desc) - match_len + 1):
+                sub = norm_desc[i:i+match_len]
+                if sub in norm_line:
+                    has_common = True
+                    break
+            if has_common:
+                best_idx = idx
+                break
                 
     if best_idx != -1:  # 若最终定位到了条款在 OCR 原文中的具体行位置
-        # 向下寻找 3 行以内的数据，提取打勾/打叉/写有状态字样的勾选框行
+        matched_line = lines[best_idx]
+        
+        # 1. 优先对齐并支持 Markdown 单元格内的符号提取
+        if "|" in matched_line:
+            parts = [p.strip() for p in matched_line.split("|")]
+            if parts and parts[0] == "":
+                parts.pop(0)
+            if parts and parts[-1] == "":
+                parts.pop()
+            
+            best_part_idx = -1
+            best_match_len = 0
+            for p_idx, part in enumerate(parts):
+                part_norm = re.sub(r"[^\w\u4e00-\u9fa5]", "", part)
+                intersection = len(set(part_norm) & set(norm_desc))
+                if intersection > best_match_len:
+                    best_match_len = intersection
+                    best_part_idx = p_idx
+            
+            if best_part_idx != -1:
+                check_cols = parts[best_part_idx + 1:]
+                if check_cols:
+                    has_neg = False
+                    has_pos = False
+                    for col in check_cols:
+                        col_lower = col.lower()
+                        col_upper = col.upper()
+                        if any(x in col_lower for x in ["×", "x", "未落实", "不适用", "/", "\\"]):
+                            has_neg = True
+                        if any(x in col_upper for x in ["✓", "√", "v", "7", "1", "j", "已落实", "是"]):
+                            has_pos = True
+                    
+                    if has_neg:
+                        return False
+                    if has_pos:
+                        return True
+
+        # 2. 对非 Markdown 表格但符号与文字处在同行的规则进行清洗后校验
+        clean_desc_chars = set(norm_desc)
+        line_remaining = []
+        for char in matched_line:
+            if char not in clean_desc_chars and char not in ["第", "条", "项"]:
+                line_remaining.append(char)
+        remaining_str = "".join(line_remaining).strip()
+        remaining_lower = remaining_str.lower()
+        remaining_upper = remaining_str.upper()
+        if any(x in remaining_lower for x in ["×", "x", "未落实", "不适用", "/", "\\"]):
+            return False
+        if any(x in remaining_upper for x in ["✓", "√", "v", "7", "1", "j", "已落实", "是"]):
+            return True
+
+        # 3. 兼容原有逻辑：向下寻找 3 行以内的数据，提取打勾/打叉/写有状态字样的勾选框行
         for offset in range(1, 4):  # 检索偏移量从 1 到 3
             if best_idx + offset < len(lines):  # 确保行号不超出 lines 数组范围
                 next_line = lines[best_idx + offset]  # 获取向下偏移后的具体行内容
@@ -387,19 +441,51 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
         has_abnormal = False  # 初始化作业票总隐患状态标志为 False
         unimplemented_ids = []  # 新建待存未落实条款编号的临时列表
 
+        # 新增规则：带气作业票，25条都有笔迹时，审批这25条合格
+        all_25_have_handwriting = False
+        if ticket_type == "带气作业票" and "--- 纯本地 OpenCV 像素密度提取结果 ---" in ocr_text:
+            lines = ocr_text.split("\n")
+            in_block = False
+            fallback_lines = []
+            for line in lines:
+                if "--- 纯本地 OpenCV 像素密度提取结果 ---" in line:
+                    in_block = True
+                    continue
+                if "----------------------------------" in line and in_block:
+                    in_block = False
+                    break
+                if in_block:
+                    fallback_lines.append(line.strip())
+            
+            matched_measures_with_handwriting = set()
+            for f_line in fallback_lines:
+                m = re.match(r"第(\d+)条[：:]\s*(.*)", f_line)
+                if m:
+                    mid_val = int(m.group(1))
+                    content_val = m.group(2)
+                    if "(有笔迹)" in content_val:
+                        matched_measures_with_handwriting.add(mid_val)
+            
+            if len(matched_measures_with_handwriting) == 25:
+                all_25_have_handwriting = True
+                safe_print("[OpenCV Fallback Rule] 成功检测到 25 条措施全部存在笔迹，审批这 25 条全部合格！")
+
         for mid, desc in std_measures:  # 逐一遍历标准要求落实的每一条条款
-            h_status = check_measure_status_in_ocr(ocr_text, desc, ticket_type)  # 调用 check_measure_status_in_ocr 算法在 OCR 原文深挖勾选框物理状态
-            if h_status is True:  # 算法判定物理勾选为真已落实
-                impl = True  # 设置状态为 True
-            elif h_status is False:  # 算法判定物理状态为假未落实
-                impl = False  # 设置状态为 False
-            else:  # 若算法对这串文字在 OCR 中没有定位到或返回 None 悬而未决
-                # 安全审计: OCR 看不清且 LLM 也未明确标记时，一律判「未落实」(False)，
-                # 宁可误报隐患触发整改，绝不默认放过任一安全措施。注释掉旧的「默认 True」放权兜底。
-                if llm_measures.get(mid) is True:  # 仅当大模型明确标记「已落实」才采信 True
-                    impl = True  # 采信大模型标记已落实
-                else:  # 其他全部情况（未标记 / 标记 False / OCR 丢失）
-                    impl = False  # 安全审计: 默认未落实，触发隐患上报
+            if all_25_have_handwriting:
+                impl = True
+            else:
+                h_status = check_measure_status_in_ocr(ocr_text, desc, ticket_type)  # 调用 check_measure_status_in_ocr 算法在 OCR 原文深挖勾选框物理状态
+                if h_status is True:  # 算法判定物理勾选为真已落实
+                    impl = True  # 设置状态为 True
+                elif h_status is False:  # 算法判定物理状态为假未落实
+                    impl = False  # 设置状态为 False
+                else:  # 若算法对这串文字在 OCR 中没有定位到或返回 None 悬而未决
+                    # 安全审计: OCR 看不清且 LLM 也未明确标记时，一律判「未落实」(False)，
+                    # 宁可误报隐患触发整改，绝不默认放过任一安全措施。注释掉旧的「默认 True」放权兜底。
+                    if llm_measures.get(mid) is True:  # 仅当大模型明确标记「已落实」才采信 True
+                        impl = True  # 采信大模型标记已落实
+                    else:  # 其他全部情况（未标记 / 标记 False / OCR 丢失）
+                        impl = False  # 安全审计: 默认未落实，触发隐患上报
             
             sanitized_measures.append({  # 将重组后的措施字典加入措施数组中
                 "measure_id": mid,  # 措施条款编号
