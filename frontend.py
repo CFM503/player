@@ -401,22 +401,21 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
         for idx, uploaded in enumerate(final_files):  # 循环迭代开始主算法的执行
             save_path = saved_paths[idx]  # 获取当前迭代对应的本地物理图像文件路径
 
+            status_text = st.empty()  # 创建子状态文字容器，置于分栏上方以防撑开首行高度
+            progress = st.progress(0)  # 创建处理总进度条容器，置于分栏上方
+            status_text.caption(f"[{idx+1}/{len(final_files)}] {uploaded.name} — 准备中...")  # 提示该文件准备中
+
             # 界面采用黄金比例分栏：左侧 3 份显示核心结论，右侧 2 份显示黑客风 Agent 思考日志数据流
             col_r, col_l = st.columns([3, 2])  # 创建该结构划分
 
-            # 左侧分栏：用来呈现当前处理大图的缩略图及处理进度提示
+            # 左侧分栏：用来呈现当前处理大图的缩略图
             with col_r:  # 进入左栏上下文
-                status_text = st.empty()  # 创建左栏子状态文字容器
-                progress = st.progress(0)  # 创建左栏处理总进度条容器
                 img_placeholder = st.empty()  # 创建图片展示临时占位符
-                status_text.caption(f"[{idx+1}/{len(final_files)}] {uploaded.name} — 准备中...")  # 提示该文件准备中
                 img_placeholder.image(save_path, caption=uploaded.name, use_container_width=True)  # 显示完整的待分析原图
 
             # 右侧分栏：提供日志流的视觉占位
             with col_l:  # 进入右栏上下文
-                pass  # 日志将由下面的独立 log_ph 来进行局部刷新替换渲染
-
-            log_ph = col_l.empty()  # 新建用来展现黑客风 Thinking 思考控制台的专用占位容器
+                log_ph = st.empty()  # 在右栏内部首个位置建立黑客风控制台的专用占位容器，确保与左侧图片顶部完美平齐
             log_buf = []  # 初始化该图的本地终端日志缓存列表，仅保存本图片的运行信息
             _t0_img = time.time()  # 记录当前图片启动执行的初始系统时间点
             _last_stage = [""]  # 用单元素列表形式包装当前处理阶段，以便在闭包函数 hlog 中可以动态覆写修改
