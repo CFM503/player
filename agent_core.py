@@ -233,6 +233,12 @@ def check_measure_status_in_ocr(ocr_text: str, desc: str, ticket_type: str) -> O
             if best_part_idx != -1:
                 check_cols = parts[best_part_idx + 1:]
                 if check_cols:
+                    # 检查是否全部为空白（无任何打勾、打叉、斜杠等填充符号）
+                    # 剥离掉常见的空格、连字符等占位符
+                    all_empty = all(re.sub(r"[\s—–\-]", "", col) == "" for col in check_cols)
+                    if all_empty:
+                        return False  # 全部空白视为未勾选（未落实）
+
                     has_neg = False
                     has_pos = False
                     for col in check_cols:
@@ -263,6 +269,10 @@ def check_measure_status_in_ocr(ocr_text: str, desc: str, ticket_type: str) -> O
         remaining_lower = remaining_str.lower()
         remaining_upper = remaining_str.upper()
         
+        # 检查是否完全没有符号内容（空白）
+        if re.sub(r"[\s—–\-]", "", remaining_str) == "":
+            return False  # 视为未落实
+
         neg_list = ["×", "x"] if ticket_type == "带气作业票" else ["×", "x", "未落实", "不适用", "/", "\\"]
         if any(x in remaining_lower for x in neg_list):
             return False
@@ -287,6 +297,10 @@ def check_measure_status_in_ocr(ocr_text: str, desc: str, ticket_type: str) -> O
                         break  # 跳出遍历
                 if is_another_measure:  # 判断如果为下一措施的主体
                     break  # 终止向下查找符号行的行为
+                
+                # 检查是否完全空白
+                if re.sub(r"[\s—–\-]", "", next_line) == "":
+                    return False  # 空白视为未落实
                 
                 neg_list = ["×", "x"] if ticket_type == "带气作业票" else ["×", "x", "未落实", "不适用", "/", "\\"]
                 if any(x in next_line.lower() for x in neg_list):  # 匹配反向符号
@@ -1427,14 +1441,34 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         for attempt in range(1, self.MAX_REFLECT_RETRIES + 1):  # 开启反思纠错循环，最大重试 MAX_REFLECT_RETRIES 次
             checks = []  # 新建单轮校验结果收集列表，每个元素为 (检查项, 是否OK, 说明字串)
 
-            ticket_ok = bool(data.ticket_id) and len(data.ticket_id) >= 6  # 规则1：编号长度校验，必须非空且不少于 6 位
-            checks.append(("票号", ticket_ok, f"{data.ticket_id} {'OK' if ticket_ok else '异常'}"))  # 存入结果
+            # 数据清洗：过滤掉占位模板字样
+            ticket_clean = data.ticket_id or ""
+            for ph in ["编号", "作业票", "年", "月", "日"]:
+                if ph in ticket_clean:
+                    ticket_clean = ""
+            ticket_ok = bool(ticket_clean) and len(ticket_clean.strip()) >= 6
+            checks.append(("票号", ticket_ok, f"{data.ticket_id} {'OK' if ticket_ok else '异常'}"))
 
-            approver_ok = bool(data.approver_name) and len(data.approver_name.strip()) >= 2
+            approver_clean = data.approver_name or ""
+            for ph in ["签字", "盖章", "负责人", "手写"]:
+                if ph in approver_clean:
+                    approver_clean = ""
+            approver_ok = bool(approver_clean) and len(approver_clean.strip()) >= 2
             checks.append(("签字", approver_ok, f"{data.approver_name} {'OK' if approver_ok else '缺失'}"))
 
-            worker_ok = bool(data.worker_id) and len(data.worker_id.strip()) >= 2
+            worker_clean = data.worker_id or ""
+            for ph in ["姓名及证书", "证书编号", "证件号", "姓名及", "证书号", "手写", "填空"]:
+                if ph in worker_clean:
+                    worker_clean = ""
+            worker_ok = bool(worker_clean) and len(worker_clean.strip()) >= 2
             checks.append(("作业人员", worker_ok, f"{data.worker_id} {'OK' if worker_ok else '缺失'}"))
+
+            station_clean = data.station_name or ""
+            for ph in ["发起人签字确认", "签字确认", "作业单位", "盖章", "项目公司"]:
+                if ph in station_clean:
+                    station_clean = ""
+            station_ok = bool(station_clean) and len(station_clean.strip()) >= 2
+            checks.append(("作业单位", station_ok, f"{data.station_name} {'OK' if station_ok else '缺失'}"))
 
             conc_ok = all(0 <= v <= 100 for v in data.gas_concentration)  # 规则2：气体浓度合理性校验，浮点读数必须在 0% 到 100% 爆限值区间内
             checks.append(("浓度", conc_ok, f"{data.gas_concentration} {'OK' if conc_ok else '超范围'}"))  # 存入结果
@@ -1578,6 +1612,8 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                 score += 2  # 票号缺失严重，加 2 分
             elif "数据完整性校验失败: 作业人员" in issue.item_name:
                 score += 1  # 作业人缺失，加 1 分
+            elif "数据完整性校验失败: 作业单位" in issue.item_name:
+                score += 1  # 作业单位缺失，加 1 分
 
         if score >= 5:
             return "重大"
