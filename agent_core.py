@@ -742,14 +742,17 @@ class AgentTools:
                 t_path = os.path.join(template_dir, t_file)
                 _prog(12, f"匹配模板 {t_file} 中...")
                 aligned_img, is_aligned = align_to_template(image_path, t_path)
-                if is_aligned:
+                # is_aligned=True 表示精确透视对齐，=False 表示降级对齐（resize/Hough）
+                # 两种情况都对齐后的图像可用于 OCR，都算匹配成功
+                if aligned_img is not None:
                     # 将对齐后的图像保存为临时文件，以便全图扫描和裁剪操作都基于该对齐图
                     aligned_dir = os.path.join(os.path.dirname(__file__), "uploads")
                     os.makedirs(aligned_dir, exist_ok=True)
                     aligned_path = os.path.join(aligned_dir, "aligned_" + os.path.basename(image_path))
                     import cv2
                     cv2.imwrite(aligned_path, aligned_img)
-                    safe_print(f"[OCR] 特征点匹配对齐成功：使用 {t_file} 模板拉平")
+                    status = "精确对齐" if is_aligned else "降级对齐(resize/Hough)"
+                    safe_print(f"[OCR] 模板匹配完成：使用 {t_file} 模板 ({status})")
                     image_path = aligned_path  # 覆盖后续全图 OCR 扫描 of 源图片路径
                     AgentTools._last_image_path = aligned_path  # 覆盖缓存路径，确保之后的裁剪操作也使用对齐图
                     matched = True
@@ -758,7 +761,7 @@ class AgentTools:
                     break
             
             if not matched:
-                # 匹配失败，不进行任何降级，直接抛出异常提示用户
+                # 所有模板都无法匹配，可能是完全不同的图片
                 raise RuntimeError("上传的照片无法匹配到任何已注册的作业票模板（如带气作业票），请确保照片拍摄端正且清晰无遮挡，并重新上传正确的照片！")
 
         # ---- 视觉大模型（无坐标） ----

@@ -116,6 +116,7 @@ if "delete_id" not in st.session_state: st.session_state.delete_id = None  # 初
 if "pending_files" not in st.session_state: st.session_state.pending_files = None  # 初始化暂存准备上传的作业图片文件句柄为空
 if "show_uploader" not in st.session_state: st.session_state.show_uploader = False  # 初始化控制上传组件面板的显示显示标记为否
 if "upload_done" not in st.session_state: st.session_state.upload_done = False  # 初始化当前上传操作是否完全完成的标记为否
+if "uploader_key_suffix" not in st.session_state: st.session_state.uploader_key_suffix = 0  # 初始化控制上传选择器动态 Key 变化的序号，用于清空图片缓存
 
 
 # ---- 侧边栏配置面板 ----
@@ -294,20 +295,29 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
     # ---- 动作按钮栏：上传 vs. 处理 ----
     c1, c2 = st.columns(2)  # 将交互按键行划分为两等份的分栏
     with c1:  # 进入第一分栏
-        show_upload = st.button("📤 上传", use_container_width=True)  # 渲染上传大按键并填平列宽
+        # 增加重新上传按钮，当已经上传完成或有历史处理结果时，按钮自动变为“重新上传”
+        if st.session_state.get("upload_done") or st.session_state.results:
+            show_upload = st.button("🔄 重新上传", use_container_width=True)
+        else:
+            show_upload = st.button("📤 上传", use_container_width=True)  # 渲染上传大按键并填平列宽
     with c2:  # 进入第二分栏
         can_process = st.session_state.get("upload_done") and st.session_state.get("pending_files")  # 感知是否可被处理
         run_clicked = st.button("⚙️ 处理", use_container_width=True, disabled=not can_process)  # 渲染处理大按键，当无文件时置灰失效
 
     # 按钮点击状态切换事件处理
-    if show_upload:  # 如果用户点击了上传按键
+    if show_upload:  # 如果用户点击了上传/重新上传按键
         st.session_state.show_uploader = True  # 设置展示上传选择器标志为真
         st.session_state.upload_done = False  # 重置上传就绪标志为否，进入新一轮上传状态
         st.session_state.pending_files = None  # 清空暂存的待处理文件
+        st.session_state.results = []  # 清空历史处理结果，进入全新一轮的识别流程
+        st.session_state.uploader_key_suffix += 1  # 递增 Key 序号，强制销毁并重新初始化 file_uploader 组件以彻底清空图片缓存
+        st.rerun()  # 触发 Streamlit 强制重绘，复位上传器的前端状态
 
     # ---- 文件拖拽选择器 ----
     if st.session_state.get("show_uploader"):  # 判断如果控制显示上传面板的标志为真
-        picked = st.file_uploader("选择图片", type=["jpg","jpeg","png","bmp"], accept_multiple_files=False, label_visibility="collapsed", key="fu_main")  # 显示 Streamlit 原生上传面板，限制单张图片
+        # 动态传入后缀 key 强制在点击“重新上传”后复位组件
+        uploader_key = f"fu_main_{st.session_state.uploader_key_suffix}"
+        picked = st.file_uploader("选择图片", type=["jpg","jpeg","png","bmp"], accept_multiple_files=False, label_visibility="collapsed", key=uploader_key)  # 显示 Streamlit 原生上传面板，限制单张图片
         if picked and not st.session_state.get("upload_done"):  # 判断用户选择了图片且此图尚未触发上传流水线
             st.session_state.pending_files = [picked]  # 将上传的文件句柄存入会话状态 pending_files 列表中
             prog_ph = st.empty()  # 创建进度条占位容器
