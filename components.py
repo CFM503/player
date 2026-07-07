@@ -83,12 +83,27 @@ def render_ticket_kpis(d) -> None:  # 定义单张作业票的完整摘要信息
     # 审批建议
     if d.approval_opinion:  # 检查该作业票是否含有由 Agent 产出的审批意见文本
         ic = APPROVAL_ICON.get(ap_status, RISK_ICON.get(d.risk_level or "", ""))  # 获取匹配状态的 emoji 徽章，作为消息前缀
+        
+        # 格式化提取的核心变量信息，末尾附加 [变量名]
+        info_lines = [
+            f"作业票编号：{d.ticket_id or ''} [ticket_id]",
+            f"作业单位：{d.station_name or ''} [station_name]",
+            f"作业内容：{d.content or ''} [content]",
+            f"作业时间：{d.work_time or ''} [work_time]",
+            f"作业人姓名及证书编号：{d.worker_id or ''} [worker_id]",
+            f"发起人签字确认：{d.approver_name or ''} [approver_name]"
+        ]
+        info_block = "\n\n".join(info_lines)
+        
+        # 拼接审批结果与核心信息
+        full_text = f"{ic} {d.approval_opinion}\n\n---\n\n{info_block}"
+        
         if ap_status == "已驳回":  # 若审批被智能判定驳回拒绝
-            st.error(f"{ic} {d.approval_opinion}")  # 在 Streamlit 界面显示红色的 error 级别错误框提示
+            st.error(full_text)  # 在 Streamlit 界面显示红色的 error 级别错误框提示
         elif ap_status == "待审批":  # 若属于需人工流转审批
-            st.warning(f"{ic} {d.approval_opinion}")  # 在 Streamlit 界面显示黄色的 warning 警告框提示
+            st.warning(full_text)  # 在 Streamlit 界面显示黄色的 warning 警告框提示
         else:  # 若属于自动通过的安全范畴
-            st.success(f"{ic} {d.approval_opinion}")  # 在 Streamlit 界面显示绿色的 success 成功成功框提示
+            st.success(full_text)  # 在 Streamlit 界面显示绿色的 success 成功成功框提示
 
 
 def render_guide(step: int, text: str) -> None:  # 定义顶部操作向导提示框的渲染函数

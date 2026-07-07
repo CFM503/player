@@ -551,14 +551,8 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
         # 补全完工时间、签批人、风险等级
         raw_dict["completion_time"] = raw_dict.get("completion_time") or None  # 若无则设为 None
         
-        # 自动使用固定裁剪范围进行签字区域的提取，兜底并完善负责人 approver_name 字段
-        approver = raw_dict.get("approver_name")
-        if not approver or str(approver).lower() in ["null", "none", "未知", ""]:
-            try:
-                approver = AgentTools.extract_filler_name(680, 180, 320, 80)
-            except Exception as e:
-                safe_print(f"[Sanitize] 提取签字人失败: {e}")
-        raw_dict["approver_name"] = approver or None
+        # 不使用局部裁剪 OCR 兜底，直接使用大模型识别出的签批人/负责人姓名
+        raw_dict["approver_name"] = raw_dict.get("approver_name") or None
         
         raw_dict["risk_level"] = raw_dict.get("risk_level") or None  # 若无则设为 None
 
@@ -1706,8 +1700,8 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         # ---- ⑥ 钉钉 AI 表格写入 ----
         safe_print("[Agent Act] ⑥ 钉钉 AI 表格...")
         cfg = load_config()
-        # 直接使用对齐后模板的固定坐标 680, 180, 320, 80 裁剪并识别责任人姓名
-        filler = self.tools.extract_filler_name(680, 180, 320, 80)
+        # 不使用局部裁剪 OCR，直接使用识别到的发起人/负责人姓名
+        filler = data.approver_name or "未知"
 
         if cfg.get("dingtalk_mcp_url"):
             # 问题描述：LLM 结构化 JSON 摘要
