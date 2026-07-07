@@ -1737,17 +1737,22 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         cfg = load_config()
         # 不使用局部裁剪 OCR，直接使用识别到的发起人/负责人姓名
         filler = data.approver_name or "未知"
-
         if cfg.get("dingtalk_mcp_url"):
-            # 问题描述：LLM 结构化 JSON 摘要
-            description = json.dumps({
-                "票号": data.ticket_id,
-                "类型": data.ticket_type,
-                "场站": data.station_name,
-                "风险": data.risk_level,
-                "审批": data.approval_status,
-                "建议": data.approval_opinion[:200] if data.approval_opinion else "",
-            }, ensure_ascii=False)
+            # 问题描述：推送 stAlertContainer 的完整审批意见与核心要素内容
+            ap_status = data.approval_status or "待审批"
+            ic = "✅" if ap_status == "自动通过" else ("🚫" if ap_status == "已驳回" else "⏳")
+            
+            info_lines = [
+                f"作业票编号：{data.ticket_id or ''} [ticket_id]",
+                f"作业单位：{data.station_name or ''} [station_name]",
+                f"作业内容：{data.content or ''} [content]",
+                f"作业时间：{data.work_time or ''} [work_time]",
+                f"作业人姓名及证书编号：{data.worker_id or ''} [worker_id]",
+                f"发起人签字确认：{data.approver_name or ''} [approver_name]"
+            ]
+            info_block = "\n\n".join(info_lines)
+            description = f"{ic} {data.approval_opinion or ''}\n\n---\n\n{info_block}"
+            
             self.tools.write_dingtalk_table(data.ticket_id, image_path, description, filler, data.risk_level or "")
             safe_print(f"[Agent Act] ⑥ 钉钉 AI 表格 → 已写入 (责任人:{filler})")
             notify_result = f"编号:{data.ticket_id} → 钉钉 AI 表格 责任人:{filler}"
