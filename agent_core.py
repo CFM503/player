@@ -586,7 +586,7 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
         # 优先使用指定坐标局部裁剪 OCR 提取签字人姓名
         approver = None
         try:
-            approver = AgentTools.extract_filler_name(630, 220, 195, 135)
+            approver = AgentTools.extract_filler_name(630, 190, 195, 150)
         except Exception as e:
             safe_print(f"[Sanitize] 提取签字人失败: {e}")
         
