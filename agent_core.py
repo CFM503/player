@@ -942,7 +942,7 @@ class AgentTools:
         return ocr_result
 
     @staticmethod
-    def _ocr_crop_region(image_path: str, x: int, y: int, w: int, h: int) -> str:
+    def _ocr_crop_region(image_path: str, x: int, y: int, w: int, h: int, save_crop_path: Optional[str] = None) -> str:
         """裁剪图片指定区域做 PaddleOCR，返回识别文本"""
         from ocr import run_ocr
         _device = getattr(AgentTools, "_last_ocr_device", "cpu")  # 读取用户选择的推理设备，默认 cpu
@@ -950,6 +950,7 @@ class AgentTools:
             ocr_result = run_ocr(
                 image_path=image_path,
                 coords=(x, y, w, h),
+                save_crop_path=save_crop_path,
                 mode="cluster",
                 device=_device  # 使用与全图扫描相同的推理设备
             )
@@ -1319,8 +1320,15 @@ class AgentTools:
             safe_print(f"[Tool] extract_filler_name 失败: 图片路径无效或不存在: {image_path}")
             return ""  # 安全审计: 禁止「坐标识别图片未知」造假占位，留空由调用方判定
             
-        safe_print(f"[Tool] extract_filler_name 触发局部裁剪 OCR: x={tx}, y={ty}, w={tw}, h={th}")
-        crop_text = AgentTools._ocr_crop_region(image_path, tx, ty, tw, th)
+        # 自动生成 archives/YYYY-MM-DD 归档文件夹路径并将签字裁剪图进行物理保存
+        date_dir = time.strftime("%Y-%m-%d")
+        archive_dir = os.path.join(os.path.dirname(__file__), "archives", date_dir)
+        os.makedirs(archive_dir, exist_ok=True)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        crop_path = os.path.join(archive_dir, f"signature_{ts}_{tx}_{ty}.png")
+        
+        safe_print(f"[Tool] extract_filler_name 触发局部裁剪 OCR: x={tx}, y={ty}, w={tw}, h={th}，保存裁剪图至: {crop_path}")
+        crop_text = AgentTools._ocr_crop_region(image_path, tx, ty, tw, th, save_crop_path=crop_path)
         
         if crop_text:
             _LABEL_KW = ("责任", "填表", "编号", "票号", "日期", "场站", "部位", "作业",
