@@ -555,7 +555,7 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
         approver = raw_dict.get("approver_name")
         if not approver or str(approver).lower() in ["null", "none", "未知", ""]:
             try:
-                approver = AgentTools.extract_filler_name(520, 140, 210, 120)
+                approver = AgentTools.extract_filler_name(680, 180, 320, 80)
             except Exception as e:
                 safe_print(f"[Sanitize] 提取签字人失败: {e}")
         raw_dict["approver_name"] = approver or None
@@ -814,10 +814,10 @@ class AgentTools:
                 # 1. 动态检测水平网格线，或使用默认坐标兜底
                 def get_y_lines(img_g):
                     binary_img = img_g < 80
-                    width = 726 - 523
-                    row_sums = np.sum(binary_img[:, 523:726], axis=1)
+                    width = 951 - 675
+                    row_sums = np.sum(binary_img[:, 675:951], axis=1)
                     lines_y = []
-                    for y in range(280, 890):
+                    for y in range(350, 1250):
                         if row_sums[y] > 0.6 * width:
                             is_max = True
                             for dy in range(-3, 4):
@@ -834,10 +834,10 @@ class AgentTools:
                         return lines_y
                     else:
                         safe_print(f"[OpenCV Fallback] 动态检测到 {len(lines_y)} 条线，启用默认网格线定位")
-                        return [307, 325, 343, 360, 378, 396, 414, 431, 451, 485, 519, 541, 560, 593, 613, 632, 652, 686, 707, 725, 759, 779, 800, 822, 843, 876]
+                        return [459, 483, 507, 531, 555, 579, 603, 627, 653, 699, 745, 775, 802, 846, 872, 899, 926, 972, 1001, 1025, 1071, 1097, 1126, 1155, 1184, 1228]
 
                 measures = STANDARD_MEASURES.get("带气作业票", [])
-                x_bounds = [523, 551, 608, 636, 682, 726]
+                x_bounds = [675, 715, 791, 829, 890, 951]
                 roles = ["作业人", "施工方现场负责人", "监理", "监护人", "带气现场负责人"]
                 y_lines = get_y_lines(img_gray)
 
@@ -1706,8 +1706,8 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         # ---- ⑥ 钉钉 AI 表格写入 ----
         safe_print("[Agent Act] ⑥ 钉钉 AI 表格...")
         cfg = load_config()
-        # 直接使用对齐后模板的固定坐标 520, 140, 210, 120 裁剪并识别责任人姓名
-        filler = self.tools.extract_filler_name(520, 140, 210, 120)
+        # 直接使用对齐后模板的固定坐标 680, 180, 320, 80 裁剪并识别责任人姓名
+        filler = self.tools.extract_filler_name(680, 180, 320, 80)
 
         if cfg.get("dingtalk_mcp_url"):
             # 问题描述：LLM 结构化 JSON 摘要
@@ -1772,14 +1772,24 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         with open(ocr_path, "w", encoding="utf-8") as f:
             f.write(ocr_text)
 
-        # 保存原图副本
+        # 1. 保存最原始的上传图片副本
         img_ext = os.path.splitext(image_path)[1] or ".jpg"
         img_dest = os.path.join(archive_dir, f"{prefix}_原图{img_ext}")
         try:
             shutil.copy2(image_path, img_dest)
         except Exception as e:
-            safe_print(f"[Agent Archive] ⚠️ 原图复制失败: {e}")
+            safe_print(f"[Agent Archive] ⚠️ 原始图复制失败: {e}")
             img_dest = ""
+
+        # 2. 如果存在特征点匹配对齐后的处理图片，也保存一份对齐图副本供用户比对
+        aligned_source = getattr(AgentTools, "_last_image_path", image_path)
+        if aligned_source and aligned_source != image_path and os.path.exists(aligned_source):
+            img_dest_aligned = os.path.join(archive_dir, f"{prefix}_对齐图{img_ext}")
+            try:
+                shutil.copy2(aligned_source, img_dest_aligned)
+                safe_print(f"[Agent Archive] 成功归档对齐处理后的图片: {img_dest_aligned}")
+            except Exception as e:
+                safe_print(f"[Agent Archive] ⚠️ 对齐图复制失败: {e}")
 
         # 保存元数据
         meta = {
