@@ -185,6 +185,38 @@ def check_measure_status_in_ocr(ocr_text: str, desc: str, ticket_type: str) -> O
     # 传入原始 OCR 文本和单条条款进行检查
     if not ocr_text:  # 检查 OCR 文本是否为空
         return None  # 空时无法比对，返回 None 占位
+
+    # 对于带气作业票，单独隔离使用 OpenCV 像素密度提取的 fallback 区域进行验证，实现“只要没有叉号即通过”的放行判定
+    if ticket_type == "带气作业票" and "--- 纯本地 OpenCV 像素密度提取结果 ---" in ocr_text:
+        try:
+            parts = ocr_text.split("--- 纯本地 OpenCV 像素密度提取结果 ---")
+            local_section = parts[1].split("----------------------------------")[0]
+            local_lines = [l.strip() for l in local_section.split("\n") if l.strip()]
+            
+            norm_desc = re.sub(r"[^\w\u4e00-\u9fa5]", "", desc)
+            match_len = max(5, min(8, len(norm_desc)))
+            matched_line = None
+            for line in local_lines:
+                norm_line = re.sub(r"[^\w\u4e00-\u9fa5]", "", line)
+                if len(norm_line) >= match_len:
+                    has_common = False
+                    for i in range(len(norm_desc) - match_len + 1):
+                        sub = norm_desc[i:i+match_len]
+                        if sub in norm_line:
+                            has_common = True
+                            break
+                    if has_common:
+                        matched_line = line
+                        break
+            
+            if matched_line:
+                # 只要这行中被 OpenCV 判定出了叉号 (x) 即不通过；没有任何叉号就算通过
+                if "(x)" in matched_line.lower() or "×" in matched_line:
+                    return False
+                return True
+        except Exception as e:
+            print(f"[OCR Helper] 提取本地像素结果错误: {e}")
+
     lines = [l.strip() for l in ocr_text.split("\n") if l.strip()]  # 按行拆分 OCR 文本，去除空白并过滤空行
     norm_desc = re.sub(r"[^\w\u4e00-\u9fa5]", "", desc)  # 用正则剔除待查条款中的所有非字元符号，只留汉字字母以防干扰
     if not norm_desc:  # 检查清洗后的条款文本是否为空
@@ -488,7 +520,7 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
                 safe_print("[OpenCV Fallback Rule] 成功检测到 25 条措施全部存在笔迹，审批这 25 条全部合格！")
 
         for mid, desc in std_measures:  # 逐一遍历标准要求落实的每一条条款
-            if all_25_have_handwriting:
+            if all_25_have_handwriting and ticket_type != "带气作业票":
                 impl = True
             else:
                 h_status = check_measure_status_in_ocr(ocr_text, desc, ticket_type)  # 调用 check_measure_status_in_ocr 算法在 OCR 原文深挖勾选框物理状态
