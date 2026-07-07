@@ -129,9 +129,9 @@ def run_vision_ocr(image_path: str, api_key: str, base_url: str, model_name: str
     )  # 结束接口调用定义
     return resp.choices[0].message.content.strip()  # 提取获取的响应内容，并去除头部尾部所有的空白符后返回结果
 
-def align_to_template(photo_path: str, template_path: str) -> tuple:  # 用 ORB 特征点匹配将实拍照片对齐到模板尺寸
+def align_to_template(photo_path: str, template_path: str) -> tuple:  # 用 ORB+SIFT 特征点匹配将实拍照片对齐到模板尺寸
     """
-    用 ORB 特征点匹配将实拍照片对齐到模板尺寸
+    用特征点匹配将实拍照片对齐到模板尺寸
     返回: (aligned_image, is_aligned)
     """
     import numpy as np  # 导入 NumPy
@@ -147,41 +147,77 @@ def align_to_template(photo_path: str, template_path: str) -> tuple:  # 用 ORB 
         gray_tmpl = cv2.cvtColor(tmpl, cv2.COLOR_BGR2GRAY)
         gray_photo = cv2.cvtColor(photo, cv2.COLOR_BGR2GRAY)
         
-        # ORB 特征检测
+        # 1. 自动应用 CLAHE 直方图均衡化增强对比度，使表格框线及文字特征更加清晰
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        gray_tmpl = clahe.apply(gray_tmpl)
+        gray_photo = clahe.apply(gray_photo)
+        
+        # 2. 优先进行 ORB 特征检测（高速度）
         orb = cv2.ORB_create(nfeatures=5000)
         kp1, des1 = orb.detectAndCompute(gray_tmpl, None)
         kp2, des2 = orb.detectAndCompute(gray_photo, None)
         
-        if des1 is None or des2 is None:  # 如果没有检测到特征点
-            return photo, False
-            
-        # BFMatcher 匹配
-        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
-        matches = bf.knnMatch(des1, des2, k=2)
-        
-        # Lowe's ratio test 筛选匹配点
         good = []
-        for m, n in matches:
-            if m.distance < 0.75 * n.distance:
-                good.append(m)
-                
-        if len(good) < 15:  # 如果好匹配点太少，说明并非同一种表格模板，不进行对齐
-            return photo, False
+        is_sift = False
+        if des1 is not None and des2 is not None:
+            bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+            matches = bf.knnMatch(des1, des2, k=2)
+            for m, n in matches:
+                if m.distance < 0.75 * n.distance:
+                    good.append(m)
+                    
+        # 3. 容错与兜底：如果 ORB 好匹配点少于 10 个（参考测试脚本的阈值 10），则启用 SIFT 精准特征检测器
+        if len(good) < 10:
+            print("[OCR] ORB 匹配点不足，启用高精度 SIFT 匹配兜底...")
+            sift = cv2.SIFT_create(nfeatures=5000)
+            kp1, des1 = sift.detectAndCompute(gray_tmpl, None)
+            kp2, des2 = sift.detectAndCompute(gray_photo, None)
             
-        # 计算单应性矩阵 (Homography)
+            good = []
+            if des1 is not None and des2 is not None:
+                # SIFT 特征使用 L2 范数匹配
+                bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=False)
+                matches = bf.knnMatch(des1, des2, k=2)
+                for m, n in matches:
+                    if m.distance < 0.75 * n.distance:
+                        good.append(m)
+                is_sift = True
+
+        # 4. 如果依然少于 10 个匹配点，直接进行简单的 resize，防止表格缺字
+        if len(good) < 10:
+            print("[OCR] 特征匹配点极少，降级为等比例缩放对齐")
+            aligned = cv2.resize(photo, (tw, th))
+            return aligned, False
+            
+        # 5. 计算单应性矩阵 (Homography)
         pts_tmpl = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
         pts_photo = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+        
+        # 优先使用 RANSAC 算法计算单应性矩阵
         H, mask = cv2.findHomography(pts_photo, pts_tmpl, cv2.RANSAC, 5.0)
         
-        if H is None:  # 如果无法计算单应性矩阵
-            return photo, False
+        # 如果 RANSAC 失败或内点数过少，使用 LMEDS 算法进行二次尝试
+        inliers = mask.ravel().sum() if mask is not None else 0
+        if H is None or inliers < 8:
+            H2, mask2 = cv2.findHomography(pts_photo, pts_tmpl, cv2.LMEDS)
+            if H2 is not None:
+                H = H2
+                
+        if H is None:  # 如果无法计算单应性矩阵，降级 resize
+            aligned = cv2.resize(photo, (tw, th))
+            return aligned, False
             
-        # 进行透视变换
+        # 6. 执行透视变换拉平图片
         aligned = cv2.warpPerspective(photo, H, (tw, th))
         return aligned, True
+        
     except Exception as e:
-        print(f"[OCR] 模板匹配对齐失败: {e}")
-        return None, False
+        print(f"[OCR] 模板对齐异常: {e}")
+        try:
+            aligned = cv2.resize(photo, (tw, th))
+            return aligned, False
+        except:
+            return None, False
 
 def run_ocr(  # 定义 OCR 扫描最核心的总控制运行调度函数
     image_path: str,  # 参数一：输入待扫描的主图片文件路径
