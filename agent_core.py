@@ -726,7 +726,7 @@ class AgentTools:
         return md
 
     @staticmethod
-    def ocr_tool(image_path: str, mode: str = "cluster", brain=None, progress_callback=None, engine: str = "paddleocr", vision_brain=None, device: str = "gpu") -> str:  # 核心OCR引擎调用门面方法，支持切换本地 PaddleOCR 和 Vision LLM，device 控制推理硬件
+    def ocr_tool(image_path: str, mode: str = "cluster", brain=None, progress_callback=None, engine: str = "paddleocr", vision_brain=None, device: str = "gpu", ticket_type: str = None) -> str:  # 核心OCR引擎调用门面方法，支持切换本地 PaddleOCR 和 Vision LLM，device 控制推理硬件
         """调用 ocr 模块进行 OCR 识别，支持坐标聚类和自适应边框检测；可选视觉大模型"""
         AgentTools._last_image_path = image_path
         AgentTools._last_ocr_device = device  # 缓存当前推理设备选择，供 _ocr_crop_region 等静态方法复用。【注意】后续新增的 OCR 功能都应读取此变量，保持与侧边栏设置同步
@@ -741,6 +741,10 @@ class AgentTools:
         if os.path.exists(template_dir):
             for f in os.listdir(template_dir):
                 if f.lower().endswith(".png") and not f.startswith("aligned") and not f.startswith("match"):
+                    if ticket_type == "带气作业票" and f != "dq.png":
+                        continue
+                    if ticket_type == "动火作业票" and f != "dh.png":
+                        continue
                     templates.append(f)
         
         matched_template_type = None
@@ -768,6 +772,8 @@ class AgentTools:
                     matched = True
                     if t_file == "dq.png":
                         matched_template_type = "带气作业票"
+                    elif t_file == "dh.png":
+                        matched_template_type = "动火作业票"
                     break
             
             if not matched:
@@ -816,31 +822,35 @@ class AgentTools:
 
         # 首次感知全图扫描分类检测：从识别文本中提取 3 种作业票类型并标出绝对坐标打印在日志窗口
         import re  # 导入正则表达式模块
-        detected_type = matched_template_type  # 默认使用模板匹配推导出的票型，抗 OCR 乱码或错行能力强
+        
+        ocr_type = None
+        ocr_coords = None
         for line in flat_text.split("\n"):  # 遍历扁平 OCR 文本的每一行
             line_str = line.strip()  # 去除首尾空格
-            # 匹配包含 "文本 [x,y,w,h]" 格式的行
             m = re.match(r"(.+?)\s+\[(\d+),(\d+),(\d+),(\d+)\]", line_str)  # 正则匹配提取文本和坐标数值
-            if m:  # 若正则匹配成功
-                text_part = m.group(1).strip()  # 获取文本部分
-                coords_val = (int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5)))  # 解包转换坐标元组为整数类型
+            if m:
+                text_part = m.group(1).strip()
+                coords_val = (int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5)))
                 clean_txt = re.sub(r"[^\u4e00-\u9fa5a-zA-Z0-9]", "", text_part)  # 清洗文本，只保留中文、英文字母及数字
                 
-                abs_x, abs_y, abs_w, abs_h = coords_val  # 解包坐标值
-                
-                # 判定并匹配是否属于三大类作业票
-                if not detected_type:  # 若尚未匹配到作业票类型
-                    if "动火作业票" in clean_txt:  # 判定并匹配是否属于动火作业票
-                        detected_type = "动火作业票"  # 设定类型名称
-                    elif "带气作业票" in clean_txt:  # 判定并匹配是否属于带气作业票
-                        detected_type = "带气作业票"  # 设定类型名称
-                    elif "临时用电作业票" in clean_txt or "用电作业票" in clean_txt:  # 判定并匹配是否属于临时用电作业票
-                        detected_type = "临时用电作业票"  # 设定类型名称
-                    
-                    if detected_type:  # 若成功匹配
-                        safe_print(f"[OCR 检测] 首次扫描识别到作业票类型: 【{detected_type}】 | 坐标: x={abs_x}, y={abs_y}, w={abs_w}, h={abs_h}")  # 标出坐标输出到运行日志中
+                if "动火作业票" in clean_txt:
+                    ocr_type = "动火作业票"
+                    ocr_coords = coords_val
+                    break
+                elif "带气作业票" in clean_txt:
+                    ocr_type = "带气作业票"
+                    ocr_coords = coords_val
+                    break
+                elif "临时用电作业票" in clean_txt or "用电作业票" in clean_txt:
+                    ocr_type = "临时用电作业票"
+                    ocr_coords = coords_val
+                    break
 
-                        break
+        detected_type = ocr_type or matched_template_type  # 优先使用 OCR 文字识别的票型进行纠偏，避免模板误匹配
+        
+        if detected_type:  # 若成功匹配
+            coords_str = f" | 坐标: x={ocr_coords[0]}, y={ocr_coords[1]}, w={ocr_coords[2]}, h={ocr_coords[3]}" if ocr_coords else ""
+            safe_print(f"[OCR 检测] 首次扫描识别到作业票类型: 【{detected_type}】{coords_str}")  # 标出坐标输出到运行日志中
 
         # 纯本地 OpenCV 像素密度检测（仅带气作业票 + 对齐成功时触发）
         if detected_type == "带气作业票" and "aligned_" in os.path.basename(image_path):
@@ -1460,11 +1470,11 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             safe_print(f"[Agent Plan] {s}")  # 打印计划详情
         mem.remember("规划", "📋", "制定5步执行计划", f"{len(steps)}步：感知→推理→反思→执行→总结")  # 将计划写入记忆步骤中
 
-    def _perceive(self, image_path: str, mem: AgentMemory) -> str:  # 感知阶段：触发 OpenCV 对比度增强和 PaddleOCR 文字扫描工作
+    def _perceive(self, image_path: str, mem: AgentMemory, ticket_type: str = None) -> str:  # 感知阶段：触发 OpenCV 对比度增强和 PaddleOCR 文字扫描工作
         prog = self._progress  # 获取进度条回调函数
         if prog: prog(5, "图像预处理")  # 前端更新进度为 5%
         safe_print("[Agent Perceive] OpenCV + PaddleOCR 感知...")  # 打印感知阶段日志
-        text = self.tools.ocr_tool(image_path, mode=self.ocr_mode, brain=self.brain, progress_callback=prog, engine=self.ocr_engine, vision_brain=self.vision_brain, device=self.ocr_device)  # 调用 ocr_tool 接口识别图片，传入推理设备
+        text = self.tools.ocr_tool(image_path, mode=self.ocr_mode, brain=self.brain, progress_callback=prog, engine=self.ocr_engine, vision_brain=self.vision_brain, device=self.ocr_device, ticket_type=ticket_type)  # 调用 ocr_tool 接口识别图片，传入推理设备
         n = len(text.strip().split("\n"))  # 计算识别出的文本总行数
         summary = f"提取 {n} 行文本"  # 汇总感知报告
         safe_print(f"[Agent Perceive] {summary}")  # 打印行数汇总日志
@@ -1864,7 +1874,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         mem.remember("归档", "📦", "数字 OCR 归档", summary)
         return ocr_path
 
-    def run(self, image_path: str, ocr_mode: str = None, progress_callback=None):
+    def run(self, image_path: str, ocr_mode: str = None, progress_callback=None, ticket_type: str = None):
         """运行完整 ReAct 循环，返回 (ocr_text, structured_data)"""
         if ocr_mode:
             self.ocr_mode = ocr_mode
@@ -1875,7 +1885,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         if prog: prog(0, "开始处理")
         self._plan(image_path, mem)
         if prog: prog(3, "感知阶段")
-        ocr_text = self._perceive(image_path, mem)
+        ocr_text = self._perceive(image_path, mem, ticket_type=ticket_type)
         if prog: prog(52, "OCR 归档")
         self._archive(image_path, ocr_text, mem)
         if prog: prog(55, "推理阶段")

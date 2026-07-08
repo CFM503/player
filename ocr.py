@@ -129,25 +129,73 @@ def run_vision_ocr(image_path: str, api_key: str, base_url: str, model_name: str
     )  # 结束接口调用定义
     return resp.choices[0].message.content.strip()  # 提取获取的响应内容，并去除头部尾部所有的空白符后返回结果
 
-def align_to_template(photo_path: str, template_path: str) -> tuple:  # 用 ORB 特征点匹配将实拍照片对齐到模板尺寸
+def align_to_template(photo_path: str, template_path: str) -> tuple:  # 将实拍照片对齐到模板尺寸
     """
-    用 ORB 特征点匹配将实拍照片对齐到模板尺寸
+    先用 ORB 特征点匹配判定是否为同一模板，
+    若匹配则采用 align_to_template.py 中的四边形检测与透视变换进行精确对齐，
+    如果四边形检测失败则降级使用 ORB 单应性矩阵对齐。
+    最后将对齐后的图片尺寸缩放到旧模板所要求的尺寸规范以维持原有坐标的有效性。
     返回: (aligned_image, is_aligned)
     """
     import numpy as np  # 导入 NumPy
     try:
+        # 1. 尝试导入 align_to_template 中的四边形检测与排序逻辑，若失败则本地定义兜底
+        try:
+            from align_to_template import detect_quad, order_points
+        except ImportError:
+            def order_points(pts: np.ndarray) -> np.ndarray:
+                pts = pts.astype("float32")
+                rect = np.zeros((4, 2), dtype="float32")
+                s = pts.sum(axis=1)
+                rect[0] = pts[np.argmin(s)]
+                rect[2] = pts[np.argmax(s)]
+                diff = np.diff(pts, axis=1)
+                rect[1] = pts[np.argmin(diff)]
+                rect[3] = pts[np.argmax(diff)]
+                return rect
+
+            def detect_quad(image: np.ndarray, min_area_ratio: float = 0.15):
+                h, w = image.shape[:2]
+                total_area = h * w
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                candidate_contours = []
+                # 策略一：Canny 边缘
+                blur = cv2.GaussianBlur(gray, (5, 5), 0)
+                edges = cv2.Canny(blur, 50, 150)
+                edges = cv2.dilate(edges, np.ones((5, 5), np.uint8), iterations=2)
+                cnts, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                candidate_contours.extend(cnts)
+                # 策略二：二值化阈值
+                _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
+                thresh = cv2.dilate(thresh, np.ones((7, 7), np.uint8), iterations=2)
+                cnts2, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                candidate_contours.extend(cnts2)
+                best_quad = None
+                best_area = 0
+                for c in candidate_contours:
+                    area = cv2.contourArea(c)
+                    if area < total_area * min_area_ratio:
+                        continue
+                    peri = cv2.arcLength(c, True)
+                    approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+                    if len(approx) == 4 and area > best_area:
+                        best_quad = approx.reshape(4, 2)
+                        best_area = area
+                if best_quad is None:
+                    return None, 0.0
+                return order_points(best_quad), best_area / total_area
+
         tmpl = cv2.imread(template_path)  # 读取模板图
         photo = cv2.imread(photo_path)  # 读取照片图
         if tmpl is None or photo is None:  # 如果任意图片读取失败
             return photo, False
             
-        th, tw = tmpl.shape[:2]  # 获取模板的尺寸
+        th, tw = tmpl.shape[:2]  # 获取新模板的实际尺寸 (如 2000x2827)
         
-        # 转灰度
+        # 2. 用 ORB 判定是否匹配
         gray_tmpl = cv2.cvtColor(tmpl, cv2.COLOR_BGR2GRAY)
         gray_photo = cv2.cvtColor(photo, cv2.COLOR_BGR2GRAY)
         
-        # ORB 特征检测
         orb = cv2.ORB_create(nfeatures=5000)
         kp1, des1 = orb.detectAndCompute(gray_tmpl, None)
         kp2, des2 = orb.detectAndCompute(gray_photo, None)
@@ -155,30 +203,61 @@ def align_to_template(photo_path: str, template_path: str) -> tuple:  # 用 ORB 
         if des1 is None or des2 is None:  # 如果没有检测到特征点
             return photo, False
             
-        # BFMatcher 匹配
         bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
         matches = bf.knnMatch(des1, des2, k=2)
         
-        # Lowe's ratio test 筛选匹配点
         good = []
         for m, n in matches:
             if m.distance < 0.75 * n.distance:
                 good.append(m)
                 
-        if len(good) < 15:  # 如果好匹配点太少，说明并非同一种表格模板，不进行对齐
+        if len(good) < 15:  # 若好匹配点少，判定模板不匹配，不进行对齐
             return photo, False
             
-        # 计算单应性矩阵 (Homography)
-        pts_tmpl = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
-        pts_photo = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
-        H, mask = cv2.findHomography(pts_photo, pts_tmpl, cv2.RANSAC, 5.0)
+        # 3. 模板匹配成功，使用四边形检测进行精确对齐
+        is_aligned = False
+        aligned = None
         
-        if H is None:  # 如果无法计算单应性矩阵
-            return photo, False
-            
-        # 进行透视变换
-        aligned = cv2.warpPerspective(photo, H, (tw, th))
-        return aligned, True
+        dst_quad, dst_ratio = detect_quad(tmpl, 0.15)
+        src_quad, src_ratio = detect_quad(photo, 0.15)
+        
+        if dst_quad is not None and src_quad is not None:
+            # 计算四角透视变换
+            M = cv2.getPerspectiveTransform(src_quad, dst_quad)
+            aligned = cv2.warpPerspective(
+                photo, M, (tw, th),
+                flags=cv2.INTER_LANCZOS4,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(255, 255, 255),
+            )
+            is_aligned = True
+            print(f"[OCR] 使用四角对齐(align_to_template)算法成功对齐图片.")
+        else:
+            # 降级使用 ORB 局部单应性矩阵对齐
+            pts_tmpl = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+            pts_photo = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+            H, mask = cv2.findHomography(pts_photo, pts_tmpl, cv2.RANSAC, 5.0)
+            if H is not None:
+                aligned = cv2.warpPerspective(photo, H, (tw, th))
+                print(f"[OCR] 四角对齐不可用，已降级使用 ORB 匹配进行对齐.")
+            else:
+                # 最后的兜底：直接拉伸 resize
+                aligned = cv2.resize(photo, (tw, th))
+                print(f"[OCR] 警告：对齐算法完全失效，已降级使用直接 resize 兜底.")
+                
+        # 4. 坐标适配：为保证 codebase 原有 hardcoded 坐标（基于旧模板大小）能够完全对正，
+        # 我们需要将对齐至新模版尺寸后的图片，resize 回原代码所期待的规范尺度大小：
+        # - 带气票 (dq.png)：期待的旧尺寸为 1052x1487
+        # - 动火票 (dh.png)：期待的旧尺寸为 1000x1414
+        t_name = os.path.basename(template_path).lower()
+        if "dq.png" in t_name:
+            aligned_resized = cv2.resize(aligned, (1052, 1487))
+            return aligned_resized, is_aligned
+        elif "dh.png" in t_name:
+            aligned_resized = cv2.resize(aligned, (1000, 1414))
+            return aligned_resized, is_aligned
+        else:
+            return aligned, is_aligned
     except Exception as e:
         print(f"[OCR] 模板匹配对齐失败: {e}")
         return None, False

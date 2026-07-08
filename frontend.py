@@ -117,6 +117,7 @@ if "pending_files" not in st.session_state: st.session_state.pending_files = Non
 if "show_uploader" not in st.session_state: st.session_state.show_uploader = False  # 初始化控制上传组件面板的显示显示标记为否
 if "upload_done" not in st.session_state: st.session_state.upload_done = False  # 初始化当前上传操作是否完全完成的标记为否
 if "uploader_key_suffix" not in st.session_state: st.session_state.uploader_key_suffix = 0  # 初始化控制上传选择器动态 Key 变化的序号，用于清空图片缓存
+if "selected_ticket_type" not in st.session_state: st.session_state.selected_ticket_type = "带气作业票"
 
 
 # ---- 侧边栏配置面板 ----
@@ -315,6 +316,8 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
 
     # ---- 文件拖拽选择器 ----
     if st.session_state.get("show_uploader"):  # 判断如果控制显示上传面板的标志为真
+        chosen_type = st.radio("选择作业票类型", ["带气作业票", "动火作业票"], index=0, horizontal=True)
+        st.session_state.selected_ticket_type = chosen_type
         # 动态传入后缀 key 强制在点击“重新上传”后复位组件
         uploader_key = f"fu_main_{st.session_state.uploader_key_suffix}"
         picked = st.file_uploader("选择图片", type=["jpg","jpeg","png","bmp"], accept_multiple_files=False, label_visibility="collapsed", key=uploader_key)  # 显示 Streamlit 原生上传面板，限制单张图片
@@ -507,7 +510,8 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
 
             sys.stdout = Cap()  # 重定向 python 全局的标准输出流 sys.stdout 至我们自定义的 Cap 捕获器类
             try:  # 开启安全防崩溃守护
-                ocr_text, structured = agent.run(save_path, progress_callback=prog_cb)  # 执行 Agent 对象的 run 算法以进行核心安全自检工作
+                ticket_type_val = st.session_state.get("selected_ticket_type", "带气作业票")
+                ocr_text, structured = agent.run(save_path, progress_callback=prog_cb, ticket_type=ticket_type_val)  # 执行 Agent 对象的 run 算法以进行核心安全自检工作
                 result["ocr"], result["data"] = ocr_text, structured  # 将正常运行完毕得出的结果存入 result 中
             except Exception as e:  # 若处理过程中不幸崩溃
                 hlog(f"❌ {e}")  # 往黑客控制台输出带叉的红色错误诊断信息
