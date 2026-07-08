@@ -117,6 +117,8 @@ if "pending_files" not in st.session_state: st.session_state.pending_files = Non
 if "show_uploader" not in st.session_state: st.session_state.show_uploader = False  # 初始化控制上传组件面板的显示显示标记为否
 if "upload_done" not in st.session_state: st.session_state.upload_done = False  # 初始化当前上传操作是否完全完成的标记为否
 if "uploader_key_suffix" not in st.session_state: st.session_state.uploader_key_suffix = 0  # 初始化控制上传选择器动态 Key 变化的序号，用于清空图片缓存
+if "selected_ticket_type" not in st.session_state: st.session_state.selected_ticket_type = "带气作业票"  # 初始化所选作业票类型分流标志
+
 
 
 # ---- 侧边栏配置面板 ----
@@ -311,12 +313,24 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
         st.session_state.pending_files = None  # 清空暂存的待处理文件
         st.session_state.results = []  # 清空历史处理结果，进入全新一轮的识别流程
         st.session_state.uploader_key_suffix += 1  # 递增 Key 序号，强制销毁并重新初始化 file_uploader 组件以彻底清空图片缓存
+        st.session_state.selected_ticket_type = "带气作业票"  # 重置所选作业票类型
         st.rerun()  # 触发 Streamlit 强制重绘，复位上传器的前端状态
 
     # ---- 文件拖拽选择器 ----
     if st.session_state.get("show_uploader"):  # 判断如果控制显示上传面板的标志为真
         # 动态传入后缀 key 强制在点击“重新上传”后复位组件
         uploader_key = f"fu_main_{st.session_state.uploader_key_suffix}"
+        
+        # 票型分流单选项，默认带气作业票
+        ticket_type_selection = st.radio(
+            "📋 请选择上传的作业票类型",
+            ["带气作业票", "动火作业票"],
+            index=0 if st.session_state.selected_ticket_type == "带气作业票" else 1,
+            horizontal=True,
+            key="ticket_type_selection_radio"
+        )
+        st.session_state.selected_ticket_type = ticket_type_selection
+        
         picked = st.file_uploader("选择图片", type=["jpg","jpeg","png","bmp"], accept_multiple_files=False, label_visibility="collapsed", key=uploader_key)  # 显示 Streamlit 原生上传面板，限制单张图片
         if picked and not st.session_state.get("upload_done"):  # 判断用户选择了图片且此图尚未触发上传流水线
             st.session_state.pending_files = [picked]  # 将上传的文件句柄存入会话状态 pending_files 列表中
@@ -336,24 +350,107 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
     # 空状态看板和上次处理历史展示逻辑
     final_files = st.session_state.get("pending_files") or []  # 提取就绪的待处理文件列表，无则置空列表
 
-    if not final_files and not run_clicked:  # 如果当前无上传文件且未触发处理行为
-        if st.session_state.results:  # 检查会话缓存中是否存有上一张作业票的历史处理结果
-            st.markdown("**上次处理结果**")  # 渲染段落小标题
-            for item in st.session_state.results:  # 遍历获取历史卡片条目
-                d = item["data"]  # 提取结构化数据结果
-                render_ticket_kpis(d)  # 通过组件渲染历史作业票的 KPI 主横幅
-        else:  # 若没有任何处理历史，则显示顶级质感的空状态装饰画页
-            st.markdown("""
-            <div class="empty-state">
-                <div class="empty-icon">🛡️</div>
-                <div class="empty-title">上传作业票照片，AI 自动完成全部分析</div>
-                <div class="empty-desc">支持：动火作业票 · 带气作业票 · 临时用电作业票</div>
-                <div class="empty-action">点击上方 <b>📤 上传</b> 选择照片开始分析</div>
-            </div>
-            """, unsafe_allow_html=True)  # 渲染高质感的空状态面板 HTML 代码
+    # 如果有处理结果，且当前没有处于处理中状态，则持久化展示当前处理结果（包含两栏排版、日志及结论）
+    if st.session_state.results and not st.session_state.get("run_processing"):
+        # 遍历渲染所有已处理的结果
+        for idx, item in enumerate(st.session_state.results):
+            col_r, col_l = st.columns([3, 2])
+            
+            # 左侧分栏：展示查看原图及安全结论
+            with col_r:
+                with st.expander("🖼️ 查看原图", expanded=False):
+                    st.image(item["image_path"], caption=item["image_name"], use_container_width=True)
+                
+                d = item["data"]
+                # KPI 行 + 审批建议组件渲染
+                render_ticket_kpis(d)
+                
+                # 决策链报告折叠栏
+                if item.get("report"):
+                    with st.expander("📊 决策链报告", expanded=True):
+                        st.markdown(item["report"])
+                
+                # OCR 识别原文折叠栏
+                if item.get("ocr"):
+                    with st.expander("📝 OCR 识别原文"):
+                        raw = item.get("raw_ocr_raw", "")
+                        ocr_out = item["ocr"].split("\n---\n")[-1] if "\n---\n" in item["ocr"] else item["ocr"]
+                        is_html = "<table" in ocr_out.lower()
+                        if raw:
+                            st.code(raw, language=None, line_numbers=True)
+                        elif is_html:
+                            st.markdown(ocr_out, unsafe_allow_html=True)
+                        else:
+                            st.text(ocr_out)
+                
+                # 异常隐患详情清单
+                if d.issues:
+                    with st.expander(f"⚠️ 隐患明细 ({len(d.issues)})", expanded=True):
+                        unimpl = [m for m in d.safety_measures if not m.implemented]
+                        if unimpl:
+                            st.markdown("**安全措施未落实：**")
+                            for m in unimpl:
+                                st.markdown(f"  🔴 第{m.measure_id}项 `{m.description}` — 标记为**未落实×**")
+                        for issue in d.issues:
+                            reason = issue.raw_text or "OCR识别为异常标记"
+                            st.markdown(f"  ⚠️ **{issue.item_name}** — {reason}")
 
-    # 待处理图片缩略预览图
-    if final_files and not run_clicked and not st.session_state.get("run_processing"):  # 当有文件但尚未点击“处理”按钮时
+            # 右侧分栏：展示持久化的黑客思考控制台
+            with col_l:
+                if item.get("logs"):
+                    import html as _h
+                    parts = []
+                    _last_stage = [""]
+                    for l in item["logs"]:
+                        stage = ""
+                        for possible_stage in ("规划", "感知", "归档", "推理", "反思", "执行", "总结"):
+                            if f"[{possible_stage}]" in l:
+                                stage = possible_stage
+                                break
+                        is_header = False
+                        if stage and stage != _last_stage[0] and _last_stage[0] != "":
+                            parts.append('<div class="ls"></div>')
+                            is_header = True
+                        elif stage and _last_stage[0] == "":
+                            is_header = True
+                        if stage:
+                            _last_stage[0] = stage
+                        
+                        c = "lh" if is_header else ""
+                        if not c:
+                            if "Tool" in l: c = "lo"
+                            elif "FAIL" in l or "出错" in l: c = "le"
+                            elif "OK" in l or "通过" in l or "完成" in l: c = "lk"
+                            elif "重试" in l or "未通过" in l: c = "lw"
+                        parts.append(f'<div class="{c}">{_h.escape(l)}</div>')
+                    
+                    st.markdown(
+                        f'<div class="hlog">'
+                        f'<div class="lt">📄 {_h.escape(item["image_name"])} | 🤖 AGENT THINKING...</div>'
+                        f'{"".join(parts)}</div>',
+                        unsafe_allow_html=True
+                    )
+
+        # 多图批量上传时的统计与大汇总组件排版
+        if len(st.session_state.results) > 1:
+            abn = sum(1 for r in st.session_state.results if r["data"].has_abnormal)
+            st.markdown(f"**📊 汇总** {len(st.session_state.results)}张 {badge('正常'+str(len(st.session_state.results)-abn), 'ok')} {badge('隐患'+str(abn), 'err' if abn else 'ok')}", unsafe_allow_html=True)
+            rows = [{"票号": r["data"].ticket_id, "场站": r["data"].station_name, "状态": "有隐患" if r["data"].has_abnormal else "正常", "风险": r["data"].risk_level or "-", "审批": r["data"].approval_status or "-"} for r in st.session_state.results]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, height=min(len(rows)*28+30, 200))
+
+    # 如果没有历史处理结果，且当前无上传文件且未触发处理行为，显示空状态
+    elif not final_files and not run_clicked and not st.session_state.get("run_processing"):
+        st.markdown("""
+        <div class="empty-state">
+            <div class="empty-icon">🛡️</div>
+            <div class="empty-title">上传作业票照片，AI 自动完成全部分析</div>
+            <div class="empty-desc">支持：动火作业票 · 带气作业票 · 临时用电作业票</div>
+            <div class="empty-action">点击上方 <b>📤 上传</b> 选择照片开始分析</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # 待处理图片缩略预览图 (无处理结果且尚未点击处理按钮时展示)
+    elif final_files and not run_clicked and not st.session_state.get("run_processing") and not st.session_state.results:
         thumbs = st.columns(min(len(final_files) + 1, 6))  # 划分预览图片的列容器
         for i, f in enumerate(final_files[:5]):  # 限制最多渲染 5 张预览小图
             with thumbs[i]: st.image(f, width=100)  # 在列中以 100 像素大小预览该图
@@ -440,10 +537,10 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
                 for l in log_buf:  # 展示完整的日志数据，防止日志截断
                     # 检测当前日志文本中是否包含表示阶段进度的特征括号，如 "[规划]" 或 "[感知]"
                     stage = ""  # 初始化匹配阶段为空
-                    if "[" in l and "]" in l:  # 若左右括号同时存在
-                        _bracket = l.split("]", 1)[0].split("[", 1)[-1] if "[" in l else ""  # 解析提取中括号内的文本字串，如 "规划"
-                        if _bracket in ("规划", "感知", "归档", "推理", "反思", "执行", "总结"):  # 如果是核心 7 大主线步骤之一
-                            stage = _bracket  # 将当前的主线步骤赋值给当前行阶段变量
+                    for possible_stage in ("规划", "感知", "归档", "推理", "反思", "执行", "总结"):
+                        if f"[{possible_stage}]" in l:
+                            stage = possible_stage
+                            break
                     # 感知到新阶段进入后，自动插入一行虚线分割线，形成清晰的模块化视觉阅读效果
                     is_header = False  # 初始化当前行是否属于大阶段头标志为假
                     if stage and stage != _last_stage[0] and _last_stage[0] != "":  # 若发生了阶段转换且不是第一行
@@ -471,7 +568,15 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
 
             _orig = sys.stdout  # 缓存并保存系统默认的常规标准输出流对象
             _orig_err = sys.stderr  # 缓存保存系统默认的标准错误流对象
-            result = {"ocr": None, "data": None}  # 初始化存放本张图片最终产出的 OCR 原始数据和语义 JSON 对象的字典
+            result = {
+                "ocr": None,
+                "data": None,
+                "report": None,
+                "logs": [],
+                "image_name": uploaded.name,
+                "image_path": save_path,
+                "raw_ocr_raw": ""
+            }  # 初始化存放本张图片最终产出的 OCR 原始数据和语义 JSON 对象的字典
             _sp = {"Plan":10,"Perceive":25,"Reason":50,"Reflect":70,"Act":85,"Report":98}  # 定义智能体生命周期对应左栏总进度条百分比位置的映射字典
             _sc = {"Plan":"规划","Perceive":"感知","Reason":"推理","Reflect":"反思","Act":"执行","Report":"总结"}  # 定义左栏进度文字对应的中文描述字典
 
@@ -507,8 +612,11 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
 
             sys.stdout = Cap()  # 重定向 python 全局的标准输出流 sys.stdout 至我们自定义的 Cap 捕获器类
             try:  # 开启安全防崩溃守护
-                ocr_text, structured = agent.run(save_path, progress_callback=prog_cb)  # 执行 Agent 对象的 run 算法以进行核心安全自检工作
-                result["ocr"], result["data"] = ocr_text, structured  # 将正常运行完毕得出的结果存入 result 中
+                chosen_type = st.session_state.get("selected_ticket_type", "带气作业票")
+                ocr_text, structured, summary_report = agent.run(save_path, progress_callback=prog_cb, ticket_type=chosen_type)  # 执行 Agent 对象的 run 算法以进行核心安全自检工作并传入选定票型并返回报告
+                result["ocr"], result["data"], result["report"] = ocr_text, structured, summary_report  # 将正常运行完毕得出的结果及决策链报告存入 result 中
+                result["logs"] = list(log_buf)
+                result["raw_ocr_raw"] = getattr(AgentTools, "_last_ocr_raw", "")
             except Exception as e:  # 若处理过程中不幸崩溃
                 hlog(f"❌ {e}")  # 往黑客控制台输出带叉的红色错误诊断信息
             finally:  # 最终清理复原
@@ -529,6 +637,11 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
 
                     # KPI 行 + 审批建议组件渲染
                     render_ticket_kpis(d)  # 渲染由票号、风险评估、浓度监控及智能意见组成的摘要排布面板
+
+                    # 决策链报告折叠栏
+                    if result.get("report"):
+                        with st.expander("📊 决策链报告", expanded=True):
+                            st.markdown(result["report"])
 
                     # OCR 识别原文折叠栏（备用，用于人工进行文字核对）
                     if result["ocr"]:  # 判断原文非空
@@ -564,6 +677,8 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
             st.markdown(f"**📊 汇总** {len(st.session_state.results)}张 {badge('正常'+str(len(st.session_state.results)-abn), 'ok')} {badge('隐患'+str(abn), 'err' if abn else 'ok')}", unsafe_allow_html=True)  # 渲染大汇总结果，附带对应颜色的 HTML 徽标
             rows = [{"票号": r["data"].ticket_id, "场站": r["data"].station_name, "状态": "有隐患" if r["data"].has_abnormal else "正常", "风险": r["data"].risk_level or "-", "审批": r["data"].approval_status or "-"} for r in st.session_state.results]  # 整理成 Pandas DataFrame 要求的数据格式
             st.dataframe(pd.DataFrame(rows), use_container_width=True, height=min(len(rows)*28+30, 200))  # 渲染精美的数据表报表汇总视图
+        
+        st.rerun()  # 运行完成，强制重绘页面以通过持久化机制稳定渲染最终两栏结果
 
 
 # ==================== Tab 2: 历史作业票数据总看板与数据删除流 ====================

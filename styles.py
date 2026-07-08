@@ -527,11 +527,6 @@ button[kind="primary"]:hover {
     border-radius: 10px !important;
     box-shadow: 0 3px 10px rgba(15,23,42,0.04) !important;
 }
-div[data-testid="stAlert"] .stMarkdown,
-div[data-testid="stAlert"] .stMarkdown p,
-div[data-testid="stAlert"] .stMarkdown span {
-    color: inherit !important;
-}
 div[data-baseweb="notification"] { border-radius: 10px !important; }
 
 /* ============== 终端日志面板（深色背景终端，仿黑客数字流） ============== */

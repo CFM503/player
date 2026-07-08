@@ -80,30 +80,35 @@ def render_ticket_kpis(d) -> None:  # 定义单张作业票的完整摘要信息
         ("审批", ap_status, ap_color),  # 智能流程审批状态指标
     ])  # 结束数组定义
 
-    # 审批建议
-    if d.approval_opinion:  # 检查该作业票是否含有由 Agent 产出的审批意见文本
-        ic = APPROVAL_ICON.get(ap_status, RISK_ICON.get(d.risk_level or "", ""))  # 获取匹配状态的 emoji 徽章，作为消息前缀
-        
-        # 格式化提取的核心变量信息，末尾附加 [变量名]
-        info_lines = [
-            f"作业票编号：{d.ticket_id or ''} [ticket_id]",
-            f"作业单位：{d.station_name or ''} [station_name]",
-            f"作业内容：{d.content or ''} [content]",
-            f"作业时间：{d.work_time or ''} [work_time]",
-            f"作业人姓名及证书编号：{d.worker_id or ''} [worker_id]",
-            f"发起人签字确认：{d.approver_name or ''} [approver_name]"
-        ]
-        info_block = "\n\n".join(info_lines)
-        
-        # 拼接审批结果与核心信息
-        full_text = f"{ic} {d.approval_opinion}\n\n---\n\n{info_block}"
-        
-        if ap_status == "已驳回":  # 若审批被智能判定驳回拒绝
-            st.error(full_text)  # 在 Streamlit 界面显示红色的 error 级别错误框提示
-        elif ap_status == "待审批":  # 若属于需人工流转审批
-            st.warning(full_text)  # 在 Streamlit 界面显示黄色的 warning 警告框提示
-        else:  # 若属于自动通过的安全范畴
-            st.success(full_text)  # 在 Streamlit 界面显示绿色的 success 成功成功框提示
+    # 审批建议 (强制渲染，防缓存或异常导致未生成)
+    opinion_text = d.approval_opinion or "暂无智能审批建议（可能使用了历史数据缓存或生成异常）"
+    ic = APPROVAL_ICON.get(ap_status, RISK_ICON.get(d.risk_level or "", ""))  # 获取匹配状态的 emoji 徽章，作为消息前缀
+    
+    # 格式化提取的核心变量信息，末尾附加 [变量名]
+    info_lines = [
+        f"- 作业票编号：{d.ticket_id or ''} [ticket_id]",
+        f"- 作业单位：{d.station_name or ''} [station_name]",
+        f"- 作业内容：{d.content or ''} [content]",
+        f"- 作业时间：{d.work_time or ''} [work_time]",
+        f"- 作业人员：{getattr(d, 'workers', '') or ''} [workers]",
+        f"- 施工方现场负责人：{getattr(d, 'operator_leader', '') or ''} [operator_leader]",
+        f"- 监理人员：{getattr(d, 'supervisor', '') or ''} [supervisor]",
+        f"- 项目公司监护人：{getattr(d, 'company_guardian', '') or ''} [company_guardian]",
+        f"- 带气现场负责人：{getattr(d, 'gas_leader', '') or ''} [gas_leader]",
+        f"- 作业人姓名及证书编号：{d.worker_id or ''} [worker_id]",
+        f"- 发起人签字确认：{d.approver_name or ''} [approver_name]"
+    ]
+    info_block = "\n".join(info_lines)
+    
+    # 拼接审批结果与核心信息
+    full_text = f"**{ic} 审批建议：**\n\n{opinion_text}\n\n**【关键人员及基础信息】**\n\n{info_block}"
+    
+    if ap_status == "已驳回":  # 若审批被智能判定驳回拒绝
+        st.error(full_text)  # 在 Streamlit 界面显示红色的 error 级别错误框提示
+    elif ap_status == "待审批":  # 若属于需人工流转审批
+        st.warning(full_text)  # 在 Streamlit 界面显示黄色的 warning 警告框提示
+    else:  # 若属于自动通过的安全范畴
+        st.success(full_text)  # 在 Streamlit 界面显示绿色的 success 级别成功框提示
 
 
 def render_guide(step: int, text: str) -> None:  # 定义顶部操作向导提示框的渲染函数

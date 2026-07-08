@@ -379,6 +379,11 @@ class SecuritySheetData(BaseModel):  # 定义包含完整作业票所有要素�
     risk_level: Optional[str] = Field(None, description="风险等级：重大/较大/一般/低风险")  # 智能体综合评估的风险级别
     approval_status: Optional[str] = Field(None, description="审批状态：自动通过/待审批/已驳回")  # 智能体流转的最终流转状态
     approval_level: Optional[str] = Field(None, description="审批路由级别：自动通过/主管审批/禁止作业")  # 审批路由所属层级
+    workers: Optional[str] = Field(default="", description="作业人员")
+    operator_leader: Optional[str] = Field(default="", description="施工方现场负责人")
+    supervisor: Optional[str] = Field(default="", description="监理人员")
+    company_guardian: Optional[str] = Field(default="", description="项目公司监护人")
+    gas_leader: Optional[str] = Field(default="", description="带气现场负责人")
 
 
 # ==========================================
@@ -450,6 +455,26 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
                     m = re.search(r"(?:作业人员|动火人|作业人|证书编号)[：:]?\s*([^\n]+)", ocr_text)  # 正则搜索作业人姓名
                     val = m.group(1).strip() if m else ""  # 命中包装，否则留空串，不填造假占位
             raw_dict[field] = str(val).strip()  # 将清洗后的文本强转为纯净的剥离空白后的字符串保存入字典
+
+        for field in ["workers", "operator_leader", "supervisor", "company_guardian", "gas_leader"]:
+            val = raw_dict.get(field, "")
+            if not val or str(val).lower() in ["null", "none", "未知", ""]:
+                if field == "workers":
+                    m = re.search(r"(?:作业人员|作业人|动火人)[：:]?\s*([^\n]+)", ocr_text)
+                    val = m.group(1).strip() if m else ""
+                elif field == "operator_leader":
+                    m = re.search(r"(?:施工方现场负责人|负责人|施工负责人)[：:]?\s*([^\n]+)", ocr_text)
+                    val = m.group(1).strip() if m else ""
+                elif field == "supervisor":
+                    m = re.search(r"(?:监理人员|监理|监理人)[：:]?\s*([^\n]+)", ocr_text)
+                    val = m.group(1).strip() if m else ""
+                elif field == "company_guardian":
+                    m = re.search(r"(?:项目公司监护人|监护人|项目监护人)[：:]?\s*([^\n]+)", ocr_text)
+                    val = m.group(1).strip() if m else ""
+                elif field == "gas_leader":
+                    m = re.search(r"(?:带气现场负责人|带气负责人)[：:]?\s*([^\n]+)", ocr_text)
+                    val = m.group(1).strip() if m else ""
+            raw_dict[field] = str(val).strip()
 
         # 4. 规范化日期 YYYY-MM-DD
         date_str = raw_dict.get("check_date", "")  # 提取日期字段
@@ -586,7 +611,7 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
         # 优先使用指定坐标局部裁剪 OCR 提取签字人姓名
         approver = None
         try:
-            approver = AgentTools.extract_filler_name(630, 190, 195, 150)
+            approver = AgentTools.extract_filler_name(1310,340,590,310)
         except Exception as e:
             safe_print(f"[Sanitize] 提取签字人失败: {e}")
         
@@ -613,7 +638,12 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             '  "content": "作业内容",\n'
             '  "work_time": "作业时间",\n'
             '  "worker_id": "作业人员姓名及证件号/证书编号",\n'
-            '  "check_date": "日期 YYYY-MM-DD"\n'
+            '  "check_date": "日期 YYYY-MM-DD",\n'
+            '  "workers": "作业人员姓名（如：张三 等）",\n'
+            '  "operator_leader": "施工方现场负责人姓名",\n'
+            '  "supervisor": "监理人员姓名",\n'
+            '  "company_guardian": "项目公司监护人姓名",\n'
+            '  "gas_leader": "带气现场负责人姓名"\n'
             "}\n"
             "直接输出 JSON 对象，不要添加任何 Markdown 标记或多余的解释。"
         )  # 结束提示词定义
@@ -726,7 +756,7 @@ class AgentTools:
         return md
 
     @staticmethod
-    def ocr_tool(image_path: str, mode: str = "cluster", brain=None, progress_callback=None, engine: str = "paddleocr", vision_brain=None, device: str = "gpu") -> str:  # 核心OCR引擎调用门面方法，支持切换本地 PaddleOCR 和 Vision LLM，device 控制推理硬件
+    def ocr_tool(image_path: str, mode: str = "cluster", brain=None, progress_callback=None, engine: str = "paddleocr", vision_brain=None, device: str = "gpu", ticket_type: str = None) -> str:  # 核心OCR引擎调用门面方法，支持切换本地 PaddleOCR 和 Vision LLM，device 控制推理硬件
         """调用 ocr 模块进行 OCR 识别，支持坐标聚类和自适应边框检测；可选视觉大模型"""
         AgentTools._last_image_path = image_path
         AgentTools._last_ocr_device = device  # 缓存当前推理设备选择，供 _ocr_crop_region 等静态方法复用。【注意】后续新增的 OCR 功能都应读取此变量，保持与侧边栏设置同步
@@ -742,37 +772,84 @@ class AgentTools:
             for f in os.listdir(template_dir):
                 if f.lower().endswith(".png") and not f.startswith("aligned") and not f.startswith("match"):
                     templates.append(f)
+
+        # 根据 ticket_type 分流匹配模板
+        if ticket_type == "带气作业票":
+            templates = [t for t in templates if t == "dq.png"]
+        elif ticket_type == "动火作业票":
+            templates = [t for t in templates if t == "dh.png"]
         
         matched_template_type = None
-        matched_template_type = None
         if templates:
-            from ocr import align_to_template
+            import subprocess
+            import sys
+            import cv2
+            
             matched = False
+            aligned_dir = os.path.join(os.path.dirname(__file__), "uploads")
+            os.makedirs(aligned_dir, exist_ok=True)
+            aligned_path = os.path.join(aligned_dir, "aligned_" + os.path.basename(image_path))
+            
+            align_script = os.path.join(os.path.dirname(__file__), "align_to_template.py")
+            
+            best_t_file = None
+            best_aligned_path = None
+            best_is_aligned = False
+            
+            # 1. 优先使用 align_to_template.py 进行精确四边形对齐
             for t_file in templates:
                 t_path = os.path.join(template_dir, t_file)
                 _prog(12, f"匹配模板 {t_file} 中...")
-                aligned_img, is_aligned = align_to_template(image_path, t_path)
-                # is_aligned=True 表示精确透视对齐，=False 表示降级对齐（resize/Hough）
-                # 两种情况都对齐后的图像可用于 OCR，都算匹配成功
-                if aligned_img is not None:
-                    # 将对齐后的图像保存为临时文件，以便全图扫描和裁剪操作都基于该对齐图
-                    aligned_dir = os.path.join(os.path.dirname(__file__), "uploads")
-                    os.makedirs(aligned_dir, exist_ok=True)
-                    aligned_path = os.path.join(aligned_dir, "aligned_" + os.path.basename(image_path))
-                    import cv2
-                    cv2.imwrite(aligned_path, aligned_img)
-                    status = "精确对齐" if is_aligned else "降级对齐(resize/Hough)"
-                    safe_print(f"[OCR] 模板匹配完成：使用 {t_file} 模板 ({status})")
-                    image_path = aligned_path  # 覆盖后续全图 OCR 扫描 of 源图片路径
-                    AgentTools._last_image_path = aligned_path  # 覆盖缓存路径，确保之后的裁剪操作也使用对齐图
-                    matched = True
-                    if t_file == "dq.png":
-                        matched_template_type = "带气作业票"
-                    break
+                
+                cmd = [
+                    sys.executable,
+                    align_script,
+                    "--template", t_path,
+                    "--input", image_path,
+                    "--output", aligned_path
+                ]
+                try:
+                    res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                    if res.returncode == 0 and os.path.exists(aligned_path):
+                        best_t_file = t_file
+                        best_aligned_path = aligned_path
+                        best_is_aligned = True
+                        break
+                except Exception as e:
+                    safe_print(f"[OCR] 调用对齐脚本异常: {e}")
+            
+            # 2. 精确对齐失败，降级为 resize 对齐兜底
+            if not best_is_aligned and templates:
+                fallback_t_file = templates[0]
+                t_path = os.path.join(template_dir, fallback_t_file)
+                _prog(12, f"精确对齐失败，使用 {fallback_t_file} 降级 resize 对齐中...")
+                try:
+                    tmpl = cv2.imread(t_path)
+                    photo = cv2.imread(image_path)
+                    if tmpl is not None and photo is not None:
+                        th, tw = tmpl.shape[:2]
+                        aligned_img = cv2.resize(photo, (tw, th))
+                        cv2.imwrite(aligned_path, aligned_img)
+                        best_t_file = fallback_t_file
+                        best_aligned_path = aligned_path
+                        best_is_aligned = False
+                except Exception as e:
+                    safe_print(f"[OCR] 降级 resize 对齐异常: {e}")
+            
+            if best_t_file and best_aligned_path and os.path.exists(best_aligned_path):
+                status = "精确对齐" if best_is_aligned else "降级对齐(resize)"
+                safe_print(f"[OCR] 模板匹配完成：使用 {best_t_file} 模板 ({status})")
+                image_path = best_aligned_path  # 覆盖后续全图 OCR 扫描 of 源图片路径
+                AgentTools._last_image_path = best_aligned_path  # 覆盖缓存路径，确保之后的裁剪操作也使用对齐图
+                matched = True
+                if best_t_file == "dq.png":
+                    matched_template_type = "带气作业票"
+                elif best_t_file == "dh.png":
+                    matched_template_type = "动火作业票"
             
             if not matched:
                 # 所有模板都无法匹配，可能是完全不同的图片
-                raise RuntimeError("上传的照片无法匹配到任何已注册的作业票模板（如带气作业票），请确保照片拍摄端正且清晰无遮挡，并重新上传正确的照片！")
+                raise RuntimeError("上传的照片无法匹配到任何已注册的作业票模板，请确保照片拍摄端正且清晰无遮挡，并重新上传正确的照片！")
 
         # ---- 视觉大模型（无坐标） ----
         if engine == "vision":  # 如果用户指定使用视觉大模型引擎
@@ -1320,9 +1397,8 @@ class AgentTools:
             safe_print(f"[Tool] extract_filler_name 失败: 图片路径无效或不存在: {image_path}")
             return ""  # 安全审计: 禁止「坐标识别图片未知」造假占位，留空由调用方判定
             
-        # 自动生成 archives/YYYY-MM-DD 归档文件夹路径并将签字裁剪图进行物理保存
-        date_dir = time.strftime("%Y-%m-%d")
-        archive_dir = os.path.join(os.path.dirname(__file__), "archives", date_dir)
+        # 将签字裁剪图物理保存至 archives 目录下
+        archive_dir = os.path.join(os.path.dirname(__file__), "archives")
         os.makedirs(archive_dir, exist_ok=True)
         ts = time.strftime("%Y%m%d_%H%M%S")
         crop_path = os.path.join(archive_dir, f"signature_{ts}_{tx}_{ty}.png")
@@ -1460,11 +1536,11 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             safe_print(f"[Agent Plan] {s}")  # 打印计划详情
         mem.remember("规划", "📋", "制定5步执行计划", f"{len(steps)}步：感知→推理→反思→执行→总结")  # 将计划写入记忆步骤中
 
-    def _perceive(self, image_path: str, mem: AgentMemory) -> str:  # 感知阶段：触发 OpenCV 对比度增强和 PaddleOCR 文字扫描工作
+    def _perceive(self, image_path: str, mem: AgentMemory, ticket_type: str = None) -> str:  # 感知阶段：触发 OpenCV 对比度增强和 PaddleOCR 文字扫描工作
         prog = self._progress  # 获取进度条回调函数
         if prog: prog(5, "图像预处理")  # 前端更新进度为 5%
         safe_print("[Agent Perceive] OpenCV + PaddleOCR 感知...")  # 打印感知阶段日志
-        text = self.tools.ocr_tool(image_path, mode=self.ocr_mode, brain=self.brain, progress_callback=prog, engine=self.ocr_engine, vision_brain=self.vision_brain, device=self.ocr_device)  # 调用 ocr_tool 接口识别图片，传入推理设备
+        text = self.tools.ocr_tool(image_path, mode=self.ocr_mode, brain=self.brain, progress_callback=prog, engine=self.ocr_engine, vision_brain=self.vision_brain, device=self.ocr_device, ticket_type=ticket_type)  # 调用 ocr_tool 接口识别图片，传入推理设备和票型
         n = len(text.strip().split("\n"))  # 计算识别出的文本总行数
         summary = f"提取 {n} 行文本"  # 汇总感知报告
         safe_print(f"[Agent Perceive] {summary}")  # 打印行数汇总日志
@@ -1765,6 +1841,11 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                 f"作业单位：{data.station_name or ''} [station_name]",
                 f"作业内容：{data.content or ''} [content]",
                 f"作业时间：{data.work_time or ''} [work_time]",
+                f"作业人员：{getattr(data, 'workers', '') or ''} [workers]",
+                f"施工方现场负责人：{getattr(data, 'operator_leader', '') or ''} [operator_leader]",
+                f"监理人员：{getattr(data, 'supervisor', '') or ''} [supervisor]",
+                f"项目公司监护人：{getattr(data, 'company_guardian', '') or ''} [company_guardian]",
+                f"带气现场负责人：{getattr(data, 'gas_leader', '') or ''} [gas_leader]",
                 f"作业人姓名及证书编号：{data.worker_id or ''} [worker_id]",
                 f"发起人签字确认：{data.approver_name or ''} [approver_name]"
             ]
@@ -1864,7 +1945,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         mem.remember("归档", "📦", "数字 OCR 归档", summary)
         return ocr_path
 
-    def run(self, image_path: str, ocr_mode: str = None, progress_callback=None):
+    def run(self, image_path: str, ocr_mode: str = None, progress_callback=None, ticket_type: str = None):
         """运行完整 ReAct 循环，返回 (ocr_text, structured_data)"""
         if ocr_mode:
             self.ocr_mode = ocr_mode
@@ -1875,7 +1956,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         if prog: prog(0, "开始处理")
         self._plan(image_path, mem)
         if prog: prog(3, "感知阶段")
-        ocr_text = self._perceive(image_path, mem)
+        ocr_text = self._perceive(image_path, mem, ticket_type=ticket_type)
         if prog: prog(52, "OCR 归档")
         self._archive(image_path, ocr_text, mem)
         if prog: prog(55, "推理阶段")
@@ -1890,7 +1971,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         safe_print(f"[Agent] 全流程耗时: {elapsed:.1f}s")
         self._report(mem, data)
         if prog: prog(100, "完成")
-        return ocr_text, data
+        return ocr_text, data, mem.get_summary()
 
 
 # ==========================================
