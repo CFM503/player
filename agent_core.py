@@ -766,31 +766,61 @@ class AgentTools:
         matched_template_type = None
         matched_template_type = None
         if templates:
-            from ocr import align_to_template
+            import subprocess
+            import sys
+            import cv2
+            
             matched = False
             for t_file in templates:
                 t_path = os.path.join(template_dir, t_file)
                 _prog(12, f"匹配模板 {t_file} 中...")
-                aligned_img, is_aligned = align_to_template(image_path, t_path)
-                # is_aligned=True 表示精确透视对齐，=False 表示降级对齐（resize/Hough）
-                # 两种情况都对齐后的图像可用于 OCR，都算匹配成功
-                if aligned_img is not None:
-                    # 将对齐后的图像保存为临时文件，以便全图扫描和裁剪操作都基于该对齐图
-                    aligned_dir = os.path.join(os.path.dirname(__file__), "uploads")
-                    os.makedirs(aligned_dir, exist_ok=True)
-                    aligned_path = os.path.join(aligned_dir, "aligned_" + os.path.basename(image_path))
-                    import cv2
-                    cv2.imwrite(aligned_path, aligned_img)
-                    status = "精确对齐" if is_aligned else "降级对齐(resize/Hough)"
-                    safe_print(f"[OCR] 模板匹配完成：使用 {t_file} 模板 ({status})")
-                    image_path = aligned_path  # 覆盖后续全图 OCR 扫描 of 源图片路径
-                    AgentTools._last_image_path = aligned_path  # 覆盖缓存路径，确保之后的裁剪操作也使用对齐图
-                    matched = True
-                    if t_file == "dq.png":
-                        matched_template_type = "带气作业票"
-                    elif t_file == "dh.png":
-                        matched_template_type = "动火作业票"
-                    break
+                
+                # 定义对齐后图像的目标保存路径
+                aligned_dir = os.path.join(os.path.dirname(__file__), "uploads")
+                os.makedirs(aligned_dir, exist_ok=True)
+                aligned_path = os.path.join(aligned_dir, "aligned_" + os.path.basename(image_path))
+                
+                # 使用 subprocess 调用 align_to_template.py 脚本进行对齐
+                cmd = [
+                    sys.executable,
+                    os.path.join(os.path.dirname(__file__), "align_to_template.py"),
+                    "--template", t_path,
+                    "--input", image_path,
+                    "--output", aligned_path
+                ]
+                
+                try:
+                    # 运行 align_to_template.py 并等待其完成
+                    subprocess.run(cmd, capture_output=True, text=True, check=True)
+                    
+                    # 检查对齐图片是否生成成功并读取
+                    if os.path.exists(aligned_path):
+                        aligned_img = cv2.imread(aligned_path)
+                        if aligned_img is not None:
+                            # 坐标适配：为保证 codebase 原有 hardcoded 坐标（基于旧模板大小）能够完全对正，
+                            # 我们需要将对齐至新模版尺寸后的图片，resize 回原代码所期待的规范尺度大小：
+                            # - 带气票 (dq.png)：期待的旧尺寸为 1052x1487
+                            # - 动火票 (dh.png)：期待的旧尺寸为 1000x1414
+                            t_name = t_file.lower()
+                            if "dq.png" in t_name:
+                                aligned_img = cv2.resize(aligned_img, (1052, 1487))
+                                cv2.imwrite(aligned_path, aligned_img)
+                            elif "dh.png" in t_name:
+                                aligned_img = cv2.resize(aligned_img, (1000, 1414))
+                                cv2.imwrite(aligned_path, aligned_img)
+                                
+                            safe_print(f"[OCR] 模板匹配对齐完成：使用 {t_file} 模板")
+                            image_path = aligned_path  # 覆盖后续全图 OCR 扫描 of 源图片路径
+                            AgentTools._last_image_path = aligned_path  # 覆盖缓存路径，确保之后的裁剪操作也使用对齐图
+                            matched = True
+                            if t_file == "dq.png":
+                                matched_template_type = "带气作业票"
+                            elif t_file == "dh.png":
+                                matched_template_type = "动火作业票"
+                            break
+                except Exception as e:
+                    # 对齐失败，继续尝试下一个模板
+                    safe_print(f"[OCR] 调用 align_to_template.py 失败或不匹配 {t_file}: {e}")
             
             if not matched:
                 # 所有模板都无法匹配，可能是完全不同的图片
