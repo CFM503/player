@@ -18,7 +18,7 @@ import pandas as pd  # 导入 Pandas 数据分析库用于在汇总页展示表�
 from styles import CUSTOM_CSS  # 从 styles 导入精美的全局科技风样式定义字符串
 from components import (  # 从原子组件库中引入状态徽章、KPI 统计栏、审批显示及通知写入等组件
     badge, render_kpi_row, render_ticket_kpis,
-    render_notification_btn, render_record_badge,
+    render_record_badge,
 )  # 结束组件解包导入
 
 # ---- 配置（优先环境变量，其次 config.json） ----

@@ -123,47 +123,7 @@ def render_guide(step: int, text: str) -> None:  # 定义顶部操作向导提�
     )  # 结束 markdown 渲染调用
 
 
-def render_notification_btn(  # 定义用于将作业数据写入钉钉 MCP AI 表格的动作按钮组件函数
-    platform: str,  # 参数一：写入目的地平台的显示名称，如 "钉钉 AI 表格"
-    emoji: str,  # 参数二：显示在按钮左侧的前缀表情，如 "📱"
-    mcp_key: str,  # 参数三：配置项中代表 MCP 路由基地址的键名，如 "dingtalk_mcp_url"
-    msg_fmt,  # 参数四：回调函数格式化器，根据结果生成要存入多维表的摘要说明文字
-    d,  # 参数五：待处理的整个作业票安全数据结果实体对象
-    idx: int,  # 参数六：防止 Streamlit 出现按键 key 冲突而特别需要的唯一数字索引号
-    cfg: dict,  # 参数七：应用当前运行加载的全部配置数据字典
-) -> None:  # 表明此渲染逻辑没有返回值
-    # 构建带有 MCP 校验的通知写入按钮
-    url = cfg.get(mcp_key, "")  # 尝试从应用配置中获取钉钉 MCP 的路由服务基地址
-    key = f"{mcp_key}_{idx}"  # 合成一个确保在该行表格详情内唯一的交互控件 key 值
 
-    if not url:  # 判断用户是否尚未在应用左侧侧边栏中配置该 MCP 地址
-        st.error(f"⚠️ 未配置钉钉 MCP 地址，无法写入 AI 表格")  # 在界面上弹窗红色提示指出配置项缺失错误
-        st.button(  # 渲染一个不可被点击的失效灰色按钮
-            f"{emoji} 写入{platform}", key=key,  # 按钮标题内容，附带后缀 key 进行控制
-            use_container_width=True, disabled=True,  # 设置按钮拉伸平铺填满宽度，并设置为禁用失效状态
-            help=f"请在左侧「钉钉 MCP 地址」中配置后重试",  # 当用户鼠标悬浮时展示气泡提示
-        )  # 结束按钮定义
-        return  # 提前阻断返回，跳过后续真实的交互行为
-
-    if st.button(f"{emoji} 写入{platform}", key=key, use_container_width=True):  # 当检测到用户真实点击了这一行对应的写入按钮时
-        # 导入 agent 模块以获取运行期实时更新的全局变量
-        import agent_core  # 动态按需引入智能体核心模块以读取全局坐标
-        AgentTools = agent_core.AgentTools
-        if hasattr(d, "image_path") and d.image_path:
-            AgentTools._last_image_path = d.image_path
-        _, content = msg_fmt(d)  # 解包获取回调格式化器生成的隐患详细报告文字
-        # 写 AI 表格：编号 / 图片附件 / 问题描述 / 责任人 / 等级
-        result = AgentTools.write_dingtalk_table(  # 调用 AgentTools 中的底层多维表 MCP 写入工具方法
-            ticket_id=d.ticket_id,  # 传入识别所得的作业票编号
-            image_path="",  # 手动点击触发时通常无局部大图文件缓存，传递空字符串
-            description=content[:200],  # 截取报告文本前 200 字存入问题描述字段中
-            person_name=AgentTools.extract_filler_name(630, 190, 195, 150),  # 直接使用固定裁剪范围进行责任人姓名提取
-            risk_level=d.risk_level or "",  # 写入识别并给出的安全风险级别
-        )  # 结束调用并接收布尔返回值状态
-        if result:  # 如果底层 MCP 返回成功写入的确认
-            st.success(f"✅ 已写入{platform}")  # 在该按钮下方渲染绿色的成功提示框
-        else:  # 若写入发生异常或接口超时失败
-            st.error(f"写入{platform}失败，请查看运行日志")  # 渲染红色的写入失败指示框，提醒用户排错
 
 
 def render_record_badge(risk: str | None, abnormal: bool) -> str:  # 定义用于在历史看版 Tab2 的摘要条中渲染彩字风险级别的函数
