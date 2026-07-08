@@ -307,14 +307,15 @@ def run_ocr(  # 定义 OCR 扫描最核心的总控制运行调度函数
     result = ocr.predict(img_for_ocr)  # 运行 PaddleOCR 模型，预测得出图片中文字的包围框及文本内容结果
     
     entries = []  # 初始化临时识别条目列表
-    if result and hasattr(result[0], 'json'):  # 判断返回结构是否有效并且包含 JSON 属性字段信息
-        res = result[0].json.get('res', {})  # 提取结构化识别节点 res 字典
-        texts = res.get('rec_texts', [])  # 获取识别出的所有非空文本数组
-        polys = res.get('rec_polys', [])  # 获取每一个文本行对应的包围框多边形顶点数组坐标
+    if result and hasattr(result[0], 'json') and result[0].json is not None:  # 判断返回结构是否有效并且包含 JSON 属性字段信息
+        res = result[0].json.get('res', {}) or {}
+        texts = res.get('rec_texts', []) or []
+        polys = res.get('rec_polys', []) or []
         if texts:  # 若识别出至少一行文本内容
             for i, text in enumerate(texts):  # 迭代每一行文本，并追踪索引序号 i
                 box = polys[i] if i < len(polys) else []  # 提取该行文本对应的多边形顶点框
-                if len(box) >= 3:  # 如果顶点框至少含有三个坐标顶点，说明其为合法的多边形
+                # 增加健壮的类型和嵌套长度校验，彻底避免 TypeError: 'NoneType' object is not subscriptable
+                if isinstance(box, (list, tuple, np.ndarray)) and len(box) >= 3 and all(isinstance(pt, (list, tuple, np.ndarray)) and len(pt) >= 2 for pt in box[:3]):
                     y_center = (box[0][1] + box[2][1]) / 2  # 计算计算多边形顶点中心线处的垂直 Y 轴中值坐标
                     x_left = box[0][0]  # 获取多边形包围框最左端的起始 X 轴顶点坐标
                     height = abs(box[2][1] - box[0][1])  # 计算估算文本行的大致高度
