@@ -10,6 +10,7 @@ import os  # 导入系统接口模块，用于处理文件路径及目录创建�
 import cv2  # 导入 OpenCV 计算机视觉库，用于图像读取、裁剪及图像形态学处理
 import argparse  # 导入命令行参数解析模块，用于处理终端命令行参数输入
 from typing import List, Dict, Any, Optional  # 从 typing 模块导入用于类型注解的容器和可选类型
+import numpy as np  # 导入 NumPy
 
 def crop_image(image_path: str, x: int, y: int, w: int, h: int, save_crop_path: Optional[str] = None):  # 定义裁剪图片区域的函数，可选择性保存子图
     # 获取输入参数以裁剪图像
