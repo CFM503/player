@@ -91,7 +91,12 @@ def render_ticket_kpis(d) -> None:  # 定义单张作业票的完整摘要信息
             f"作业内容：{d.content or ''} [content]",
             f"作业时间：{d.work_time or ''} [work_time]",
             f"作业人姓名及证书编号：{d.worker_id or ''} [worker_id]",
-            f"发起人签字确认：{d.approver_name or ''} [approver_name]"
+            f"发起人签字确认：{d.approver_name or ''} [approver_name]",
+            f"作业人员：{d.operators or ''} [operators]",
+            f"施工方现场负责人：{d.construction_leader or ''} [construction_leader]",
+            f"监理人员：{d.supervisor or ''} [supervisor]",
+            f"项目公司监护人：{d.company_monitor or ''} [company_monitor]",
+            f"带气现场负责人：{d.gas_leader or ''} [gas_leader]"
         ]
         info_block = "\n\n".join(info_lines)
         

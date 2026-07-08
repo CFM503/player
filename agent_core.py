@@ -375,6 +375,11 @@ class SecuritySheetData(BaseModel):  # 定义包含完整作业票所有要素�
     issues: List[HandWrittenIssue] = Field(default=[], description="隐患项明细")  # 整理出的异常隐患详细分类列表
     completion_time: Optional[str] = Field(None, description="完工时间/完工验收时间")  # 作业票完工的物理签字时间
     approver_name: Optional[str] = Field(None, description="签批人/负责人姓名")  # 作业票终审的负责人姓名
+    operators: Optional[str] = Field(None, description="作业人员")
+    construction_leader: Optional[str] = Field(None, description="施工方现场负责人")
+    supervisor: Optional[str] = Field(None, description="监理人员")
+    company_monitor: Optional[str] = Field(None, description="项目公司监护人")
+    gas_leader: Optional[str] = Field(None, description="带气现场负责人")
     approval_opinion: Optional[str] = Field(None, description="自动生成的审批建议")  # AI 智能建议意见文本
     risk_level: Optional[str] = Field(None, description="风险等级：重大/较大/一般/低风险")  # 智能体综合评估的风险级别
     approval_status: Optional[str] = Field(None, description="审批状态：自动通过/待审批/已驳回")  # 智能体流转的最终流转状态
@@ -580,7 +585,7 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
         raw_dict["has_abnormal"] = has_abnormal  # 更新 has_abnormal 标志
         raw_dict["issues"] = existing_issues  # 更新 issues 隐患列表
 
-        # 补全完工时间、签批人、风险等级
+        # 补全完工时间、签批人、风险等级及其他签字负责人姓名
         raw_dict["completion_time"] = raw_dict.get("completion_time") or None  # 若无则设为 None
         
         # 优先使用指定坐标局部裁剪 OCR 提取签字人姓名
@@ -595,6 +600,12 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             approver = raw_dict.get("approver_name")
             
         raw_dict["approver_name"] = approver or None
+        
+        raw_dict["operators"] = raw_dict.get("operators") or None
+        raw_dict["construction_leader"] = raw_dict.get("construction_leader") or None
+        raw_dict["supervisor"] = raw_dict.get("supervisor") or None
+        raw_dict["company_monitor"] = raw_dict.get("company_monitor") or None
+        raw_dict["gas_leader"] = raw_dict.get("gas_leader") or None
         
         raw_dict["risk_level"] = raw_dict.get("risk_level") or None  # 若无则设为 None
 
@@ -613,7 +624,12 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             '  "content": "作业内容",\n'
             '  "work_time": "作业时间",\n'
             '  "worker_id": "作业人员姓名及证件号/证书编号",\n'
-            '  "check_date": "日期 YYYY-MM-DD"\n'
+            '  "check_date": "日期 YYYY-MM-DD",\n'
+            '  "operators": "作业人员姓名",\n'
+            '  "construction_leader": "施工方现场负责人姓名",\n'
+            '  "supervisor": "监理人员姓名",\n'
+            '  "company_monitor": "项目公司监护人姓名",\n'
+            '  "gas_leader": "带气现场负责人姓名"\n'
             "}\n"
             "直接输出 JSON 对象，不要添加任何 Markdown 标记或多余的解释。"
         )  # 结束提示词定义
@@ -1776,7 +1792,12 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                 f"作业内容：{data.content or ''} [content]",
                 f"作业时间：{data.work_time or ''} [work_time]",
                 f"作业人姓名及证书编号：{data.worker_id or ''} [worker_id]",
-                f"发起人签字确认：{data.approver_name or ''} [approver_name]"
+                f"发起人签字确认：{data.approver_name or ''} [approver_name]",
+                f"作业人员：{data.operators or ''} [operators]",
+                f"施工方现场负责人：{data.construction_leader or ''} [construction_leader]",
+                f"监理人员：{data.supervisor or ''} [supervisor]",
+                f"项目公司监护人：{data.company_monitor or ''} [company_monitor]",
+                f"带气现场负责人：{data.gas_leader or ''} [gas_leader]"
             ]
             info_block = "\n\n".join(info_lines)
             description = f"{ic} {data.approval_opinion or ''}\n\n---\n\n{info_block}"
