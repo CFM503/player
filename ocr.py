@@ -82,7 +82,7 @@ def get_ocr_instance(device: str = "cpu", det_db_box_thresh: Optional[float] = N
                 del os.environ["CUDA_VISIBLE_DEVICES"]  # 从系统环境变量中删除禁用项，使显卡在 runtime 下可见
             
         from paddleocr import PaddleOCR  # 导入官方 PaddleOCR 核心包
-        kwargs = {"lang": "ch", "device": device}
+        kwargs = {"lang": "ch", "device": device, "ocr_version": "PP-OCRv6"}
         if device == "cpu":
             kwargs["enable_mkldnn"] = True
         if det_db_box_thresh is not None:
