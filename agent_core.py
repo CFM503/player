@@ -245,8 +245,8 @@ def check_measure_status_in_ocr(ocr_text: str, desc: str, ticket_type: str) -> O
                     for col in check_cols:
                         col_lower = col.lower()
                         col_upper = col.upper()
-                        # 对于带气作业票，负向标志仅匹配叉号（× 或 x）
-                        neg_list = ["×", "x"] if ticket_type == "带气作业票" else ["×", "x", "未落实", "不适用", "/", "\\"]
+                        # 对于带气作业票，负向标志包含叉号及未填写/空白状态
+                        neg_list = ["×", "x", "未填写", "空"] if ticket_type == "带气作业票" else ["×", "x", "未落实", "不适用", "/", "\\"]
                         if any(x in col_lower for x in neg_list):
                             has_neg = True
                         if any(x in col_upper for x in ["✓", "√", "v", "7", "1", "j", "已落实", "是"]):
@@ -274,7 +274,7 @@ def check_measure_status_in_ocr(ocr_text: str, desc: str, ticket_type: str) -> O
         if re.sub(r"[\s—–\-]", "", remaining_str) == "":
             return False  # 视为未落实
 
-        neg_list = ["×", "x"] if ticket_type == "带气作业票" else ["×", "x", "未落实", "不适用", "/", "\\"]
+        neg_list = ["×", "x", "未填写", "空"] if ticket_type == "带气作业票" else ["×", "x", "未落实", "不适用", "/", "\\"]
         if any(x in remaining_lower for x in neg_list):
             return False
         if ticket_type == "带气作业票":
@@ -303,7 +303,7 @@ def check_measure_status_in_ocr(ocr_text: str, desc: str, ticket_type: str) -> O
                 if re.sub(r"[\s—–\-]", "", next_line) == "":
                     return False  # 空白视为未落实
                 
-                neg_list = ["×", "x"] if ticket_type == "带气作业票" else ["×", "x", "未落实", "不适用", "/", "\\"]
+                neg_list = ["×", "x", "未填写", "空"] if ticket_type == "带气作业票" else ["×", "x", "未落实", "不适用", "/", "\\"]
                 if any(x in next_line.lower() for x in neg_list):  # 匹配反向符号
                     return False  # 精准匹配成功，判定该防范项为“未落实 False”
                 if ticket_type == "带气作业票":
@@ -835,8 +835,25 @@ class AgentTools:
             coords_str = f" | 坐标: x={ocr_coords[0]}, y={ocr_coords[1]}, w={ocr_coords[2]}, h={ocr_coords[3]}" if ocr_coords else ""
             safe_print(f"[OCR 检测] 首次扫描识别到作业票类型: 【{detected_type}】{coords_str}")  # 标出坐标输出到运行日志中
 
-
-
+        # 纯本地 OpenCV 像素密度检测（仅带气作业票 + 对齐成功时触发）
+        if detected_type == "带气作业票" and "aligned_" in os.path.basename(image_path):
+            try:
+                safe_print("[OpenCV Fallback] 启用外部 ocr5.py 进行像素三分类定位符号...")
+                cmd = [
+                    sys.executable,
+                    os.path.join(os.path.dirname(__file__), "ocr5.py"),
+                    "--input", image_path
+                ]
+                # 执行并捕获输出，以 utf-8 编码读取以防中文乱码
+                res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", check=True)
+                append_text = res.stdout.strip()
+                if "--- 纯本地 OpenCV 像素密度提取结果 ---" in append_text:
+                    flat_text = append_text + "\n" + flat_text
+                    ocr_result = append_text + "\n" + ocr_result
+                    AgentTools._last_ocr_raw = flat_text
+                    safe_print("[OpenCV Fallback] 外部 ocr5.py 像素三分类结果前插融合完成！")
+            except Exception as e:
+                safe_print(f"[OpenCV Fallback] 外部降级识别 ocr5.py 运行异常: {e}")
 
         return ocr_result
 
@@ -1454,7 +1471,10 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             measures_ok = (len(unimpl) == 0)
             checks.append(("安全措施", measures_ok, "全部落实 OK" if measures_ok else f"{len(unimpl)}项未落实"))
 
-            all_pass = all(ok for _, ok, _ in checks)  # 统计各校验项是否全部检测通过
+            # 只有数据完整性和异常一致性校验不通过才需要重试。安全措施未落实是业务层面的事实，不应触发解析重试。
+            integrity_failed = [name for name, ok, _ in checks if not ok and name != "安全措施"]
+            all_pass = (len(integrity_failed) == 0)
+            
             for name, ok, detail in checks:  # 迭代校验项
                 safe_print(f"[Agent Reflect]   {'OK' if ok else '!!'} {name}: {detail}")  # 控制台打印校验详情条目
 
@@ -1463,7 +1483,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                 mem.remember("反思", "🔍", "校验数据完整性", f"{len(checks)}项全部通过")
                 return data
 
-            failed = [n for n, ok, _ in checks if not ok]  # 提取本次校验失败的规则项名称
+            failed = integrity_failed  # 提取本次校验失败的规则项名称
             safe_print(f"[Agent Reflect] 未通过({', '.join(failed)})，第{attempt}次重试...")  # 打印失败警告日志及重试计数
             mem.remember("反思", "🔍", f"第{attempt}次重试", f"未通过: {', '.join(failed)}", status="retry")  # 记忆体记录重试事件
             hint = f"上次问题：{', '.join(failed)}。请严格按规则重新解析。"  # 组织引导大模型纠错的负反馈提示词
