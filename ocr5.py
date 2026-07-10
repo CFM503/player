@@ -253,6 +253,21 @@ def main():
     y_lines = get_y_lines(img_gray)
     logger.info("检测到网格线数量: %d", len(y_lines))
 
+    # 去表格化处理并保存图片
+    logger.info("开始对图像进行去表格线处理...")
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from ocr7 import remove_table_lines, imwrite_unicode, default_output_path
+    
+    img_no_lines_bgr, _ = remove_table_lines(img_bgr, strength=1)
+    out_path = default_output_path(image_path)
+    if imwrite_unicode(out_path, img_no_lines_bgr):
+        logger.info("去表格化图像已成功保存至: %s", out_path)
+    else:
+        logger.error("去表格化图像保存失败: %s", out_path)
+        
+    # 将去表格化后的图像灰度图作为后续特征提取的基础
+    img_gray = cv2.cvtColor(img_no_lines_bgr, cv2.COLOR_BGR2GRAY)
+
     fallback_md = []
     for idx, desc in MEASURES:
         r = idx - 1  # 0-based grid row index

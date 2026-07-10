@@ -434,9 +434,8 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
             _last_stage = [""]  # 用单元素列表形式包装当前处理阶段，以便在闭包函数 hlog 中可以动态覆写修改
 
             def hlog(line, _save_path=save_path, _name=uploaded.name):  # 定义用于捕获底层 stdio 输出以渲染黑客日志终端的辅助闭包函数
-                _dt = time.time() - _t0_img  # 计算从启动分析到当前这行日志输出的相对耗时
-                _mm, _ss = divmod(int(_dt), 60)  # 将秒数转换为分秒格式
-                _ts = f"[{_mm:02d}:{_ss:02d}] "  # 格式化时间戳前缀，如 "[00:14] "
+                from datetime import datetime, timezone, timedelta
+                _ts = datetime.now(timezone(timedelta(hours=8))).strftime("[%H:%M:%S] ")
                 log_buf.append(_ts + line)  # 拼接时间戳与输出日志内容，并存入日志缓存中
                 import html as _h  # 导入自带的 html 工具包对日志中可能存在的特殊符号进行实体字元安全编码，防样式崩塌
                 parts = []  # 初始化拼接的 HTML 行列表

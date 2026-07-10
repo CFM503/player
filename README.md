@@ -2,7 +2,7 @@
 
 > 中燃集团 AI 创新创意大赛 · 赛道三（AI 龙虾专项赛）  
 > 选题方向：**流程自动化与审批助手**  
-> 版本：v3.14.42
+> 版本：v3.14.47
 
 ---
 
@@ -257,22 +257,26 @@ streamlit run frontend.py
 
 ```
 player/
-├── agent_core.py      # Agent 核心引擎（Schema/LLM/工具集/ReAct循环）
-├── mark_classifier.py  # 签字格标记三分类器（骨架化、拓扑去毛刺判断）
-├── frontend.py        # Streamlit Web UI（处理+看板+黑客日志）
-├── components.py      # 可复用 UI 组件库
-├── styles.py          # 自定义 CSS 主题
-├── check_deps.py      # 启动依赖版本校验
-├── config.json        # API 配置（key/url/model/通知webhook）
-├── config.example.json # 配置模板
-├── requirements.txt   # 依赖声明（含版本约束）
-├── START.bat          # 一键启动脚本（依赖检查+模型预下载+启动）
-├── VERSION            # 版本号
-├── CHANGELOG.md       # 更新日志
-├── PROJECT.md         # 项目详细说明
-├── games.md           # 赛道三合规分析
-├── security_data.db   # SQLite 数据库（运行时生成）
-└── uploads/           # 测试图片
+├── agent_core.py       # Agent 核心引擎（Schema/LLM/工具集/ReAct循环）
+├── align_to_template.py# 图像模板匹配与透视对齐纠偏工具
+├── ocr.py              # OCR 文字识别主控门面（支持 PaddleOCR 和 视觉大模型）
+├── ocr5.py             # 签字格标记三分类器（骨架化、拓扑去毛刺判定）
+├── ocr7.py             # 去表格线独立工具（长核形态学开运算 + Inpaint）
+├── dingtalk_client.py  # 钉钉 AI 表格 MCP Streamable HTTP 客户端封装
+├── frontend.py         # Streamlit Web UI（处理+看板+黑客日志）
+├── components.py       # 可复用 UI 组件库
+├── styles.py           # 自定义 CSS 主题
+├── check_deps.py       # 启动依赖版本校验
+├── config.json         # API 配置（key/url/model/通知webhook）
+├── config.example.json  # 配置模板
+├── requirements.txt    # 依赖声明（含版本约束）
+├── START.bat           # 一键启动脚本（依赖检查+模型预下载+启动）
+├── VERSION             # 版本号
+├── CHANGELOG.md        # 更新日志
+├── PROJECT.md          # 项目详细说明
+├── games.md            # 赛道三合规分析
+├── security_data.db    # SQLite 数据库（运行时生成）
+└── uploads/            # 测试图片
 ```
 
 ---
