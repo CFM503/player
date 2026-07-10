@@ -1767,6 +1767,16 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             except Exception as e:
                 safe_print(f"[Agent Archive] ⚠️ 对齐图复制失败: {e}")
 
+            # 3. 如果存在去表格化处理后的图片，也保存一份副本供用户比对
+            no_lines_source = os.path.splitext(aligned_source)[0] + "去表格化.png"
+            if os.path.exists(no_lines_source):
+                img_dest_no_lines = os.path.join(archive_dir, f"{prefix}_对齐图去表格化.png")
+                try:
+                    shutil.copy2(no_lines_source, img_dest_no_lines)
+                    safe_print(f"[Agent Archive] 成功归档去表格化处理后的图片: {img_dest_no_lines}")
+                except Exception as e:
+                    safe_print(f"[Agent Archive] ⚠️ 去表格化图复制失败: {e}")
+
         # 保存元数据
         meta = {
             "source_image": os.path.basename(image_path),
