@@ -11,8 +11,6 @@ requests>=2.34.2
 mcp>=1.0.0
 httpx>=0.28.0
 httpx-sse>=0.4.0
-# 精确表格识别依赖 (paddlex[ocr])
-paddlex[ocr]>=3.7.1
 
 # 签字格标记分类依赖
 scikit-image>=0.22.0

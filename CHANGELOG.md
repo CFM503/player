@@ -1,5 +1,13 @@
 # 更新日志 (CHANGELOG)
 
+## [3.14.51] - 2026-07-11
+
+### 新增
+- **CUDA 自动安装校验**：启动校验脚本 `check_deps.py` 升级，能自动检测当前环境是否含有支持 CUDA 的 NVIDIA 显卡驱动，如果系统支持且未安装 `paddlepaddle-gpu` 时，会自动卸载旧的冲突的 CPU 版 `paddlepaddle`，并通过官方 stable cu126/cu118 镜像自动下载安装 `paddlepaddle-gpu>=3.3.1` 进行环境切换。
+
+### 移除
+- **清理无用依赖校验**：由于目前已废弃并移除了需要 PaddleX 精确表格识别模型的旧依赖（改为纯 OCR 及 OpenCV 的聚类表格算法），在启动校验 `check_deps.py`、依赖文件 `requirements.txt` 和启动脚本 `START.bat` 中全面清除了对 `paddlex`、`paddlex[ocr]` 以及 SLANet_plus 模型的相关校验与下载逻辑，维持代码精炼干净。
+
 ## [3.14.50] - 2026-07-10
 
 ### 新增

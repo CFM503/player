@@ -24,8 +24,6 @@ _DEPS = [  # 构建要求校验的依赖包元数据列表
     ("mcp",            "mcp",            "1.0.0",        "mcp"),  # Model Context Protocol 协议库版本控制
     ("httpx",          "httpx",          "0.28.0",       "httpx"),  # HTTPX 客户端库版本控制
     ("httpx-sse",      "httpx_sse",      "0.4.0",        "httpx-sse"),  # HTTPX SSE 客户端库版本控制 (dingtalk_client 依赖)
-    # paddlex[ocr] 精确表格识别依赖
-    ("paddlex",        "paddlex",        "3.7.1",        "paddlex[ocr]"),  # PaddleX 开发套件包及其依赖控制
     # 签字格标记分类依赖
     ("scikit-image",   "skimage",        "0.22.0",       "scikit-image"),  # skimage 用于骨架化分类
     ("scipy",          "scipy",          "1.15.0",       "scipy"),         # scipy 用于连通域标记
@@ -50,8 +48,86 @@ def _ver_str(t: tuple) -> str:  # 将版本元组还原为展示性的点分隔�
     return ".".join(map(str, t[:3]))  # 截取元组前三项并将其转为字符，最后使用点号 "." 进行拼接返回
 
 
+def check_cuda_and_install_paddle_gpu():
+    """检查是否支持 CUDA，若支持且未安装 paddlepaddle-gpu，则自动安装。"""
+    import subprocess
+    import re
+    import sys
+    import importlib.metadata as _meta
+
+    # 1. 检测是否支持 CUDA (通过 nvidia-smi)
+    cuda_ver = None
+    if os.environ.get("_CHECK_CUDA_DONE"):
+        return
+
+    nvsmi_paths = [
+        "nvidia-smi",
+        r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
+    ]
+    for path in nvsmi_paths:
+        try:
+            res = subprocess.run([path], capture_output=True, text=True, check=True)
+            m = re.search(r"CUDA\s+(?:UMD\s+)?Version:\s*([\d\.]+)", res.stdout, re.IGNORECASE)
+            if m:
+                cuda_ver = float(m.group(1))
+                break
+        except Exception:
+            continue
+
+    if cuda_ver is None:
+        os.environ["_CHECK_CUDA_DONE"] = "1"
+        return
+
+    # 2. 检查已安装的 paddlepaddle 版本和变体
+    gpu_installed = False
+    try:
+        ver = _meta.version("paddlepaddle-gpu")
+        if _ver_tuple(ver) >= _ver_tuple("3.3.1"):
+            gpu_installed = True
+    except _meta.PackageNotFoundError:
+        pass
+
+    if gpu_installed:
+        os.environ["_CHECK_CUDA_DONE"] = "1"
+        return
+
+    # 3. 自动安装 paddlepaddle-gpu
+    print(f"\n[CUDA Check] 检测到系统支持 CUDA {cuda_ver}，但未安装/未激活 paddlepaddle-gpu。")
+    print("正在为您自动安装 paddlepaddle-gpu 并进行环境切换...")
+
+    # 首先卸载可能冲突的 cpu 版 paddlepaddle
+    try:
+        print("  正在卸载 cpu 版 paddlepaddle...")
+        subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "paddlepaddle"], capture_output=True)
+    except Exception as e:
+        print(f"  卸载 CPU 版失败 (这通常不影响): {e}")
+
+    # 确定 CUDA 对应的安装源后缀
+    cu_suffix = "126" if cuda_ver >= 12.0 else "118"
+    index_url = f"https://www.paddlepaddle.org.cn/packages/stable/cu{cu_suffix}/"
+    cmd = [
+        sys.executable, "-m", "pip", "install",
+        "paddlepaddle-gpu>=3.3.1",
+        "-i", index_url
+    ]
+    
+    try:
+        print(f"  正在执行安装命令: {' '.join(cmd)}")
+        subprocess.run(cmd, check=True)
+        print("[CUDA Check] paddlepaddle-gpu 安装并切换成功！\n")
+        os.environ["_CHECK_CUDA_DONE"] = "1"
+    except Exception as e:
+        print(f"[CUDA Check] 自动安装失败: {e}\n")
+
+
 def check_dependencies():  # 核心依赖检查与报错诊断主函数
     """检查所有依赖版本，不满足则打印诊断并强制退出。"""
+
+    # 0) CUDA 检测及 paddlepaddle-gpu 自动安装校验
+    try:
+        check_cuda_and_install_paddle_gpu()
+    except Exception as e:
+        print(f"[CUDA Check] 自动安装校验异常: {e}")
 
     errors: list[str] = []  # 初始化错误诊断消息列表，用于暂存不合规项
     details: list[tuple[str, str, str, bool]] = []  # 初始化详细诊断列表，格式为 (依赖名, 已安装版本, 目标版本, 是否OK)
