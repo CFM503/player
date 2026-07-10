@@ -525,10 +525,11 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
         # 补全完工时间、签批人、风险等级及其他签字负责人姓名
         raw_dict["completion_time"] = raw_dict.get("completion_time") or None  # 若无则设为 None
         
-        # 优先使用指定坐标局部裁剪 OCR 提取签字人姓名
+        # 优先使用指定坐标局部裁剪 OCR 提取签字人姓名，发起人签字确认位置
         approver = None
         try:
-            approver = AgentTools.extract_filler_name(700, 170, 300, 170)
+            #approver = AgentTools.extract_filler_name(700, 170, 300, 170)  #2000px剪取位置
+            approver = AgentTools.extract_filler_name(670,230,280,170)  #1052px剪取位置
         except Exception as e:
             safe_print(f"[Sanitize] 提取签字人失败: {e}")
         
