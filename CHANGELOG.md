@@ -1,5 +1,19 @@
 # 更新日志 (CHANGELOG)
 
+## [3.14.43] - 2026-07-10
+
+### 重构
+- **`classify_mark` 函数内联至 `ocr5.py`**：将原 `mark_classifier.py` 中的 `classify_mark` 函数（骨架拓扑三分类：叉号/单笔画/空白）完整移植到 `ocr5.py`，消除对独立模块文件的外部依赖，使 `ocr5.py` 成为完全自包含的 CLI 脚本。
+
+### 移除
+- **删除 `mark_classifier.py`**：原标记分类模块已完整合并至 `ocr5.py`，不再作为独立文件存在，简化项目结构。
+
+### 新增
+- **`ocr5.py` 引入 logging 日志体系**：使用标准 `logging` 模块替换原有 `print` 错误输出，新增分级日志：
+  - `INFO`：图像加载路径与尺寸、网格线检测数量、每条安全措施的五人识别结果；
+  - `DEBUG`：每格骨架特征数值（`ink_ratio`、`n_branch_px`、`n_endpoint`、`n_skel_components`、`min_spur_dist`）及最终分类标签；
+  - `ERROR`：文件不存在、图像解码失败、依赖缺失等异常情况。
+
 ## [3.14.42] - 2026-07-09
 
 ### 移除
