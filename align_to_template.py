@@ -36,6 +36,19 @@ import cv2
 import numpy as np
 
 
+def _imread(path: str) -> np.ndarray:
+    """支持中文路径的图片读取（cv2.imread 在 Windows 中文路径下会返回 None）"""
+    return cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
+
+
+def _imwrite(path: str, img: np.ndarray) -> bool:
+    """支持中文路径的图片写入"""
+    ret, buf = cv2.imencode(path[path.rfind('.'):], img)
+    if ret:
+        buf.tofile(path)
+    return ret
+
+
 def order_points(pts: np.ndarray) -> np.ndarray:
     """将任意顺序的4个点，按照 左上、右上、右下、左下 的顺序重新排列。"""
     pts = pts.astype("float32")
@@ -97,6 +110,67 @@ def detect_quad(image: np.ndarray, min_area_ratio: float = 0.15):
     return order_points(best_quad), best_area / total_area
 
 
+def align_by_features(template: np.ndarray, src_img: np.ndarray,
+                      min_matches: int = 15) -> np.ndarray | None:
+    """
+    当四边形轮廓检测失败时，使用 ORB 特征点匹配求单应矩阵，
+    直接将 src_img 透视变换到 template 坐标空间。
+    返回对齐后的图像，若特征匹配不足则返回 None。
+    """
+    th, tw = template.shape[:2]
+    g_tmpl = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+    g_src  = cv2.cvtColor(src_img,  cv2.COLOR_BGR2GRAY)
+
+    # 缩放到同等分辨率，加快特征提取
+    scale  = min(1.0, 1200 / max(g_src.shape))
+    if scale < 1.0:
+        g_src_s = cv2.resize(g_src, None, fx=scale, fy=scale)
+    else:
+        g_src_s = g_src
+        scale   = 1.0
+
+    orb = cv2.ORB_create(nfeatures=3000)
+    kp1, des1 = orb.detectAndCompute(g_tmpl, None)
+    kp2, des2 = orb.detectAndCompute(g_src_s, None)
+
+    if des1 is None or des2 is None or len(kp1) < 4 or len(kp2) < 4:
+        print("[特征匹配] 特征点不足，无法匹配", file=sys.stderr)
+        return None
+
+    bf      = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+    matches = bf.knnMatch(des1, des2, k=2)
+
+    # Lowe's ratio test
+    good = [m for m, n in matches if m.distance < 0.75 * n.distance]
+    print(f"[特征匹配] 有效匹配点数: {len(good)} / {len(matches)}", file=sys.stderr)
+
+    if len(good) < min_matches:
+        print(f"[特征匹配] 有效匹配点数({len(good)})不足 {min_matches}，匹配失败", file=sys.stderr)
+        return None
+
+    pts1 = np.float32([kp1[m.queryIdx].pt for m in good])
+    pts2 = np.float32([kp2[m.trainIdx].pt for m in good]) / scale  # 还原到原始尺寸
+
+    H, mask = cv2.findHomography(pts2, pts1, cv2.RANSAC, 5.0)
+    if H is None:
+        print("[特征匹配] RANSAC 单应矩阵求解失败", file=sys.stderr)
+        return None
+
+    inliers = int(mask.sum()) if mask is not None else 0
+    print(f"[特征匹配] RANSAC 内点数: {inliers} / {len(good)}", file=sys.stderr)
+    if inliers < 8:
+        print("[特征匹配] 内点数不足，结果不可靠", file=sys.stderr)
+        return None
+
+    aligned = cv2.warpPerspective(
+        src_img, H, (tw, th),
+        flags=cv2.INTER_LANCZOS4,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(255, 255, 255),
+    )
+    return aligned
+
+
 def parse_points(s: str) -> np.ndarray:
     """解析形如 'x1,y1 x2,y2 x3,y3 x4,y4' 的字符串为 (4,2) ndarray"""
     pts = []
@@ -141,8 +215,8 @@ def main():
                         help="额外输出一张模板与对齐结果的半透明叠加对比图路径")
     args = parser.parse_args()
 
-    template = cv2.imread(args.template)
-    src_img = cv2.imread(args.input)
+    template = _imread(args.template)
+    src_img  = _imread(args.input)
 
     if template is None:
         sys.exit(f"错误：无法读取模板图片 {args.template}")
@@ -166,37 +240,50 @@ def main():
         print(f"[模板] 自动检测到表格边框（占图片面积 {ratio:.1%}）：\n{dst_quad}")
 
     # ---- 获取照片中表格的四个角点 ----
+    feature_fallback = False
     if args.src_points:
         src_quad = parse_points(args.src_points)
         print(f"[照片] 使用手动指定的角点：\n{src_quad}")
     else:
         src_quad, ratio = detect_quad(src_img, args.min_area_ratio)
         if src_quad is None:
-            sys.exit(
-                "错误：未能在手填照片中自动检测到表格/纸张边框。\n"
-                "请使用 --src-points 手动指定四个角点坐标，例如：\n"
-                '  --src-points "563,684 435,3631 2584,3586 2498,755"'
+            print(
+                "[照片] 四边形轮廓检测失败，尝试 ORB 特征点匹配兜底...",
+                file=sys.stderr
             )
-        print(f"[照片] 自动检测到表格边框（占图片面积 {ratio:.1%}）：\n{src_quad}")
+            feature_fallback = True
+        else:
+            print(f"[照片] 自动检测到表格边框（占图片面积 {ratio:.1%}）：\n{src_quad}")
 
     if args.debug:
         debug_src_path = args.output + "_debug_src.png"
         debug_dst_path = args.output + "_debug_dst.png"
-        cv2.imwrite(debug_src_path, draw_quad(src_img, src_quad))
-        cv2.imwrite(debug_dst_path, draw_quad(template, dst_quad))
+        if not feature_fallback:
+            _imwrite(debug_src_path, draw_quad(src_img, src_quad))
+        _imwrite(debug_dst_path, draw_quad(template, dst_quad))
         print(f"[调试] 已保存角点标注图：{debug_src_path} , {debug_dst_path}")
         print("       请打开查看红框绿点是否准确落在表格四角，若不准确请改用 --src-points/--dst-points 手动指定")
 
     # ---- 计算透视变换矩阵，并将照片warp到模板画布大小 ----
-    M = cv2.getPerspectiveTransform(src_quad, dst_quad)
-    aligned = cv2.warpPerspective(
-        src_img, M, (tw, th),
-        flags=cv2.INTER_LANCZOS4,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=(255, 255, 255),
-    )
+    if feature_fallback:
+        # 使用特征匹配直接求单应矩阵
+        aligned = align_by_features(template, src_img)
+        if aligned is None:
+            sys.exit(
+                "错误：ORB 特征匹配也失败，无法对齐照片。\n"
+                "请使用 --src-points 手动指定照片中表格的四个角点坐标。"
+            )
+        print("[照片] 特征匹配对齐成功")
+    else:
+        M = cv2.getPerspectiveTransform(src_quad, dst_quad)
+        aligned = cv2.warpPerspective(
+            src_img, M, (tw, th),
+            flags=cv2.INTER_LANCZOS4,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(255, 255, 255),
+        )
 
-    cv2.imwrite(args.output, aligned)
+    _imwrite(args.output, aligned)
     print(f"完成：已生成对齐后的图片 -> {args.output} （尺寸与模板一致：{tw}x{th}）")
 
     if args.overlay:
@@ -206,7 +293,7 @@ def main():
         edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=1)
         overlay_img = aligned.copy()
         overlay_img[edges > 0] = (0, 0, 255)  # 模板边线标红，叠加在对齐后的照片上
-        cv2.imwrite(args.overlay, overlay_img)
+        _imwrite(args.overlay, overlay_img)
         print(f"完成：已生成叠加对比图 -> {args.overlay}")
 
 

@@ -1,5 +1,13 @@
 # 更新日志 (CHANGELOG)
 
+## [3.14.44] - 2026-07-10
+
+### 修复
+- **`align_to_template.py` 照片轮廓检测失败**：新增 ORB 特征点匹配作为四边形轮廓检测失败时的自动兜底方案。当 `detect_quad` 无法从照片中识别出四边形边框（如无明显纸张边缘、背景复杂等），自动切换为 ORB + BFMatcher + RANSAC 单应矩阵模式，直接将照片透视变换对齐至模板坐标系。
+
+### 变更
+- **`align_to_template.py` 中文路径支持**：将 `cv2.imread` / `cv2.imwrite` 替换为基于 `cv2.imdecode(np.fromfile(...))` / `cv2.imencode(...).tofile(...)` 的 `_imread` / `_imwrite` 辅助函数，彻底解决 Windows 中文路径下图片读写返回 `None` 的问题。
+
 ## [3.14.43] - 2026-07-10
 
 ### 重构
