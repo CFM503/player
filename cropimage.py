@@ -9,7 +9,11 @@ import argparse
 import cv2
 import numpy as np
 
-def imread_unicode(path, flags=cv2.IMREAD_COLOR):
+# === 全局变量与常量声明 / Global Variables and Constants Declarations ===
+OPENCV_READ_FLAGS = cv2.IMREAD_COLOR   # OpenCV 图像读取模式（彩色模式） / OpenCV flag specifying the color type of a loaded image (Color)
+DEFAULT_SAVE_FORMAT = ".png"           # 默认图片保存后缀 / Default file extension used when saving cropped images
+
+def imread_unicode(path, flags=OPENCV_READ_FLAGS):
     """支持中文路径的图片读取"""
     try:
         data = np.fromfile(path, dtype=np.uint8)
@@ -22,7 +26,7 @@ def imread_unicode(path, flags=cv2.IMREAD_COLOR):
 def imwrite_unicode(path, img):
     """支持中文路径的图片保存"""
     try:
-        ext = os.path.splitext(path)[1] or ".png"
+        ext = os.path.splitext(path)[1] or DEFAULT_SAVE_FORMAT
         ok, buf = cv2.imencode(ext, img)
         if not ok:
             return False

@@ -618,6 +618,12 @@ class AgentTools:
     在侧边栏选择的推理设备（cpu/gpu），不得硬编码 device 值。参考 _ocr_crop_region 的写法。
     """
 
+    # === 类属性变量声明 / Class Attribute Declarations ===
+    _last_image_path = ""        # 缓存最后处理对齐后的图片路径 / Cached path of the last aligned image
+    _last_ocr_device = "cpu"     # 缓存最后一次 OCR 推理使用的计算硬件设备 / Cached device (CPU/GPU) for the last OCR run
+    _last_ocr_raw = ""           # 缓存全图 OCR 识别提取得到的原始纯文本 / Cached raw text output from full-image OCR scanning
+    _last_approver_name = ""     # 缓存第二阶段预提取并清洗的发起人签字姓名 / Cached hand-written name of the approver pre-extracted in phase 2
+
     @staticmethod
     def preprocess_image(image_path: str) -> str:
         """OpenCV 去阴影 + 自适应二值化"""
