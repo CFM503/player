@@ -747,6 +747,20 @@ class AgentTools:
                                 aligned_img = cv2.resize(aligned_img, (1000, 1414))
                                 cv2.imwrite(aligned_path, aligned_img)
                                 
+                            # 方案 A：在感知阶段，对匹配成功的对齐图统一执行去表格线处理并保存为 "去表格化.png"
+                            try:
+                                safe_print(f"[OCR] 启动 ocr7.py 对对齐图片进行去表格线处理...")
+                                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                                from ocr7 import remove_table_lines, imwrite_unicode, default_output_path
+                                img_no_lines_bgr, _ = remove_table_lines(aligned_img, strength=1)
+                                out_path = default_output_path(aligned_path)
+                                if imwrite_unicode(out_path, img_no_lines_bgr):
+                                    safe_print(f"[OCR] 去表格化图像已成功保存至: {out_path}")
+                                else:
+                                    safe_print(f"[OCR] ⚠️ 去表格化图像保存失败: {out_path}")
+                            except Exception as e:
+                                safe_print(f"[OCR] ⚠️ 去表格化处理异常: {e}")
+                                
                             safe_print(f"[OCR] 模板匹配对齐完成：使用 {t_file} 模板")
                             image_path = aligned_path  # 覆盖后续全图 OCR 扫描 of 源图片路径
                             AgentTools._last_image_path = aligned_path  # 覆盖缓存路径，确保之后的裁剪操作也使用对齐图
@@ -1386,6 +1400,11 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         summary = f"提取 {n} 行文本"  # 汇总感知报告
         safe_print(f"[Agent Perceive] {summary}")  # 打印行数汇总日志
         mem.remember("感知", "👁️", "OCR 提取文字", summary)  # 将感知提取阶段写入记忆体
+        
+        # 方案 A：感知阶段直接将保存原图、保存对齐图、保存对齐去网格图的事情做好（物理归档）
+        if prog: prog(52, "OCR 归档")
+        self._archive(image_path, text, mem)
+        
         return text  # 返回提取出的文字
 
     def _reason(self, ocr_text: str, mem: AgentMemory) -> SecuritySheetData:  # 推理阶段：调用大模型进行实体识别和关系分类，填充为 Pydantic 字典
@@ -1811,8 +1830,6 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         self._plan(image_path, mem)
         if prog: prog(3, "感知阶段")
         ocr_text = self._perceive(image_path, mem, ticket_type=ticket_type)
-        if prog: prog(52, "OCR 归档")
-        self._archive(image_path, ocr_text, mem)
         if prog: prog(55, "推理阶段")
         data = self._reason(ocr_text, mem)
         if prog: prog(80, "反思阶段")
