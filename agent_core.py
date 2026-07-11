@@ -1245,34 +1245,10 @@ class AgentTools:
 
     @staticmethod
     def extract_filler_name(tx: int, ty: int, tw: int, th: int) -> str:
-        """根据指定坐标裁剪图片并运行 PaddleOCR 识别文本，提取责任人姓名"""
-        image_path = getattr(AgentTools, "_last_image_path", "")
-        if not image_path or not os.path.exists(image_path):
-            safe_print(f"[Tool] extract_filler_name 失败: 图片路径无效或不存在: {image_path}")
-            return ""  # 安全审计: 禁止「坐标识别图片未知」造假占位，留空由调用方判定
-            
-        # 自动生成 archives/YYYY-MM-DD 归档文件夹路径并将签字裁剪图进行物理保存
-        date_dir = time.strftime("%Y-%m-%d")
-        archive_dir = os.path.join(os.path.dirname(__file__), "archives", date_dir)
-        os.makedirs(archive_dir, exist_ok=True)
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        crop_path = os.path.join(archive_dir, f"signature_{ts}_{tx}_{ty}.png")
-        
-        safe_print(f"[Tool] extract_filler_name 触发局部裁剪 OCR: x={tx}, y={ty}, w={tw}, h={th}，保存裁剪图至: {crop_path}")
-        crop_text = AgentTools._ocr_crop_region(image_path, tx, ty, tw, th, save_crop_path=crop_path)
-        
-        if crop_text:
-            _LABEL_KW = ("责任", "填表", "编号", "票号", "日期", "场站", "部位", "作业",
-                         "动火", "检测", "采样", "确认", "签批", "盖章", "部门", "时间",
-                         "地点", "内容", "方式", "单位", "人员", "完工", "验收")
-            clean_text = crop_text
-            for kw in _LABEL_KW:
-                clean_text = clean_text.replace(kw, "")
-            name_m = re.search(r"([一-龥]{2,4})", clean_text)
-            if name_m:
-                return name_m.group(1)
-            return clean_text.strip()
-        return ""  # 安全审计: 禁止「未知」造假占位，OCR 识别不到人名则留空串
+        """从第二阶段已缓存的变量中读取责任人姓名，避免在第三阶段执行任何图片裁剪或 OCR 动作"""
+        approver = getattr(AgentTools, "_last_approver_name", "")
+        safe_print(f"[Tool] extract_filler_name 读取第二阶段预提取并缓存的签字人姓名: 【{approver}】")
+        return approver
 
 
 # ==========================================
@@ -1815,6 +1791,24 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                 safe_print(f"[Agent Archive] 正在调用 cropimage.py 裁剪签字区域: {' '.join(crop_cmd)}")
                 subprocess.run(crop_cmd, capture_output=True, text=True, check=True)
                 safe_print(f"[Agent Archive] 成功提取并保存签字区域到: {sig_dest}")
+                
+                # 运行 OCR 识别裁剪出的签名图片并保存提取到类变量缓存中，把所有 ocr 都移到第二阶段完成！
+                crop_text = AgentTools._ocr_crop_region(aligned_source, 670, 230, 280, 170, save_crop_path=None)
+                approver_name = ""
+                if crop_text:
+                    _LABEL_KW = ("责任", "填表", "编号", "票号", "日期", "场站", "部位", "作业",
+                                 "动火", "检测", "采样", "确认", "签批", "盖章", "部门", "时间",
+                                 "地点", "内容", "方式", "单位", "人员", "完工", "验收")
+                    clean_text = crop_text
+                    for kw in _LABEL_KW:
+                        clean_text = clean_text.replace(kw, "")
+                    name_m = re.search(r"([一-龥]{2,4})", clean_text)
+                    if name_m:
+                        approver_name = name_m.group(1)
+                    else:
+                        approver_name = clean_text.strip()
+                AgentTools._last_approver_name = approver_name
+                safe_print(f"[Agent Archive] 第二阶段已完成签字区域 OCR 识别并缓存: 【{approver_name}】")
             except Exception as e:
                 safe_print(f"[Agent Archive] ⚠️ 裁剪签字区域失败: {e}")
 
