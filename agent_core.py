@@ -1797,6 +1797,27 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                 except Exception as e:
                     safe_print(f"[Agent Archive] ⚠️ 去表格化图复制失败: {e}")
 
+            # 4. 在第二阶段（归档处理中）使用 cropimage.py 裁剪提取出“发起人签字确认”区域并保存
+            sig_dest = os.path.join(archive_dir, f"{prefix}_签字.png")
+            import subprocess
+            import sys
+            crop_cmd = [
+                sys.executable,
+                os.path.join(os.path.dirname(__file__), "cropimage.py"),
+                "--input", aligned_source,
+                "--output", sig_dest,
+                "-x", "670",
+                "-y", "230",
+                "--width", "280",
+                "--height", "170"
+            ]
+            try:
+                safe_print(f"[Agent Archive] 正在调用 cropimage.py 裁剪签字区域: {' '.join(crop_cmd)}")
+                subprocess.run(crop_cmd, capture_output=True, text=True, check=True)
+                safe_print(f"[Agent Archive] 成功提取并保存签字区域到: {sig_dest}")
+            except Exception as e:
+                safe_print(f"[Agent Archive] ⚠️ 裁剪签字区域失败: {e}")
+
         # 保存元数据
         meta = {
             "source_image": os.path.basename(image_path),
