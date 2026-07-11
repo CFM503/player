@@ -1,5 +1,11 @@
 # 更新日志 (CHANGELOG)
 
+## [3.14.53] - 2026-07-11
+
+### 修复
+- **解决 Windows 系统下 Paddle 导入 DLL 加载失败错误**：排查并解决了由于 Windows 系统缺失 Microsoft Visual C++ Redistributable（导致 `msvcp140.dll` 无法被加载）从而引发的 `ImportError: DLL load failed while importing libpaddle` 报错。
+- **环境启动测试与环境净化**：清理了根目录临时下载的 `vc_redist.x64.exe` 安装包，确认了 Streamlit 首次欢迎配置跳过，全套程序与依赖通过全部启动自检并成功运行。
+
 ## [3.14.52] - 2026-07-11
 
 ### 修复
