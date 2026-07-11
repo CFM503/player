@@ -38,6 +38,9 @@ call :check pandas pandas
 call :check paddle paddlepaddle
 call :check scipy scipy
 call :check skimage scikit-image
+call :check mcp mcp
+call :check httpx httpx
+call :check httpx_sse httpx-sse
 
 echo.
 if !MISSING! GTR 0 (
@@ -49,12 +52,20 @@ if !MISSING! GTR 0 (
         exit /b 1
     )
     echo.
-    pip install !MISSING_LIST! -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
-    if errorlevel 1 (
-        echo.
-        python -c "print('[ERROR] Install failed. Run manually:'); print('  pip install !MISSING_LIST! -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn')"
-        pause
-        exit /b 1
+    for %%p in (!MISSING_LIST!) do (
+        echo Installing %%p...
+        pip install %%p -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
+        if errorlevel 1 (
+            echo.
+            echo [WARNING] Failed to install %%p from Tsinghua mirror. Retrying with default PyPI...
+            pip install %%p
+            if errorlevel 1 (
+                echo.
+                python -c "print('[ERROR] Failed to install %%p. Please check network or install manually:'); print('  pip install %%p')"
+                pause
+                exit /b 1
+            )
+        )
     )
     echo.
     python -c "print('Done.')"
