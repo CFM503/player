@@ -1,0 +1,47 @@
+==================================================
+TEST 1: approval suggestion (gemma-3-1b-it)
+==================================================
+Time: 6.6s | finish_reason: stop
+content (68 chars):
+以下是审批建议：
+
+**建议：** 立即启动调查，确认第10项PE焊接夹具未落实情况。确保后续操作符合安全规程，并加强对类似作业的管控。
+
+==================================================
+TEST 2: JSON extraction (gemma-3-1b-it)
+==================================================
+Time: 1.5s | finish_reason: stop
+content (150 chars):
+```json
+{"ticket_id":"MDJZR2025011007", "station_name":"中燃运营部", "content":"江南机扫中心开孔", "work_time":"2025年11月21日", "worker_id":"231002197207120519"}
+```
+
+JSON parse: SUCCESS
+  ticket_id = MDJZR2025011007
+  station_name = 中燃运营部
+  content = 江南机扫中心开孔
+  work_time = 2025年11月21日
+  worker_id = 231002197207120519
+
+==================================================
+TEST 3: sign-off extraction (gemma-3-1b-it)
+==================================================
+Time: 0.8s | finish_reason: stop
+content:
+```json
+{
+"operators": "",
+"construction_leader": "",
+"supervisor": "",
+"company_monitor": "",
+"gas_leader": ""
+}
+```
+
+
+JSON parse: SUCCESS
+  operators = 
+  construction_leader = 
+  supervisor = 
+  company_monitor = 
+  gas_leader = 

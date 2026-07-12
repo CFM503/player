@@ -376,6 +376,101 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
         self.client = OpenAI(**kwargs)  # 实例化并缓存 OpenAI 协议客户端
         self.model_name = model_name  # 记录大模型名称，如 qwen-2.5
 
+    def _extract_sign_columns(self, ocr_text: str) -> dict:
+        """基于 OCR 坐标从签批区域精准提取5列签名姓名，避免纯文本拼接导致的列错位"""
+        result = {}
+        # 签批区域的5列列头关键字及对应字段名
+        col_headers = [
+            ("作业人员", "operators"),
+            ("施工方现场负责人", "construction_leader"),
+            ("监理人员", "supervisor"),
+            ("项目公司监护人", "company_monitor"),
+            ("带气现场负责人", "gas_leader"),
+        ]
+
+        # 从 OCR 坐标段（--- 分隔符之后）解析所有带坐标的文本片段
+        coord_section = ""
+        if "\n---\n" in ocr_text:
+            coord_section = ocr_text.split("\n---\n")[-1]
+        elif "\r\n---\r\n" in ocr_text:
+            coord_section = ocr_text.split("\r\n---\r\n")[-1]
+        if not coord_section:
+            return result  # 无坐标数据，回退给 LLM 结果
+
+        # 解析所有坐标行: "文本内容  [x, y, w, h]"
+        coord_pattern = re.compile(r"^(.+?)\s+\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\]\s*$")
+        all_items = []  # [(text, x, y, w, h), ...]
+        for line in coord_section.strip().split("\n"):
+            line = line.strip()
+            m = coord_pattern.match(line)
+            if m:
+                text = m.group(1).strip()
+                x, y, w, h = int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))
+                all_items.append((text, x, y, w, h))
+
+        if not all_items:
+            return result
+
+        # 步骤1: 找到5个列头的 x 坐标
+        col_positions = []  # [(field_name, header_x, header_y)]
+        for text, x, y, w, h in all_items:
+            for header_kw, field_name in col_headers:
+                # 列头文本匹配（含冒号或不含）
+                clean = text.replace("：", "").replace(":", "").strip()
+                if clean == header_kw or text.startswith(header_kw):
+                    col_positions.append((field_name, x, y))
+                    break
+
+        if len(col_positions) < 3:
+            safe_print(f"[Sanitize] 签批列头匹配不足({len(col_positions)}列)，跳过坐标提取")
+            return result  # 列头识别不够，回退
+
+        # 步骤2: 确定签批区域的 y 范围（列头 y 到列头 y + 120px 之间的手写文字）
+        header_y = min(y for _, _, y in col_positions)
+        sign_y_min = header_y + 15   # 签名在列头下方
+        sign_y_max = header_y + 120  # 签名区域高度范围
+
+        # 步骤3: 在签名 y 范围内找到所有候选的人名文本片段
+        # 过滤掉明显非人名的干扰文本
+        _NOISE_KW = ("已确认", "确认", "项目公司", "我已接受", "安全教", "签批",
+                      "年", "月", "日", "时", "分", "育：认")
+        candidates = []  # [(text, x, y)]
+        for text, x, y, w, h in all_items:
+            if sign_y_min <= y <= sign_y_max:
+                # 过滤: 保留含中文字符且像人名的片段 (1-4个汉字，兼容 OCR 只识别出部分姓名)
+                name_m = re.search(r"[一-龥]{1,4}", text)
+                if name_m:
+                    name = name_m.group(0)
+                    # 排除干扰关键字
+                    if any(kw in text for kw in _NOISE_KW):
+                        continue
+                    candidates.append((name, x, y))
+
+        if not candidates:
+            safe_print("[Sanitize] 签批区域未找到候选签名，跳过坐标提取")
+            return result
+
+        # 步骤4: 将每个候选签名按 x 坐标最近邻分配到最接近的列
+        col_x_map = {field: x for field, x, _ in col_positions}
+        for name, name_x, name_y in candidates:
+            # 找 x 坐标最近的列头
+            best_field = None
+            best_dist = float("inf")
+            for field, hx in col_x_map.items():
+                dist = abs(name_x - hx)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_field = field
+            # 容差: 签名 x 与列头 x 差距不超过 200px 才算有效匹配
+            if best_field and best_dist < 200:
+                # 若同一列已有值，选 y 较小（更靠上）的
+                if best_field not in result:
+                    result[best_field] = name
+                    safe_print(f"[Sanitize] 签批坐标匹配: {best_field} = {name} (x={name_x}, 列头x={col_x_map[best_field]}, 距离={best_dist})")
+
+        safe_print(f"[Sanitize] 签批坐标提取结果: {result}")
+        return result
+
     def _sanitize_sheet_data(self, raw_dict: dict, ocr_text: str) -> dict:  # 使用规则引擎启发式地校验和兜底 LLM 返回的 JSON 字典数据，规避幻觉错误
         """用 Python + OCR 启发式规则兜底重构和校验 LLM 提取的结构化数据"""
         # 1. 确定作业票类型
@@ -539,11 +634,15 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             
         raw_dict["approver_name"] = approver or None
         
-        raw_dict["operators"] = raw_dict.get("operators") or None
-        raw_dict["construction_leader"] = raw_dict.get("construction_leader") or None
-        raw_dict["supervisor"] = raw_dict.get("supervisor") or None
-        raw_dict["company_monitor"] = raw_dict.get("company_monitor") or None
-        raw_dict["gas_leader"] = raw_dict.get("gas_leader") or None
+        # ---- 签批区域5列签名：基于 OCR 坐标精准匹配列位置 ----
+        # OCR 文本含有 [x, y, w, h] 坐标，利用列头 x 坐标与签名 x 坐标的最近邻匹配
+        # 来精准定位每个手写签名属于哪一列，彻底解决纯文本行拼接导致的列错位问题
+        sign_fields = self._extract_sign_columns(ocr_text)
+        raw_dict["operators"] = sign_fields.get("operators") or raw_dict.get("operators") or None
+        raw_dict["construction_leader"] = sign_fields.get("construction_leader") or raw_dict.get("construction_leader") or None
+        raw_dict["supervisor"] = sign_fields.get("supervisor") or raw_dict.get("supervisor") or None
+        raw_dict["company_monitor"] = sign_fields.get("company_monitor") or raw_dict.get("company_monitor") or None
+        raw_dict["gas_leader"] = sign_fields.get("gas_leader") or raw_dict.get("gas_leader") or None
         
         raw_dict["risk_level"] = raw_dict.get("risk_level") or None  # 若无则设为 None
 
@@ -563,12 +662,23 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             '  "work_time": "作业时间",\n'
             '  "worker_id": "作业人员姓名及证件号/证书编号",\n'
             '  "check_date": "日期 YYYY-MM-DD",\n'
-            '  "operators": "作业人员姓名",\n'
-            '  "construction_leader": "施工方现场负责人姓名",\n'
-            '  "supervisor": "监理人员姓名",\n'
-            '  "company_monitor": "项目公司监护人姓名",\n'
-            '  "gas_leader": "带气现场负责人姓名"\n'
-            "}\n"
+            '  "operators": "签批区域第1列：作业人员的手写签名姓名",\n'
+            '  "construction_leader": "签批区域第2列：施工方现场负责人的手写签名姓名",\n'
+            '  "supervisor": "签批区域第3列：监理人员的手写签名姓名",\n'
+            '  "company_monitor": "签批区域第4列：项目公司监护人的手写签名姓名",\n'
+            '  "gas_leader": "签批区域第5列：带气现场负责人的手写签名姓名"\n'
+            "}\n\n"
+            "【重要：签批区域提取规则】\n"
+            "票面底部「签批」区域有5列，列头从左到右依次为：\n"
+            "  第1列=作业人员 -> operators\n"
+            "  第2列=施工方现场负责人 -> construction_leader\n"
+            "  第3列=监理人员 -> supervisor\n"
+            "  第4列=项目公司监护人 -> company_monitor\n"
+            "  第5列=带气现场负责人 -> gas_leader\n"
+            "列头下方紧跟的手写签名就是对应人员的姓名。"
+            "请严格按列的位置顺序一一对应提取，不要混淆列之间的姓名。\n"
+            "OCR文本中签批区域的列头行格式通常为：「作业人员：  施工方现场负责人：  监理人员：  项目公司监护人：  带气现场负责人」，"
+            "紧接着下一行或几行的手写文字就是各列对应的签名姓名，按从左到右的顺序依次对应上面5个字段。\n\n"
             "直接输出 JSON 对象，不要添加任何 Markdown 标记或多余的解释。"
         )  # 结束提示词定义
 
@@ -1546,6 +1656,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             f"异常：{data.has_abnormal}\n"
             f"{issues_desc}{weather_desc}"
         )
+        self._last_approval_prompt = prompt  # 缓存发给 LLM 的提示词，供归档使用
 
         try:
             safe_print("[Agent Act] 调用 LLM 生成审批建议...")
@@ -1711,6 +1822,62 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             notify_result = f"编号:{data.ticket_id} → ⚠️ 钉钉 MCP 未配置，未写入 AI 表格"
         safe_print(f"[Agent Act] ⑥ {notify_result}")
         mem.remember("执行", "📤", "钉钉 AI 表格", notify_result)
+
+        # ---- ⑦ 审批建议归档 ----
+        safe_print("[Agent Act] ⑦ 审批建议归档...")
+        try:
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            date_dir = time.strftime("%Y-%m-%d")
+            archive_dir = os.path.join(os.path.dirname(__file__), "archives", date_dir)
+            os.makedirs(archive_dir, exist_ok=True)
+            ticket_id_clean = re.sub(r"\s+", "", data.ticket_id or "")
+            if ticket_id_clean:
+                prefix = f"{ticket_id_clean}_{ts}"
+                approval_path = os.path.join(archive_dir, f"{prefix}_审批建议.txt")
+                ap_status = data.approval_status or "待审批"
+                ic = "✅" if ap_status == "自动通过" else ("🚫" if ap_status == "已驳回" else "⏳")
+                # 组装完整的审批建议归档内容
+                info_lines = [
+                    f"作业票编号：{data.ticket_id or ''}",
+                    f"作业单位：{data.station_name or ''}",
+                    f"作业内容：{data.content or ''}",
+                    f"作业时间：{data.work_time or ''}",
+                    f"作业人姓名及证书编号：{data.worker_id or ''}",
+                    f"发起人签字确认：{data.approver_name or ''}",
+                    f"作业人员：{data.operators or ''}",
+                    f"施工方现场负责人：{data.construction_leader or ''}",
+                    f"监理人员：{data.supervisor or ''}",
+                    f"项目公司监护人：{data.company_monitor or ''}",
+                    f"带气现场负责人：{data.gas_leader or ''}",
+                ]
+                llm_prompt = getattr(self, '_last_approval_prompt', '')  # 读取缓存的 LLM 提示词
+                content = (
+                    f"{ic} 审批状态：{ap_status}（{data.approval_level or ''}）\n"
+                    f"风险等级：{data.risk_level or '-'}\n"
+                    f"归档时间：{time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    f"\n{'='*50}\n"
+                    f"审批建议\n"
+                    f"{'='*50}\n\n"
+                    f"{data.approval_opinion or ''}\n"
+                    f"\n{'-'*50}\n"
+                    f"核心要素\n"
+                    f"{'-'*50}\n\n"
+                    + "\n".join(info_lines) + "\n"
+                    + (f"\n{'='*50}\n"
+                       f"LLM 提示词\n"
+                       f"{'='*50}\n\n"
+                       f"{llm_prompt}\n" if llm_prompt else "")
+                )
+                with open(approval_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                safe_print(f"[Agent Act] ⑦ 审批建议已归档: {os.path.basename(approval_path)}")
+                mem.remember("执行", "📋", "审批建议归档", f"{os.path.basename(approval_path)}")
+            else:
+                safe_print("[Agent Act] ⑦ 票号缺失，跳过审批建议归档")
+                mem.remember("执行", "📋", "审批建议归档", "票号缺失，跳过")
+        except Exception as e:
+            safe_print(f"[Agent Act] ⑦ ⚠️ 审批建议归档失败: {e}")
+            mem.remember("执行", "📋", "审批建议归档", f"失败: {e}", status="error")
 
     def _report(self, mem: AgentMemory, data: SecuritySheetData = None):
         safe_print(f"[Agent Report] ===== 决策链报告 =====")
