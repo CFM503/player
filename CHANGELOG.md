@@ -1,5 +1,15 @@
 # 更新日志 (CHANGELOG)
 
+## [3.14.60] - 2026-07-12
+
+### 修复
+- **兼容本地 LM Studio 等不支持 `json_object` 的后端**：`extract_sheet_json` 新增 `_chat_completion` 统一调用；优先使用 `response_format: json_object`，若返回 400（仅支持 `text`/`json_schema`）则自动降级为纯文本请求，并缓存后端能力，避免每次双发同一提示词。
+- **空 `choices` 防护**：LLM 响应无有效 choices 时给出明确错误提示（如 base_url 缺 `/v1`），避免裸 `NoneType is not subscriptable`。
+
+### 新增
+- **结构化提取提示词归档**：每次 `extract_sheet_json` 缓存完整 system + user 提示词（含反思重试多次调用）；推理开始时清空日志，防止票间混档。
+- **独立 LLM 提示词归档文件**：执行阶段 ⑦ 额外写出 `{票号}_{时间戳}_LLM提示词.txt`，并在 `_审批建议.txt` 中分段写入「结构化提取 LLM 提示词」与「审批建议 LLM 提示词」，便于审计追溯。
+
 ## [3.14.59] - 2026-07-12
 
 ### 修复

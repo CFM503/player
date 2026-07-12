@@ -375,6 +375,10 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             kwargs["http_client"] = httpx.Client(proxy=proxy_str, timeout=120.0)  # 使用 httpx 自带代理构造同步客户端实例
         self.client = OpenAI(**kwargs)  # 实例化并缓存 OpenAI 协议客户端
         self.model_name = model_name  # 记录大模型名称，如 qwen-2.5
+        self._last_extract_prompt = ""  # 最近一次结构化提取发给 LLM 的完整提示词（供归档）
+        self._extract_prompt_log = []  # 本轮推理/反思全部提取调用的提示词记录（含重试）
+        # None=未知；True=支持 json_object；False=不支持（LM Studio 等）。进程内记忆，避免每次先 400 再降级双发
+        self._json_object_supported = None
 
     def _extract_sign_columns(self, ocr_text: str) -> dict:
         """基于 OCR 坐标从签批区域精准提取5列签名姓名，避免纯文本拼接导致的列错位"""
@@ -648,6 +652,27 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
 
         return raw_dict  # 返回整理后的新字典数据
 
+    def _chat_completion(self, req: dict, prefer_json_object: bool = False):
+        """统一 chat.completions 调用：记忆后端是否支持 json_object，避免每次 400 后双发。"""
+        use_json = prefer_json_object and self._json_object_supported is not False
+        if use_json:
+            try:
+                resp = self.client.chat.completions.create(
+                    **req, response_format={"type": "json_object"}
+                )
+                self._json_object_supported = True
+                return resp
+            except Exception as e:
+                err = str(e)
+                if "response_format" in err or "json_object" in err or "json_schema" in err:
+                    self._json_object_supported = False
+                    safe_print(f"[LLM Log] 后端不支持 json_object，后续仅发文本模式: {e}")
+                    return self.client.chat.completions.create(**req)
+                raise
+        if prefer_json_object and self._json_object_supported is False:
+            safe_print("[LLM Log] 使用已缓存的文本模式（跳过 json_object）")
+        return self.client.chat.completions.create(**req)
+
     def extract_sheet_json(self, ocr_text: str) -> SecuritySheetData:  # 调用大模型执行核心 OCR 文字到作业票结构化数据的语义提取提取工作
         safe_print(f"[LLM Log] 调用 API [{self.model_name}] 进行语义分析...")  # 控制台打印系统 API 正在调用提示日志
 
@@ -684,19 +709,40 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
 
         # (已按要求移除截断，让大模型读取完整文本，防止末尾追加的网格结果被切掉)
 
+        user_content = f"OCR 文本：\n{ocr_text}"  # 用户侧消息：携带完整 OCR 文本
+        # 缓存本轮发给 LLM 的完整提示词（system + user），供后续归档审计
+        prompt_record = (
+            f"model: {self.model_name}\n"
+            f"time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"\n{'=' * 50}\n"
+            f"role: system\n"
+            f"{'=' * 50}\n\n"
+            f"{system_prompt}\n"
+            f"\n{'=' * 50}\n"
+            f"role: user\n"
+            f"{'=' * 50}\n\n"
+            f"{user_content}\n"
+        )
+        self._last_extract_prompt = prompt_record
+        if not isinstance(getattr(self, "_extract_prompt_log", None), list):
+            self._extract_prompt_log = []
+        self._extract_prompt_log.append(prompt_record)
+
         safe_print(f"[LLM Log] 发送请求中，请等待...")  # 控制台打印请求请求发送状态
-        response = self.client.chat.completions.create(  # 触发 OpenAI 协议调用模型完成接口
+        _req = dict(
             model=self.model_name,  # 绑定模型具体别名
             messages=[  # 构建对话消息列表
                 {"role": "system", "content": system_prompt},  # 写入系统身份词
-                {"role": "user", "content": f"OCR 文本：\n{ocr_text}"},  # 写入用户文本内容，传递整理后的 OCR 字符串
+                {"role": "user", "content": user_content},  # 写入用户文本内容，传递整理后的 OCR 字符串
             ],  # 结束消息列表
-            response_format={"type": "json_object"},  # 强制要求 API 接口返回符合 JSON 协议的文本对象
             temperature=0.1,  # 温度设为低极值 0.1 保证内容可控性
             max_tokens=4000,  # 设定最大允许返回的 Token 数限制为 4000
             timeout=120,  # 设定客户端最大的网络超时响应时长为 120 秒
-        )  # 结束接口调用
+        )
+        response = self._chat_completion(_req, prefer_json_object=True)
 
+        if not response.choices:
+            raise ValueError(f"LLM 返回空 choices，请检查 base_url 是否含 /v1 及模型是否已加载: {getattr(response, 'error', response)}")
         raw_content = response.choices[0].message.content  # 提取模型应答得到的文本字串
         raw_content = clean_thinking(raw_content)  # 清洗掉大模型输出中多余的 think 标签及 markdown 后缀符号
 
@@ -1501,6 +1547,9 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
 
     def _reason(self, ocr_text: str, mem: AgentMemory) -> SecuritySheetData:  # 推理阶段：调用大模型进行实体识别和关系分类，填充为 Pydantic 字典
         safe_print("[Agent Reason] LLM 语义分析...")  # 打印推理阶段日志
+        # 开启新一轮推理前清空提示词日志，避免与历史票据混档
+        self.brain._extract_prompt_log = []
+        self.brain._last_extract_prompt = ""
         sim = _ProgressSim(self._progress, 55, 80, "LLM 语义分析中", 2, 1.0)  # 实例化推理进度模拟器线程，进度从 55% 到 80%
         sim.start()  # 开启平滑更新进度线程
         try:  # 安全审计: 提取彻底失败不再静默造假，捕获并转成明确的高风险失败体交由反思/执行拦截
@@ -1850,7 +1899,19 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                     f"项目公司监护人：{data.company_monitor or ''}",
                     f"带气现场负责人：{data.gas_leader or ''}",
                 ]
-                llm_prompt = getattr(self, '_last_approval_prompt', '')  # 读取缓存的 LLM 提示词
+                # 读取本轮缓存的全部 LLM 提示词（结构化提取 + 审批建议）
+                approval_prompt = getattr(self, "_last_approval_prompt", "") or ""
+                extract_log = getattr(self.brain, "_extract_prompt_log", None) or []
+                if not extract_log:
+                    last_extract = getattr(self.brain, "_last_extract_prompt", "") or ""
+                    extract_log = [last_extract] if last_extract else []
+                extract_prompt_block = ""
+                if extract_log:
+                    parts = []
+                    for i, p in enumerate(extract_log, 1):
+                        parts.append(f"----- 提取调用 #{i} / 共{len(extract_log)} 次 -----\n\n{p}")
+                    extract_prompt_block = "\n\n".join(parts)
+
                 content = (
                     f"{ic} 审批状态：{ap_status}（{data.approval_level or ''}）\n"
                     f"风险等级：{data.risk_level or '-'}\n"
@@ -1863,15 +1924,50 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                     f"核心要素\n"
                     f"{'-'*50}\n\n"
                     + "\n".join(info_lines) + "\n"
-                    + (f"\n{'='*50}\n"
-                       f"LLM 提示词\n"
-                       f"{'='*50}\n\n"
-                       f"{llm_prompt}\n" if llm_prompt else "")
                 )
+                if extract_prompt_block:
+                    content += (
+                        f"\n{'='*50}\n"
+                        f"结构化提取 LLM 提示词\n"
+                        f"{'='*50}\n\n"
+                        f"{extract_prompt_block}\n"
+                    )
+                if approval_prompt:
+                    content += (
+                        f"\n{'='*50}\n"
+                        f"审批建议 LLM 提示词\n"
+                        f"{'='*50}\n\n"
+                        f"{approval_prompt}\n"
+                    )
                 with open(approval_path, "w", encoding="utf-8") as f:
                     f.write(content)
                 safe_print(f"[Agent Act] ⑦ 审批建议已归档: {os.path.basename(approval_path)}")
-                mem.remember("执行", "📋", "审批建议归档", f"{os.path.basename(approval_path)}")
+
+                # 另存独立的 LLM 提示词文件，便于单独查阅审计
+                prompt_path = os.path.join(archive_dir, f"{prefix}_LLM提示词.txt")
+                prompt_file = (
+                    f"票号：{data.ticket_id or ''}\n"
+                    f"模型：{getattr(self.brain, 'model_name', '')}\n"
+                    f"归档时间：{time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                )
+                if extract_prompt_block:
+                    prompt_file += (
+                        f"\n{'='*50}\n"
+                        f"1. 结构化提取（extract_sheet_json）\n"
+                        f"{'='*50}\n\n"
+                        f"{extract_prompt_block}\n"
+                    )
+                if approval_prompt:
+                    prompt_file += (
+                        f"\n{'='*50}\n"
+                        f"2. 审批建议（_generate_approval）\n"
+                        f"{'='*50}\n\n"
+                        f"{approval_prompt}\n"
+                    )
+                with open(prompt_path, "w", encoding="utf-8") as f:
+                    f.write(prompt_file)
+                safe_print(f"[Agent Act] ⑦ LLM 提示词已归档: {os.path.basename(prompt_path)}")
+                mem.remember("执行", "📋", "审批建议归档", f"{os.path.basename(approval_path)}; {os.path.basename(prompt_path)}")
             else:
                 safe_print("[Agent Act] ⑦ 票号缺失，跳过审批建议归档")
                 mem.remember("执行", "📋", "审批建议归档", "票号缺失，跳过")
