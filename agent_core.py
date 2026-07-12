@@ -1558,6 +1558,9 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             )
             raw_opinion = response.choices[0].message.content.strip()
             opinion = clean_thinking(raw_opinion)
+            if not opinion:  # LLM 返回被 <think> 包裹或为空，清洗后丢失全部内容，回退模板兜底
+                safe_print("[Agent Act] LLM 审批建议被 <think> 包裹或为空，使用模板兜底")
+                return self._generate_approval_template(data)
 
             if data.has_abnormal:
                 data.risk_level = self._assess_risk_level(data)
