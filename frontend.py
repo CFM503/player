@@ -206,12 +206,19 @@ with st.sidebar:  # 进入侧边栏渲染上下文本环境
         "钉钉 MCP 地址",  # 输入框说明
         _cfg.get("dingtalk_mcp_url", ""),  # 从配置字典中提取默认值
         type="password",  # 密码模式屏蔽明文
-        help="钉钉 AI 表格 MCP Streamable HTTP 地址",  # 气泡解释
+        help="钉钉 AI 表格 MCP Streamable HTTP 地址。人工介入（待审批/已驳回）经此推送至钉钉 AI 表格，并由表格自动化发消息。",
         key="_dd",  # 绑定状态 key
         placeholder="https://mcp-gw.dingtalk.com/server/...?key=...",  # 示例占位字符
     )  # 结束文本框定义
     if not dingtalk_mcp_url:  # 检查如果钉钉多维表 MCP 地址为空
-        st.markdown("<div style='font-size: 11.5px; color: #D97706; background-color: rgba(217, 119, 6, 0.08); border: 1px solid rgba(217, 119, 6, 0.2); padding: 8px; border-radius: 6px; margin-top: 4px; line-height: 1.4;'>⚠️ 未配置钉钉 MCP 地址，将无法写入 AI 表格，请在上方设置后点击「💾 保存设置」</div>", unsafe_allow_html=True)
+        st.markdown(
+            "<div style='font-size: 11.5px; color: #D97706; background-color: rgba(217, 119, 6, 0.08); "
+            "border: 1px solid rgba(217, 119, 6, 0.2); padding: 8px; border-radius: 6px; margin-top: 4px; line-height: 1.4;'>"
+            "⚠️ 未配置钉钉 MCP 地址：无法推送钉钉 AI 表格，人工介入链路不可用。请设置后点击「💾 保存设置」</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.caption("人工介入 = 经 MCP 推送钉钉 AI 表格（待审批/已驳回由主管在钉钉侧处理）")
 
     # ---- PaddleOCR 四模型参数（钉钉 MCP 下方，可保存到 config.json） ----
     from ocr import DEFAULT_OCR_PARAMS, merge_ocr_params  # 默认参数与合并工具
@@ -706,7 +713,13 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
         if len(st.session_state.results) > 1:  # 检查如果刚刚批量处理了多张图片作业票
             abn = sum(1 for r in st.session_state.results if r["data"].has_abnormal)  # 统计带有异常问题的危险作业票数量
             st.markdown(f"**📊 汇总** {len(st.session_state.results)}张 {badge('正常'+str(len(st.session_state.results)-abn), 'ok')} {badge('隐患'+str(abn), 'err' if abn else 'ok')}", unsafe_allow_html=True)  # 渲染大汇总结果，附带对应颜色的 HTML 徽标
-            rows = [{"票号": r["data"].ticket_id, "场站": r["data"].station_name, "状态": "有隐患" if r["data"].has_abnormal else "正常", "风险": r["data"].risk_level or "-", "审批": r["data"].approval_status or "-"} for r in st.session_state.results]  # 整理成 Pandas DataFrame 要求的数据格式
+            rows = [{
+                "票号": r["data"].ticket_id,
+                "作业单位": r["data"].station_name,
+                "状态": "有隐患" if r["data"].has_abnormal else "正常",
+                "作业等级": r["data"].risk_level or "-",
+                "审批": r["data"].approval_status or "-",
+            } for r in st.session_state.results]
             st.dataframe(pd.DataFrame(rows), use_container_width=True, height=min(len(rows)*28+30, 200))  # 渲染精美的数据表报表汇总视图
 
 
@@ -822,13 +835,29 @@ with tab2:  # 进入第二个 Tab 页签渲染上下文环境
             with cm:  # 记录信息大折叠面板列
                 with st.expander(f"{icon} #{rid} | {ticket} | {station} | {date}{badge_md}", expanded=False):  # 新建默认折叠的 Expander 面板，头包含票号场站及彩色风险级标签
                     ca, cb = st.columns(2)  # 折叠内部左右 1:1 分栏以对齐排版
-                    with ca: st.markdown(f"**票号** {ticket}  \n**作业单位** {station}  \n**作业时间** {work_time}  \n**作业内容** {content}  \n**动火人** {worker}  \n**日期** {date}")  # 左侧输出识别提取的基本信息
+                    with ca: st.markdown(
+                        f"**票号** {ticket}  \n"
+                        f"**作业单位** {station}  \n"
+                        f"**作业时间** {work_time}  \n"
+                        f"**作业内容** {content}  \n"
+                        f"**作业人姓名及证书编号** {worker}  \n"
+                        f"**日期** {date}"
+                    )
                     with cb:  # 右侧栏
-                        st.markdown(f"**状态** {'🔴 有隐患' if abnormal else '🟢 正常'}")  # 高亮输出隐患等级状态
-                        if risk: st.markdown(f"**风险** {risk}")  # 输出风险评级数据
-                        if ap_status: st.markdown(f"**审批** {ap_status}")  # 输出只能审批意见数据
-                        st.caption(f"处理: {created}")  # 输出数据处理入库时间
-                        if opinion: st.caption(f"建议: {opinion}")  # 渲染展现大模型的详细建议说明
+                        st.markdown(f"**状态** {'🔴 有隐患' if abnormal else '🟢 正常'}")
+                        if risk:
+                            st.markdown(f"**作业等级** {risk}" + ("（一级危险最高）" if risk == "一级" else ""))
+                        if ap_status:
+                            # 待审批/已驳回：人工介入路径 = MCP 推送钉钉 AI 表格
+                            ap_hint = {
+                                "自动通过": "系统自动通过",
+                                "待审批": "人工介入：MCP 已/将推送钉钉 AI 表格",
+                                "已驳回": "禁止放行：MCP 已/将推送钉钉 AI 表格",
+                            }.get(ap_status, "")
+                            st.markdown(f"**审批** {ap_status}" + (f"  \n_{ap_hint}_" if ap_hint else ""))
+                        st.caption(f"处理: {created}")
+                        if opinion:
+                            st.caption(f"建议: {opinion}")
                     
                     # 看板详情内部的图片查看及导出下载功能
                     if img_path and os.path.exists(img_path):  # 校验该本地图片路径有效并且磁盘物理文件确实完好存在

@@ -2,9 +2,15 @@
 """
 带气作业票 25项安全措施网格对号识别工具 (OpenCV + skimage)
 
-识别策略（二分类）：
-  - 对号 (✓/√)  → 输出 (✓)
-  - 叉号 (×)、横杠 (—)、空白 → 输出 (x)
+每项安全措施有 5 列确认格，合法填写符号（票面图例）：
+  落实 √  |  未落实 ×  |  不适用 \\
+空白格子不得记为叉号，否则完整性校验无法发现漏项。
+
+识别策略（四类）：
+  - 对号 / 对勾 (stroke 弯曲) → 输出 (✓)
+  - 斜杠 (stroke 近似直线)   → 输出 (\\)
+  - 叉号 (cross)             → 输出 (x)
+  - 空白 (blank)             → 输出 (-)
 
 用法：
   python ocr5.py -i aligned.jpg
@@ -135,7 +141,39 @@ def classify_mark(cell_gray, inset=4, ink_ratio_thresh=0.008, min_component_area
         and min_spur_dist > 3
     )
 
-    label = 'cross' if is_cross else 'stroke'
+    if is_cross:
+        label = 'cross'
+    else:
+        # stroke：区分对勾(✓) 与 斜杠(\)
+        # 斜杠近似单一直线（骨架端点=2、无分支、骨架点近似共线）；对勾有明显折角
+        label = 'stroke'
+        if n_endpoint == 2 and n_branch == 0 and n_skel_px >= 4:
+            coords = np.argwhere(skel)
+            if len(coords) >= 4:
+                # 用首末端点拟合直线，残差小 → 斜杠
+                ys = coords[:, 0].astype(np.float64)
+                xs = coords[:, 1].astype(np.float64)
+                # 端点取 y 最小/最大两点近似
+                i_min, i_max = int(np.argmin(ys)), int(np.argmax(ys))
+                p1 = coords[i_min].astype(np.float64)
+                p2 = coords[i_max].astype(np.float64)
+                # 若几乎水平则改用 x 极值
+                if abs(p2[0] - p1[0]) < 2 and abs(p2[1] - p1[1]) < 2:
+                    i_min, i_max = int(np.argmin(xs)), int(np.argmax(xs))
+                    p1 = coords[i_min].astype(np.float64)
+                    p2 = coords[i_max].astype(np.float64)
+                seg = p2 - p1
+                seg_len = float(np.linalg.norm(seg))
+                if seg_len >= 4:
+                    # 点到线段距离的 RMS
+                    # cross((p-p1), seg) / |seg|
+                    cross = np.abs((xs - p1[1]) * seg[0] - (ys - p1[0]) * seg[1])
+                    rms = float(np.sqrt(np.mean((cross / seg_len) ** 2)))
+                    debug['line_rms'] = round(rms, 3)
+                    debug['seg_len'] = round(seg_len, 1)
+                    # 阈值：格子很小，直线残差通常 < 1.2px
+                    if rms < 1.2:
+                        label = 'slash'
     logger.debug("classify_mark → %s", label)
     return label, debug
 
@@ -171,7 +209,11 @@ MEASURES = [
 
 
 def get_y_lines(img_g):
-    """动态检测水平网格线，或使用默认坐标兜底"""
+    """
+    动态检测水平网格线（25 行需 26 条线）。
+    【禁止兜底】检测不到恰好 26 条时直接报错，禁止用默认坐标表硬套（会导致错行/假识别）。
+    若失败：检查对齐尺寸是否为 1052x1487、表格线是否清晰。
+    """
     binary_img = img_g < 80
     width = 951 - 675
     row_sums = np.sum(binary_img[:, 675:951], axis=1)
@@ -189,11 +231,13 @@ def get_y_lines(img_g):
             if is_max:
                 lines_y.append(y)
 
-    if len(lines_y) == 26:
-        return lines_y
-    else:
-        # 默认网格线定位（对应标准 1052x1487 尺寸对齐图）
-        return [459, 483, 507, 531, 555, 579, 603, 627, 653, 699, 745, 775, 802, 846, 872, 899, 926, 972, 1001, 1025, 1071, 1097, 1126, 1155, 1184, 1228]
+    if len(lines_y) != 26:
+        # 曾用默认 [459,483,...1228] 兜底；已删除。出现问题请修检测/对齐，不要恢复硬编码线。
+        raise RuntimeError(
+            f"安全措施网格水平线数量异常: 检测到 {len(lines_y)} 条，需要恰好 26 条。"
+            f"禁止使用默认坐标兜底。lines={lines_y[:8]}{'...' if len(lines_y) > 8 else ''}"
+        )
+    return lines_y
 
 
 def main():
@@ -204,7 +248,7 @@ def main():
     parser = argparse.ArgumentParser(
         description=(
             "带气作业票 25项安全措施对号识别工具 (OpenCV + skimage)\n"
-            "二分类：stroke(有笔画)判为对号，cross/blank均判为叉号(x)"
+            "四分类：对号(✓) / 叉号(x) / 斜杠(\\) / 空白(-)；空白不得记为叉号"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -268,7 +312,7 @@ def main():
     # 将去表格化后的图像灰度图作为后续特征提取的基础
     img_gray = cv2.cvtColor(img_no_lines_bgr, cv2.COLOR_BGR2GRAY)
 
-    fallback_md = []
+    grid_md = []
     for idx, desc in MEASURES:
         r = idx - 1  # 0-based grid row index
         y1, y2 = y_lines[r], y_lines[r + 1]
@@ -287,28 +331,28 @@ def main():
             logger.debug("第%d条 列%d [%s] %s", idx, i + 1, roles[i], label)
             row_labels.append(label)
 
-        # 二分类输出：仅 stroke（有笔画）判为对号，其余（cross/blank）均为叉号
+        # 四分类输出：✓ 落实 / x 未落实 / \ 不适用 / - 空白(漏项)
+        # 注意：空白必须输出 (-)，不可写成 (x)，否则下游完整性校验无法发现漏填
+        _sym = {'stroke': '✓', 'slash': '\\', 'cross': 'x', 'blank': '-'}
         status = []
         for i in range(5):
             label = row_labels[i]
             role = roles[i]
-            if label == 'stroke':
-                status.append(f"{role}(✓)")
-            else:
-                # cross（叉号）、blank（空白/横杠/未填写）统一输出叉号
-                status.append(f"{role}(x)")
+            status.append(f"{role}({_sym.get(label, '-')})")
 
         col_str = " | ".join(status)
         logger.info("第%d条: %s", idx, col_str)
-        fallback_md.append(f"第{idx}条: {desc} | " + col_str)
+        grid_md.append(f"第{idx}条: {desc} | " + col_str)
 
-    if fallback_md:
-        output_text = (
-            "\n\n--- 纯本地 OpenCV 像素密度提取结果 ---\n"
-            + "\n".join(fallback_md)
-            + "\n----------------------------------\n"
-        )
-        print(output_text)
+    if not grid_md:
+        # 【禁止兜底】无输出行则失败退出，禁止打印空成功
+        raise RuntimeError("25 项安全措施网格结果为空，禁止兜底输出")
+    output_text = (
+        "\n\n--- 纯本地 OpenCV 像素密度提取结果 ---\n"
+        + "\n".join(grid_md)
+        + "\n----------------------------------\n"
+    )
+    print(output_text)
 
 
 if __name__ == '__main__':
