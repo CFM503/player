@@ -213,6 +213,139 @@ with st.sidebar:  # 进入侧边栏渲染上下文本环境
     if not dingtalk_mcp_url:  # 检查如果钉钉多维表 MCP 地址为空
         st.markdown("<div style='font-size: 11.5px; color: #D97706; background-color: rgba(217, 119, 6, 0.08); border: 1px solid rgba(217, 119, 6, 0.2); padding: 8px; border-radius: 6px; margin-top: 4px; line-height: 1.4;'>⚠️ 未配置钉钉 MCP 地址，将无法写入 AI 表格，请在上方设置后点击「💾 保存设置」</div>", unsafe_allow_html=True)
 
+    # ---- PaddleOCR 四模型参数（钉钉 MCP 下方，可保存到 config.json） ----
+    from ocr import DEFAULT_OCR_PARAMS, merge_ocr_params  # 默认参数与合并工具
+    _ocr_saved = merge_ocr_params(_cfg.get("ocr_params") if isinstance(_cfg.get("ocr_params"), dict) else None)
+
+    def _sel_idx(options, value, default_idx=0):
+        try:
+            return options.index(value)
+        except ValueError:
+            return default_idx
+
+    st.markdown("**🔤 PaddleOCR 四模型参数**")
+    st.caption("本地引擎生效；保存后写入 config.json，下次启动自动加载。")
+    with st.expander("展开设置 det / rec / 行方向 / 页方向", expanded=False):
+        # ② 文本检测
+        st.markdown("`PP-OCRv6_*_det` 文本检测")
+        _det_models = [
+            "PP-OCRv6_medium_det",
+            "PP-OCRv6_small_det",
+            "PP-OCRv6_tiny_det",
+        ]
+        ocr_det_model = st.selectbox(
+            "检测模型",
+            _det_models,
+            index=_sel_idx(_det_models, _ocr_saved.get("text_detection_model_name"), 0),
+            key="_ocr_det_model",
+            help="找文字框。medium 均衡；small/tiny 更快、精度可能下降。",
+        )
+        ocr_det_thresh = st.number_input(
+            "像素阈值 text_det_thresh",
+            min_value=0.05, max_value=0.95, step=0.05,
+            value=float(_ocr_saved.get("text_det_thresh", 0.3)),
+            key="_ocr_det_thresh",
+            help="像素级文字概率阈值。降低→淡字更易检出；升高→更干净。默认约 0.3。",
+        )
+        ocr_det_box_thresh = st.number_input(
+            "框阈值 text_det_box_thresh",
+            min_value=0.05, max_value=0.95, step=0.05,
+            value=float(_ocr_saved.get("text_det_box_thresh", 0.2)),
+            key="_ocr_det_box",
+            help="文本框置信度。降低→少漏小字/手写√×（推荐 0.2~0.4）；升高→少误检。",
+        )
+        ocr_det_unclip = st.number_input(
+            "框扩张 text_det_unclip_ratio",
+            min_value=0.5, max_value=3.0, step=0.1,
+            value=float(_ocr_saved.get("text_det_unclip_ratio", 1.5)),
+            key="_ocr_det_unclip",
+            help="文本框扩张系数。增大可减少切字；过大可能粘连相邻字。默认约 1.5。",
+        )
+
+        st.markdown("---")
+        # ④ 文本识别
+        st.markdown("`PP-OCRv6_*_rec` 文本识别")
+        _rec_models = [
+            "PP-OCRv6_medium_rec",
+            "PP-OCRv6_small_rec",
+            "PP-OCRv6_tiny_rec",
+        ]
+        ocr_rec_model = st.selectbox(
+            "识别模型",
+            _rec_models,
+            index=_sel_idx(_rec_models, _ocr_saved.get("text_recognition_model_name"), 0),
+            key="_ocr_rec_model",
+            help="认字模型，建议与检测同档（medium/small/tiny）。",
+        )
+        ocr_rec_score = st.number_input(
+            "置信度阈值 text_rec_score_thresh",
+            min_value=0.0, max_value=0.99, step=0.05,
+            value=float(_ocr_saved.get("text_rec_score_thresh", 0.1)),
+            key="_ocr_rec_score",
+            help="低于该分的识别结果丢弃。手写建议 0.0~0.1；提高会更干净但易丢字。",
+        )
+
+        st.markdown("---")
+        # ③ 文本行方向
+        st.markdown("`PP-LCNet_*_textline_ori` 文本行方向")
+        ocr_use_textline_ori = st.checkbox(
+            "启用文本行方向分类",
+            value=bool(_ocr_saved.get("use_textline_orientation", True)),
+            key="_ocr_use_tl_ori",
+            help="对每个文本行判断 0°/180°。票面已对齐时可关闭以提速。",
+        )
+        _tl_models = [
+            "PP-LCNet_x1_0_textline_ori",
+            "PP-LCNet_x0_25_textline_ori",
+        ]
+        ocr_textline_model = st.selectbox(
+            "行方向模型",
+            _tl_models,
+            index=_sel_idx(_tl_models, _ocr_saved.get("textline_orientation_model_name"), 0),
+            key="_ocr_tl_model",
+            help="x1_0 默认；x0_25 更轻量。",
+            disabled=not ocr_use_textline_ori,
+        )
+
+        st.markdown("---")
+        # ① 文档整页方向
+        st.markdown("`PP-LCNet_x1_0_doc_ori` 文档整页方向")
+        ocr_use_doc_ori = st.checkbox(
+            "启用整页方向分类",
+            value=bool(_ocr_saved.get("use_doc_orientation_classify", True)),
+            key="_ocr_use_doc_ori",
+            help="判断整图 0°/90°/180°/270°。手机随意拍时开启；已摆正可关闭提速。",
+        )
+        _doc_models = ["PP-LCNet_x1_0_doc_ori"]
+        ocr_doc_model = st.selectbox(
+            "页方向模型",
+            _doc_models,
+            index=_sel_idx(_doc_models, _ocr_saved.get("doc_orientation_classify_model_name"), 0),
+            key="_ocr_doc_model",
+            help="默认 PP-LCNet_x1_0_doc_ori。",
+            disabled=not ocr_use_doc_ori,
+        )
+        ocr_use_unwarp = st.checkbox(
+            "启用文档展平 UVDoc",
+            value=bool(_ocr_saved.get("use_doc_unwarping", False)),
+            key="_ocr_use_unwarp",
+            help="弯曲纸面矫正。平面扫描/已对齐作业票建议关闭（更快）。",
+        )
+
+    ocr_params = merge_ocr_params({
+        "text_detection_model_name": ocr_det_model,
+        "text_det_thresh": float(ocr_det_thresh),
+        "text_det_box_thresh": float(ocr_det_box_thresh),
+        "text_det_unclip_ratio": float(ocr_det_unclip),
+        "text_recognition_model_name": ocr_rec_model,
+        "text_rec_score_thresh": float(ocr_rec_score),
+        "use_textline_orientation": bool(ocr_use_textline_ori),
+        "textline_orientation_model_name": ocr_textline_model,
+        "use_doc_orientation_classify": bool(ocr_use_doc_ori),
+        "doc_orientation_classify_model_name": ocr_doc_model,
+        "use_doc_unwarping": bool(ocr_use_unwarp),
+    })
+
     # 保存配置按钮逻辑段
     st.markdown("---")  # 渲染第三条侧边栏分割横线
     if st.button("💾 保存设置", use_container_width=True):  # 渲染一个拉平填满侧栏的保存设置按键
@@ -226,6 +359,7 @@ with st.sidebar:  # 进入侧边栏渲染上下文本环境
         _cfg["dingtalk_mcp_url"] = st.session_state.get("_dd", _cfg.get("dingtalk_mcp_url", ""))  # 保存写入 of 钉钉 MCP 数据库网关地址
         _cfg["ocr_engine"] = ocr_engine  # 保存 OCR 引擎配置
         _cfg["ocr_device"] = ocr_device  # 保存 OCR 推理硬件设备配置 (cpu/gpu)
+        _cfg["ocr_params"] = ocr_params  # 保存 PaddleOCR 四模型参数
         # 将配置同步到全局 Python 环境变量，保证 Agent 可直接读取
         if api_key: os.environ["ONLINE_API_KEY"] = api_key  # 同步 API Key 到系统环境变量
         if base_url: os.environ["ONLINE_BASE_URL"] = base_url  # 同步 API Base URL 到系统环境变量
@@ -383,7 +517,14 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
                 st.error("❌ 视觉大模型引擎需要配置视觉模型名称")  # 终端及界面报错并阻断
                 st.stop()  # 页面执行断点
             vision_brain = LLMBrain(api_key=vk, base_url=vu, model_name=vm, proxy=_proxy)  # 实例化专属视觉大模型大脑
-        agent = SecurityAgent(brain=brain, ocr_mode=ocr_mode, ocr_engine=ocr_engine, ocr_device=ocr_device, vision_brain=vision_brain)  # 传入各级大脑及模式和设备以构造 Agent 主代理
+        agent = SecurityAgent(
+            brain=brain,
+            ocr_mode=ocr_mode,
+            ocr_engine=ocr_engine,
+            ocr_device=ocr_device,
+            vision_brain=vision_brain,
+            ocr_params=ocr_params,  # 侧边栏四模型参数（可与 config.json 同步）
+        )
         st.session_state.results = []  # 重置并清空历史处理结果列表，只显示本次全新任务的结果
 
         # ---- 上传并持久化保存文件至 uploads 文件夹 ----

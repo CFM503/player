@@ -1,6 +1,18 @@
 # 更新日志 (CHANGELOG)
 
+## [3.14.61] - 2026-07-13
+
+### 新增
+- **PaddleOCR 四模型参数可配置**：Web 侧边栏「钉钉 MCP 地址」下方增加 **PaddleOCR 四模型参数**面板，支持检测 / 识别 / 文本行方向 / 文档整页方向（及 UVDoc 展平）的模型选择与阈值设置，点击「💾 保存设置」写入 `config.json` 的 `ocr_params`，处理作业票时实时生效。
+- **`ocr.py` CLI 全参数**：命令行可配置四个核心模型的全部常用参数，`python ocr.py -h` 提供分组说明、调参建议与示例；兼容旧别名 `--det-thresh` / `--drop-score`。
+- **配置模板扩展**：`config.example.json` 增加 `ocr_params` 示例字段，便于离线部署与参数备份。
+
+### 改进
+- **参数透传至引擎**：`frontend` → `SecurityAgent` → `AgentTools.ocr_tool` / `_ocr_crop_region` → `run_ocr` → `PaddleOCR(**kwargs)` 全链路透传；不同参数组合使用独立实例缓存，避免互相覆盖。
+- **高识别率默认值**：与历史硬编码对齐——`text_det_box_thresh=0.2`、`text_rec_score_thresh=0.1`；文档展平默认关闭（适合已对齐作业票）。
+
 ## [3.14.60] - 2026-07-12
+
 
 ### 修复
 - **兼容本地 LM Studio 等不支持 `json_object` 的后端**：`extract_sheet_json` 新增 `_chat_completion` 统一调用；优先使用 `response_format: json_object`，若返回 400（仅支持 `text`/`json_schema`）则自动降级为纯文本请求，并缓存后端能力，避免每次双发同一提示词。

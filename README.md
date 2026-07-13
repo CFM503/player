@@ -2,7 +2,7 @@
 
 > 中燃集团 AI 创新创意大赛 · 赛道三（AI 龙虾专项赛）  
 > 选题方向：**流程自动化与审批助手**  
-> 版本：v3.14.60
+> 版本：v3.14.61
 
 ---
 
@@ -157,13 +157,15 @@
 # 1. 安装依赖（国内镜像，自动检查版本）
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# 2. 配置 API（编辑 config.json）
+# 2. 配置 API（编辑 config.json，可参考 config.example.json）
 {
   "api_key": "你的API Key",
   "base_url": "https://api.example.com/v1",
   "model_name": "你的模型名称",
-  "delete_password": "123",
-  "dingtalk_mcp_url": "钉钉AI表格MCP地址"
+  "dingtalk_mcp_url": "钉钉AI表格MCP地址",
+  "ocr_engine": "paddleocr",
+  "ocr_device": "cpu",
+  "ocr_params": { }
 }
 
 # 3. 启动（自动检查依赖版本 + 模型缓存）
@@ -172,7 +174,64 @@ START.bat
 streamlit run frontend.py
 ```
 
-> 首次启动会自动下载 PaddleOCR 和 PaddleStructure 模型（约 400MB），请保持网络畅通。
+> 首次启动会自动下载 PaddleOCR 模型（PP-OCRv6 检测/识别 + 方向分类等，约数百 MB），请保持网络畅通。  
+> 模型缓存目录（Windows）：`%USERPROFILE%\.paddlex\official_models\`
+
+---
+
+## 五.1 PaddleOCR 四模型参数（Web UI / 配置 / CLI）
+
+本地引擎使用 **PP-OCRv6 流水线**，由四个核心模型协同工作（外加可选文档展平 UVDoc）：
+
+| 角色 | 默认模型 | 做什么 |
+|------|----------|--------|
+| **文档整页方向** | `PP-LCNet_x1_0_doc_ori` | 判断整图 0°/90°/180°/270°，必要时先转正 |
+| **文本检测** | `PP-OCRv6_medium_det` | 在图上找出文字区域（框），不负责认字 |
+| **文本行方向** | `PP-LCNet_x1_0_textline_ori` | 判断单行是否倒置（0°/180°） |
+| **文本识别** | `PP-OCRv6_medium_rec` | 对裁出的文本行认字 |
+
+### 在哪里设置
+
+1. **Web UI（推荐）**  
+   侧边栏 → **钉钉 MCP 地址**下方 → **🔤 PaddleOCR 四模型参数** → 展开后调整 → 点 **💾 保存设置**。  
+   保存后写入 `config.json` 的 `ocr_params`；不保存直接点「处理」也会用当前侧边栏数值。
+2. **配置文件**  
+   编辑 `config.json`（字段说明见 `config.example.json`）。
+3. **命令行**  
+   `python ocr.py -h` 查看全部参数与示例；例如：  
+   `python ocr.py ticket.png --device gpu --text-det-box-thresh 0.2 --text-rec-score-thresh 0.1`
+
+### 四组参数怎么用
+
+| 分组 | 主要参数 | 作用简述 |
+|------|----------|----------|
+| **① 页方向** | `use_doc_orientation_classify`、`doc_orientation_classify_model_name` | 开：手机随意拍、整页颠倒/横放时有用。关：票面已摆正或已模板对齐时可提速。 |
+| **①b 展平** | `use_doc_unwarping`（UVDoc） | 开：纸面严重弯曲时。关（默认）：平面扫描 / 已对齐作业票，更快。 |
+| **② 检测 det** | `text_detection_model_name`、`text_det_thresh`、`text_det_box_thresh`、`text_det_unclip_ratio` | 模型档位 medium/small/tiny；像素阈值与框阈值决定**漏检/误检**；unclip 决定框是否包全笔画。 |
+| **③ 行方向** | `use_textline_orientation`、`textline_orientation_model_name` | 开：个别行倒立。关：行方向正确时提速。 |
+| **④ 识别 rec** | `text_recognition_model_name`、`text_rec_score_thresh` | 模型档位须与 det 尽量同档；score 过低保留更多手写，过高会丢掉低置信结果。 |
+
+检测 / 识别下拉中的 **medium / small / tiny** 是同一功能的三个**体量档位**（精度与速度权衡），不是同时跑三个模型。建议 **det 与 rec 选同一档**（如都用 medium）。
+
+### 建议：作业票「高识别率」设置
+
+针对手机拍的动火/带气票（手写 + 小符号 √/×），推荐：
+
+| 参数 | 建议值 | 说明 |
+|------|--------|------|
+| 检测模型 | `PP-OCRv6_medium_det` | 默认档，精度优先 |
+| 识别模型 | `PP-OCRv6_medium_rec` | 与 det 配对 |
+| `text_det_box_thresh` | **0.2 ~ 0.4** | 越低越不易漏小字/勾叉；过低噪声增多（默认 0.2） |
+| `text_det_thresh` | **0.2 ~ 0.3** | 淡笔迹更敏感（默认 0.3） |
+| `text_det_unclip_ratio` | **1.5 ~ 2.0** | 框切字时可略增（默认 1.5） |
+| `text_rec_score_thresh` | **0.0 ~ 0.1** | 少丢低置信手写（默认 0.1） |
+| 整页方向 | 未对齐原图可开；**模板对齐后可关** | 关可提速 |
+| 行方向 | 行方向正常时可关 | 关可提速 |
+| 文档展平 | **建议关** | 已对齐作业票一般不需要 |
+
+**补充（往往比调参更有效）**：保证拍照清晰、少反光；系统会做模板对齐与去表格线；OCR 引擎选「本地 PaddleOCR」时上述参数才生效（「视觉大模型」引擎不走本地四模型）。
+
+运行时控制台会出现 `[OCR] 初始化 PaddleOCR:` 及各参数行，可用于确认配置已注入引擎。
 
 ---
 
@@ -259,7 +318,7 @@ streamlit run frontend.py
 player/
 ├── agent_core.py       # Agent 核心引擎（Schema/LLM/工具集/ReAct循环）
 ├── align_to_template.py# 图像模板匹配与透视对齐纠偏工具
-├── ocr.py              # OCR 文字识别主控门面（支持 PaddleOCR 和 视觉大模型）
+├── ocr.py              # OCR 主控（PaddleOCR 四模型参数 + CLI -h / 视觉大模型）
 ├── ocr5.py             # 签字格标记三分类器（骨架化、拓扑去毛刺判定）
 ├── ocr7.py             # 去表格线独立工具（长核形态学开运算 + Inpaint）
 ├── dingtalk_client.py  # 钉钉 AI 表格 MCP Streamable HTTP 客户端封装

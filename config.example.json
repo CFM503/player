@@ -1,6 +1,25 @@
 {
-    "api_key": "your-api-key-here",
-    "base_url": "https://your-api-endpoint.com/v1",
-    "model_name": "your-model-name",
-    "dingtalk_mcp_url": "https://mcp-gw.dingtalk.com/server/xxx?key=xxx"
+  "api_key": "your-api-key-here",
+  "base_url": "https://your-api-endpoint.com/v1",
+  "model_name": "your-model-name",
+  "vision_api_key": "",
+  "vision_base_url": "",
+  "vision_model_name": "",
+  "proxy": "",
+  "dingtalk_mcp_url": "https://mcp-gw.dingtalk.com/server/xxx?key=xxx",
+  "ocr_engine": "paddleocr",
+  "ocr_device": "cpu",
+  "ocr_params": {
+    "use_doc_orientation_classify": true,
+    "doc_orientation_classify_model_name": "PP-LCNet_x1_0_doc_ori",
+    "use_doc_unwarping": false,
+    "text_detection_model_name": "PP-OCRv6_medium_det",
+    "text_det_thresh": 0.3,
+    "text_det_box_thresh": 0.2,
+    "text_det_unclip_ratio": 1.5,
+    "use_textline_orientation": true,
+    "textline_orientation_model_name": "PP-LCNet_x1_0_textline_ori",
+    "text_recognition_model_name": "PP-OCRv6_medium_rec",
+    "text_rec_score_thresh": 0.1
+  }
 }

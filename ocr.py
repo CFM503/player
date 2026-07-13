@@ -1,262 +1,995 @@
 # -*- coding: utf-8 -*-
-# 警告：永远不要修改这个文件！ (WARNING: NEVER MODIFY THIS FILE!)
 """
 中燃"安全数字监督员" OCR 处理器模块 (ocr.py)
-面向场景：支持全图扫描/指定坐标区域裁剪扫描，保存裁剪子图及 Markdown 文本结果，支持指定使用 CPU 或 GPU，以及选择不同的 OCR 引擎（本地 PaddleOCR 或 视觉大模型）。
+面向场景：支持全图扫描/指定坐标区域裁剪扫描，保存裁剪子图及 Markdown 文本结果，
+支持指定使用 CPU 或 GPU，以及选择不同的 OCR 引擎（本地 PaddleOCR 或 视觉大模型）。
 可用作 Python 模块导入，亦可独立在命令行运行。
+
+CLI 可配置 PP-OCRv6 流水线中的四个核心模型参数：
+  - PP-OCRv6_medium_det          文本检测
+  - PP-OCRv6_medium_rec          文本识别
+  - PP-LCNet_x1_0_textline_ori   文本行方向分类
+  - PP-LCNet_x1_0_doc_ori        文档整页方向分类
+以及文档展平 UVDoc（文档预处理相关，可选）。
+
+查看全部参数说明：
+  python ocr.py -h
+  python ocr.py --help
 """
 
-import os  # 导入系统接口模块，用于处理文件路径及目录创建等操作
-import cv2  # 导入 OpenCV 计算机视觉库，用于图像读取、裁剪及图像形态学处理
-import argparse  # 导入命令行参数解析模块，用于处理终端命令行参数输入
-from typing import List, Dict, Any, Optional  # 从 typing 模块导入用于类型注解的容器和可选类型
-import numpy as np  # 导入 NumPy
-
-def crop_image(image_path: str, x: int, y: int, w: int, h: int, save_crop_path: Optional[str] = None):  # 定义裁剪图片区域的函数，可选择性保存子图
-    # 获取输入参数以裁剪图像
-    img = cv2.imread(image_path)  # 使用 OpenCV 根据指定的文件路径读取图片
-    if img is None:  # 判断读取的图片是否为空，若为空则说明路径无效或文件损坏
-        raise FileNotFoundError(f"无法读取图片: {image_path}")  # 抛出文件未找到的异常并给出路径提示
-    img_h, img_w = img.shape[:2]  # 获取读取图片的原始高度 and 宽度尺寸
-    x1, y1 = max(0, x), max(0, y)  # 计算并限制裁剪起始点 x1 和 y1 的坐标，确保不小于 0 越界
-    x2, y2 = min(img_w, x + w), min(img_h, y + h)  # 计算并限制裁剪结束点 x2 和 y2 的坐标，确保不超过原图尺寸
-    if x2 <= x1 or y2 <= y1:  # 判断裁剪的宽度或高度是否无效（即起始点在结束点右下方）
-        raise ValueError(f"无效的裁剪区域: x1={x1}, y1={y1}, x2={x2}, y2={y2}")  # 抛出值错误异常，指出不合法的裁剪边界
-    
-    crop = img[y1:y2, x1:x2]  # 使用 NumPy 切片根据坐标范围裁剪子图像区域
-    if save_crop_path:  # 判断是否指定了保存裁剪子图的目标文件路径
-        os.makedirs(os.path.dirname(os.path.abspath(save_crop_path)), exist_ok=True)  # 递归创建保存子图所需的父级目录结构
-        cv2.imwrite(save_crop_path, crop)  # 调用 OpenCV 的 imwrite 函数将裁剪出的子图保存为图像文件
-        print(f"[OCR] 已保存裁剪图片到: {save_crop_path}")  # 打印提示信息，说明子图保存成功及路径
-    return crop  # 返回裁剪后的 NumPy 图像数组对象
-
-def format_table_cluster(entries: List[Dict[str, Any]]) -> str:  # 定义基于坐标聚类的表格格式化函数，将识别项转为 Markdown 表格
-    # 开始进行聚类格式化
-    if not entries:  # 判断传入的识别项 entries 列表是否为空
-        return ""  # 若列表为空，则直接返回空字符串
-    # 按 y_center 排序，检测行间间隙分行
-    entries_sorted = sorted(entries, key=lambda e: e["y"])  # 根据文本块中心的 Y 轴坐标对所有识别项进行升序排序
-    rows = []  # 初始化外层行容器列表，用于存放分组后的每一行文本块
-    current_row = [entries_sorted[0]]  # 将排序后的第一个文本块作为当前行的起始文本块
-    for prev, cur in zip(entries_sorted, entries_sorted[1:]):  # 遍历相邻的文本块以判断是否换行
-        gap = cur["y"] - prev["y"]  # 计算相邻两个文本块在 Y 轴中心坐标上的垂直差距
-        row_h = max(prev["h"], cur["h"])  # 获取两相邻文本块高度的最大值，作为基准高度
-        if gap > row_h * 0.6:  # 如果两块的垂直间距超过了其高度的 60%，判定为换行
-            rows.append(current_row)  # 将累积的当前行文本块列表保存到外层行容器中
-            current_row = [cur]  # 重置当前行容器，并将当前循环文本块作为新行的起点
-        else:  # 若间距在阈值范围内，判定为同一行文本
-            current_row.append(cur)  # 将当前循环文本块追加到当前行容器中
-    rows.append(current_row)  # 将最后一行的所有文本块列表保存到外层行容器中
-    
-    lines = []  # 初始化字符串行列表，用于保存拼接后的每行文本字符串
-    for row in rows:  # 遍历分行后的每一行文本块列表
-        row.sort(key=lambda e: e["x"])  # 在每一行内部，按照 X 轴坐标对文本块进行从左到右排序
-        line = " | ".join(e["text"] for e in row)  # 用竖线 " | " 将同一行内的各文本块内容拼接起来
-        lines.append(line)  # 将拼接好的一行字符串添加到行列表中
-    return "\n".join(lines)  # 用换行符连接各行字符串，并返回最终结构化的多行表格字符串
+import os
+import cv2
+import argparse
+from typing import List, Dict, Any, Optional, Tuple
+import numpy as np
 
 
-_ocr_cache = {}  # 初始化全局 OCR 缓存字典，键为 device 类型，值为初始化好的 PaddleOCR 实例对象
+# ---------------------------------------------------------------------------
+# 图像裁剪 / 表格格式化
+# ---------------------------------------------------------------------------
 
-def get_ocr_instance(device: str = "cpu", det_db_box_thresh: Optional[float] = None, drop_score: Optional[float] = None):  # 定义获取或缓存 PaddleOCR 实例单例的函数
-    # 保证同一个计算设备下的模型只被初始化和加载一次
-    global _ocr_cache  # 声明全局变量以在函数内部修改 _ocr_cache 字典
-    if device not in _ocr_cache:  # 检测请求的设备对应的 OCR 实例是否尚未加载在缓存中
-        # 避免 Paddle Inference 兼容性报错
-        import paddle.inference as _pi  # 临时导入 Paddle Inference 推理底层库
-        if not getattr(_pi.Config, "_patched_for_onednn", False):  # 检查是否尚未应用针对 Intel CPU 的 OneDNN 补丁
-            try:  # 开启异常防护
-                _orig_new_ir = _pi.Config.enable_new_ir  # 保存原始的 enable_new_ir 函数引用
-                _pi.Config.enable_new_ir = lambda self, v=True: _orig_new_ir(self, False)  # 重写 enable_new_ir，强制关闭 PIR 以防止属性转换异常
-                _orig_opt = _pi.Config.set_optimization_level  # 保存原始的 set_optimization_level 函数引用
-                _pi.Config.set_optimization_level = lambda self, lv: _orig_opt(self, 0)  # 重写优化级别设置，强制设置为最低级别 0 保证稳定性
-                _pi.Config._patched_for_onednn = True  # 在底层类上标记已打好补丁，避免被二次修改重写
-            except AttributeError:  # 若当前底层库版本不支持这些方法，捕获属性错误
-                pass  # 安全跳过补丁应用流程
-        
-        # 强制设置环境变量以使 PaddlePaddle 选择对应设备类型
-        if device == "cpu":  # 判断选择运行的硬件设备是否为 CPU 处理器
-            os.environ["CUDA_VISIBLE_DEVICES"] = ""  # 强制清除系统可见的 CUDA 显卡，使底层框架降级走 CPU 进行模型运算
-        else:  # 若选择 GPU 进行加速推理
-            if "CUDA_VISIBLE_DEVICES" in os.environ:  # 检查系统环境变量中是否已定义了禁用的显卡设备
-                del os.environ["CUDA_VISIBLE_DEVICES"]  # 从系统环境变量中删除禁用项，使显卡在 runtime 下可见
-            
-        from paddleocr import PaddleOCR  # 导入官方 PaddleOCR 核心包
-        kwargs = {"lang": "ch", "device": device, "ocr_version": "PP-OCRv6"}
+def crop_image(image_path: str, x: int, y: int, w: int, h: int, save_crop_path: Optional[str] = None):
+    """裁剪图片区域，可选择性保存子图。"""
+    img = cv2.imread(image_path)
+    if img is None:
+        raise FileNotFoundError(f"无法读取图片: {image_path}")
+    img_h, img_w = img.shape[:2]
+    x1, y1 = max(0, x), max(0, y)
+    x2, y2 = min(img_w, x + w), min(img_h, y + h)
+    if x2 <= x1 or y2 <= y1:
+        raise ValueError(f"无效的裁剪区域: x1={x1}, y1={y1}, x2={x2}, y2={y2}")
+
+    crop = img[y1:y2, x1:x2]
+    if save_crop_path:
+        os.makedirs(os.path.dirname(os.path.abspath(save_crop_path)), exist_ok=True)
+        cv2.imwrite(save_crop_path, crop)
+        print(f"[OCR] 已保存裁剪图片到: {save_crop_path}")
+    return crop
+
+
+def format_table_cluster(entries: List[Dict[str, Any]]) -> str:
+    """基于坐标聚类，将识别项格式化为类表格文本。"""
+    if not entries:
+        return ""
+    entries_sorted = sorted(entries, key=lambda e: e["y"])
+    rows = []
+    current_row = [entries_sorted[0]]
+    for prev, cur in zip(entries_sorted, entries_sorted[1:]):
+        gap = cur["y"] - prev["y"]
+        row_h = max(prev["h"], cur["h"])
+        if gap > row_h * 0.6:
+            rows.append(current_row)
+            current_row = [cur]
+        else:
+            current_row.append(cur)
+    rows.append(current_row)
+
+    lines = []
+    for row in rows:
+        row.sort(key=lambda e: e["x"])
+        line = " | ".join(e["text"] for e in row)
+        lines.append(line)
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# PaddleOCR 实例缓存与构建
+# ---------------------------------------------------------------------------
+
+_ocr_cache: Dict[Any, Any] = {}
+
+# 可透传给 PaddleOCR(...) 的全部本地模型参数名（不含 device / enable_mkldnn）
+_PADDLE_OCR_PARAM_KEYS = (
+    # 文档方向 PP-LCNet_x1_0_doc_ori
+    "doc_orientation_classify_model_name",
+    "doc_orientation_classify_model_dir",
+    "use_doc_orientation_classify",
+    # 文档展平 UVDoc（预处理，与 doc_ori 同属 DocPreprocessor）
+    "doc_unwarping_model_name",
+    "doc_unwarping_model_dir",
+    "use_doc_unwarping",
+    # 文本检测 PP-OCRv6_medium_det
+    "text_detection_model_name",
+    "text_detection_model_dir",
+    "text_det_limit_side_len",
+    "text_det_limit_type",
+    "text_det_thresh",
+    "text_det_box_thresh",
+    "text_det_unclip_ratio",
+    "text_det_input_shape",
+    # 文本行方向 PP-LCNet_x1_0_textline_ori
+    "textline_orientation_model_name",
+    "textline_orientation_model_dir",
+    "textline_orientation_batch_size",
+    "use_textline_orientation",
+    # 文本识别 PP-OCRv6_medium_rec
+    "text_recognition_model_name",
+    "text_recognition_model_dir",
+    "text_recognition_batch_size",
+    "text_rec_score_thresh",
+    "text_rec_input_shape",
+    "return_word_box",
+    # 版本 / 语言（在未显式指定 det/rec 模型名时生效）
+    "lang",
+    "ocr_version",
+)
+
+# Web UI / config.json 默认值（与 agent 侧历史硬编码阈值对齐：box_thresh=0.2, score=0.1）
+DEFAULT_OCR_PARAMS: Dict[str, Any] = {
+    # ① 文档整页方向 PP-LCNet_x1_0_doc_ori
+    "use_doc_orientation_classify": True,
+    "doc_orientation_classify_model_name": "PP-LCNet_x1_0_doc_ori",
+    # 文档展平 UVDoc（预处理，与 doc_ori 同组）
+    "use_doc_unwarping": False,
+    # ② 文本检测 PP-OCRv6_medium_det
+    "text_detection_model_name": "PP-OCRv6_medium_det",
+    "text_det_thresh": 0.3,
+    "text_det_box_thresh": 0.2,
+    "text_det_unclip_ratio": 1.5,
+    # ③ 文本行方向 PP-LCNet_x1_0_textline_ori
+    "use_textline_orientation": True,
+    "textline_orientation_model_name": "PP-LCNet_x1_0_textline_ori",
+    # ④ 文本识别 PP-OCRv6_medium_rec
+    "text_recognition_model_name": "PP-OCRv6_medium_rec",
+    "text_rec_score_thresh": 0.1,
+}
+
+
+def merge_ocr_params(overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """合并默认 OCR 参数与 config/UI 覆盖项，只保留可透传键。"""
+    allowed = set(_PADDLE_OCR_PARAM_KEYS)
+    merged: Dict[str, Any] = {
+        k: v for k, v in DEFAULT_OCR_PARAMS.items() if k in allowed
+    }
+    if overrides:
+        for k, v in overrides.items():
+            if v is not None and k in allowed:
+                merged[k] = v
+    return merged
+
+
+def _normalize_paddle_kwargs(
+    *,
+    det_db_box_thresh: Optional[float] = None,
+    drop_score: Optional[float] = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """合并旧别名参数，过滤 None，得到传给 PaddleOCR 的 kwargs。"""
+    params: Dict[str, Any] = {}
+    for key in _PADDLE_OCR_PARAM_KEYS:
+        if key in kwargs and kwargs[key] is not None:
+            params[key] = kwargs[key]
+
+    # 兼容历史参数名（agent_core / 旧 CLI）
+    if det_db_box_thresh is not None:
+        params["text_det_box_thresh"] = det_db_box_thresh
+    if drop_score is not None:
+        params["text_rec_score_thresh"] = drop_score
+
+    # 未显式指定 det/rec 模型时，用 lang + ocr_version 自动配对 medium_det/rec
+    # （若已指定 model_name/dir，再传 lang/ocr_version 会触发 PaddleOCR 警告且被忽略）
+    _explicit_det_rec = any(
+        params.get(k) is not None
+        for k in (
+            "text_detection_model_name",
+            "text_detection_model_dir",
+            "text_recognition_model_name",
+            "text_recognition_model_dir",
+        )
+    )
+    if not _explicit_det_rec:
+        params.setdefault("lang", "ch")
+        params.setdefault("ocr_version", "PP-OCRv6")
+    return params
+
+
+def get_ocr_instance(
+    device: str = "cpu",
+    det_db_box_thresh: Optional[float] = None,
+    drop_score: Optional[float] = None,
+    **paddle_kwargs: Any,
+):
+    """
+    获取或缓存 PaddleOCR 实例。
+
+    缓存键 = (device, 规范化后的全部模型参数)。
+    同一 device 下不同阈值/模型名会创建不同实例，避免参数互相覆盖。
+    """
+    global _ocr_cache
+    params = _normalize_paddle_kwargs(
+        det_db_box_thresh=det_db_box_thresh,
+        drop_score=drop_score,
+        **paddle_kwargs,
+    )
+    cache_key = (device, tuple(sorted(params.items(), key=lambda x: x[0])))
+
+    if cache_key not in _ocr_cache:
+        import paddle.inference as _pi
+        if not getattr(_pi.Config, "_patched_for_onednn", False):
+            try:
+                _orig_new_ir = _pi.Config.enable_new_ir
+                _pi.Config.enable_new_ir = lambda self, v=True: _orig_new_ir(self, False)
+                _orig_opt = _pi.Config.set_optimization_level
+                _pi.Config.set_optimization_level = lambda self, lv: _orig_opt(self, 0)
+                _pi.Config._patched_for_onednn = True
+            except AttributeError:
+                pass
+
+        if device == "cpu":
+            os.environ["CUDA_VISIBLE_DEVICES"] = ""
+        else:
+            if "CUDA_VISIBLE_DEVICES" in os.environ:
+                del os.environ["CUDA_VISIBLE_DEVICES"]
+
+        from paddleocr import PaddleOCR
+        kwargs = dict(params)
+        kwargs["device"] = device
         if device == "cpu":
             kwargs["enable_mkldnn"] = True
-        if det_db_box_thresh is not None:
-            kwargs["text_det_box_thresh"] = det_db_box_thresh
-        if drop_score is not None:
-            kwargs["text_rec_score_thresh"] = drop_score
-        _ocr_cache[device] = PaddleOCR(**kwargs)  # 实例化支持中文识别的本地模型，动态传入参数
-        
-    return _ocr_cache[device]  # 返回缓存字典中获取到的 PaddleOCR 实例对象
 
-def run_vision_ocr(image_path: str, api_key: str, base_url: str, model_name: str) -> str:  # 定义调用 OpenAI 接口通过视觉大模型进行表格识别的函数
-    # 读图并编码为 base64 发送给 LLM
-    import base64  # 导入 base64 编码解码库，用于转换图片数据格式
-    from openai import OpenAI  # 导入标准的 OpenAI 客户端类，用于进行对话服务通信
-    
-    if not api_key:  # 检查传入的大模型 API 鉴权秘钥是否为空
-        raise ValueError("API key must be provided for vision engine.")  # 若秘钥为空，抛出值错误，提示必须输入 API Key
-        
-    client = OpenAI(api_key=api_key, base_url=base_url)  # 使用传入的 API Key 和 Base URL 构建 OpenAI 客户端实例
-    
-    with open(image_path, "rb") as f:  # 以二进制只读方式打开指定的源图像文件
-        b64 = base64.b64encode(f.read()).decode()  # 读取全部文件字节、进行 base64 编码并解码为 UTF-8 文本串格式
-        
-    prompt = (  # 定义发送给视觉大模型的提示词要求
-        "请识别这张表格图片中的全部内容，输出 Markdown 表格格式。\n"  # 告知主要识别和输出格式要求
-        "要求：\n"  # 列举大模型的详细执行指标约束
-        "1. 保留所有勾选符号（✓、×、√、X），准确填入对应单元格\n"  # 规定对于特殊打勾打叉等确认符号在网格内的精准位置定位要求
-        "2. 合并单元格用 Markdown 标准语法表达，保持行列对齐\n"  # 规定合并单元格的处理方式
-        "3. 手写体文字标注（手写）\n"  # 规定对于手写签批文字需要添加特定的后缀标注
-        "4. 仅输出 Markdown，不要解释"  # 约束输出结果的纯净性，防止大模型带有冗长的前导后尾解释语
-    )  # 结束提示词定义
-    
-    resp = client.chat.completions.create(  # 调用大模型对话完成（Chat Completions）接口，提交大图及识别提示词
-        model=model_name,  # 指定调用接口的模型名称，如硅基流动或 OpenAI 对应的视觉端模型
-        messages=[{  # 填充聊天消息内容
-            "role": "user",  # 设置发送者角色为普通用户 user
-            "content": [  # 发送多模态混合内容
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},  # 将 base64 图像以 data URI 格式传递给模型
-                {"type": "text", "text": prompt},  # 将多模态文字识别提示词指令传递给大模型
-            ],  # 结束多模态消息数组定义
-        }],  # 结束消息列表定义
-        temperature=0.1,  # 设定模型采样温度值为低随机的 0.1，以最大限度减少幻觉保证识别准确率
-        max_tokens=8192,  # 设定最大生成 Token 数量上限限制为 8192
-        timeout=120,  # 设定接口调用最大允许超时时间为 120 秒
-    )  # 结束接口调用定义
-    return resp.choices[0].message.content.strip()  # 提取获取的响应内容，并去除头部尾部所有的空白符后返回结果
+        print(f"[OCR] 初始化 PaddleOCR: device={device}")
+        for k, v in sorted(kwargs.items()):
+            if k in ("device", "enable_mkldnn"):
+                continue
+            print(f"[OCR]   {k}={v!r}")
+
+        _ocr_cache[cache_key] = PaddleOCR(**kwargs)
+
+    return _ocr_cache[cache_key]
 
 
-def run_ocr(  # 定义 OCR 扫描最核心的总控制运行调度函数
-    image_path: str,  # 参数一：输入待扫描的主图片文件路径
-    coords: Optional[tuple] = None,  # 参数二：可选的裁剪区域坐标元组 (x, y, w, h)，默认为 None 扫描全图
-    save_crop_path: Optional[str] = None,  # 参数三：可选的裁剪出的子图像保存路径，默认不保存
-    save_markdown_path: Optional[str] = None,  # 参数四：可选的扫描完成后的 Markdown 文本文件保存目标路径
-    mode: str = "cluster",  # 参数五：已废弃，保留用于兼容性
-    device: str = "gpu",  # 参数六：本地 OCR 执行所选的硬件计算设备 (cpu 或 gpu)
-    engine: str = "paddleocr",  # 参数七：核心检测引擎种类类型 ('paddleocr' 本地，或 'vision' 云端大模型)
-    api_key: Optional[str] = None,  # 参数八：视觉大模型鉴权 Key，仅在 engine='vision' 下有效
-    base_url: Optional[str] = None,  # 参数九：视觉大模型接口的基础基地址域名路径
-    model_name: Optional[str] = None,  # 参数十：所选取的具体云端大模型工程别名
-    det_db_box_thresh: Optional[float] = None,  # 参数十一：文本框检测阈值，为空则使用原生默认值
-    drop_score: Optional[float] = None  # 参数十二：识别文本输出的置信度丢弃阈值，为空则使用原生默认值
-) -> str:  # 表明函数最终返回为扫描出的字符串内容结果
-    # 1. 运行视觉大模型（不需要裁剪和 PaddleOCR 识别）
-    if engine == "vision":  # 检查设置的核心引擎是否选择为视觉大模型模式
-        print(f"[OCR] Running Vision LLM OCR: {image_path} (model: {model_name})")  # 控制台打印运行状态，说明正在执行 Vision OCR 及其模型名
-        ocr_result = run_vision_ocr(image_path, api_key or "", base_url or "", model_name or "")  # 执行 Vision API 请求，并保存获取到的 Markdown 结果
-        
-        # 保存为 markdown 结果
-        if save_markdown_path:  # 如果用户提供了 markdown 输出的持久化保存路径
-            os.makedirs(os.path.dirname(os.path.abspath(save_markdown_path)), exist_ok=True)  # 自动创建目标 Markdown 文件所需的各级父目录
-            with open(save_markdown_path, "w", encoding="utf-8") as f:  # 以 UTF-8 编码新建并只写打开该目标 Markdown 文件
-                f.write(ocr_result)  # 将大模型处理返回的表格及内容数据直接写入到文件中
-            print(f"[OCR] Saved scan result in Markdown format to: {save_markdown_path}")  # 终端打印文件存储成功的状态和保存的真实物理路径
-        return ocr_result  # 执行完成后提前返回大模型的识别结果，跳过后续本地处理流程
+def run_vision_ocr(image_path: str, api_key: str, base_url: str, model_name: str) -> str:
+    """调用 OpenAI 兼容接口，通过视觉大模型进行表格识别。"""
+    import base64
+    from openai import OpenAI
 
-    # 2. 本地 PaddleOCR 流程：读取/裁剪图片
-    if coords:  # 若局部裁剪元组参数有效
-        x, y, w, h = coords  # 解包四元组元数据，提取坐标起点 x, y 以及宽度 w，高度 h
-        print(f"[OCR] 区域裁剪 OCR: x={x}, y={y}, w={w}, h={h} (使用设备: {device})")  # 控制台打印开始局部裁剪识别的信息和设备选项
-        img_for_ocr = crop_image(image_path, x, y, w, h, save_crop_path)  # 调用 crop_image 裁剪图片，并返回局部内存图像数组
-        x_offset, y_offset = x, y  # 将全局坐标偏移值设置为裁剪起点的 x 和 y
-    else:  # 若没有传入裁剪参数，则默认处理全图
-        print(f"[OCR] 默认扫描全图 OCR: {image_path} (使用设备: {device})")  # 控制台打印扫描全图状态和设备选项
-        img_for_ocr = cv2.imread(image_path)  # 直接读取全图以做处理
-        if img_for_ocr is None:  # 判断读取是否返回空
-            raise FileNotFoundError(f"无法读取图片: {image_path}")  # 抛出异常指出图片加载失败
-        x_offset, y_offset = 0, 0  # 偏移值设为 0，因为图像就是原始图像，坐标无需修正偏移量
+    if not api_key:
+        raise ValueError("API key must be provided for vision engine.")
 
-    # 3. 获取 PaddleOCR 实例并运行识别
-    ocr = get_ocr_instance(device=device, det_db_box_thresh=det_db_box_thresh, drop_score=drop_score)  # 从单例方法中获取该设备对应的 PaddleOCR 实例对象
-    result = ocr.predict(img_for_ocr)  # 运行 PaddleOCR 模型，预测得出图片中文字的包围框及文本内容结果
-    
-    entries = []  # 初始化临时识别条目列表
-    if result and hasattr(result[0], 'json') and result[0].json is not None:  # 判断返回结构是否有效并且包含 JSON 属性字段信息
-        res = result[0].json.get('res', {}) or {}
-        texts = res.get('rec_texts', []) or []
-        polys = res.get('rec_polys', []) or []
-        if texts:  # 若识别出至少一行文本内容
-            for i, text in enumerate(texts):  # 迭代每一行文本，并追踪索引序号 i
-                box = polys[i] if i < len(polys) else []  # 提取该行文本对应的多边形顶点框
-                # 增加健壮的类型和嵌套长度校验，彻底避免 TypeError: 'NoneType' object is not subscriptable
-                if isinstance(box, (list, tuple, np.ndarray)) and len(box) >= 3 and all(isinstance(pt, (list, tuple, np.ndarray)) and len(pt) >= 2 for pt in box[:3]):
-                    y_center = (box[0][1] + box[2][1]) / 2  # 计算计算多边形顶点中心线处的垂直 Y 轴中值坐标
-                    x_left = box[0][0]  # 获取多边形包围框最左端的起始 X 轴顶点坐标
-                    height = abs(box[2][1] - box[0][1])  # 计算估算文本行的大致高度
-                    width = abs(box[1][0] - box[0][0]) if len(box) >= 2 else 0  # 计算估算文本行的大致宽度
-                else:  # 若框不完整或格式异常
-                    y_center, x_left, height, width = 0, 0, 20, 0  # 降级退回使用安全的默认定位数据值
-                entries.append({"text": text, "y": y_center, "x": x_left, "h": height, "w": width})  # 将该条目的定位和内容存入条目列表
+    client = OpenAI(api_key=api_key, base_url=base_url)
 
-    print(f"[OCR] OCR 识别完成，共 {len(entries)} 个文本块")  # 控制台打印输出成功提取了多少个文字块
-    if not entries:  # 如果没有识别到任何文本内容（例如全白或全黑图片）
-        ocr_result = ""  # 初始化结果为空字符串
-    else:  # 若有文本识别成功
-        # 4. 表格结构化
-        table_text = format_table_cluster(entries)  # 执行基于行高度落差聚类还原算法，格式化获取表格文本
-            
-        # 5. 输出绝对坐标（基于原始大图的绝对坐标）
-        flat_text = "\n".join(  # 用换行符将所有的详细文字坐标块串联拼接起来
-            f"{e['text']}  [{int(e['x'] + x_offset)},{int(e['y'] + y_offset)},{int(e['w'])},{int(e['h'])}]"  # 每行附带绝对 X, Y 轴坐标（融合了局部偏移值）
-            for e in sorted(entries, key=lambda e: (e["y"] // 15, e["x"]))  # 对各文本行先进行大段垂直间距排序，再在横向排序以保证正常人类阅读顺序
-        )  # 结束扁平文本的构建
-        ocr_result = f"{table_text}\n---\n{flat_text}"  # 拼接结构化表格结果与扁平详细坐标原文结果，用三横线做明确分界
+    with open(image_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
 
-    # 6. 保存为 markdown 结果
-    if save_markdown_path:  # 如果用户传入了有效的目标输出 Markdown 文件保存路径
-        os.makedirs(os.path.dirname(os.path.abspath(save_markdown_path)), exist_ok=True)  # 新建并自动打通所需要的文件目录架构路径
-        with open(save_markdown_path, "w", encoding="utf-8") as f:  # 新建并以 UTF-8 只写格式打开该目标文件
-            f.write(ocr_result)  # 写入拼接后的 Markdown 字符串文本数据
-        print(f"[OCR] 已将扫描结果以 Markdown 格式保存至: {save_markdown_path}")  # 输出控制台日志，说明结果保存完毕及其文件绝对物理地址
+    prompt = (
+        "请识别这张表格图片中的全部内容，输出 Markdown 表格格式。\n"
+        "要求：\n"
+        "1. 保留所有勾选符号（✓、×、√、X），准确填入对应单元格\n"
+        "2. 合并单元格用 Markdown 标准语法表达，保持行列对齐\n"
+        "3. 手写体文字标注（手写）\n"
+        "4. 仅输出 Markdown，不要解释"
+    )
 
-    return ocr_result  # 函数返回最终的 OCR 结果文本字符串
+    resp = client.chat.completions.create(
+        model=model_name,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                {"type": "text", "text": prompt},
+            ],
+        }],
+        temperature=0.1,
+        max_tokens=8192,
+        timeout=120,
+    )
+    return resp.choices[0].message.content.strip()
 
-if __name__ == "__main__":  # 判断当前是否为终端直接执行该脚本的独立进程状态
-    parser = argparse.ArgumentParser(description="OCR Processor Command Line Interface")  # 构建并定义命令参数解析器的描述头部对象
-    parser.add_argument("image", help="Path to the input image file")  # 添加位置参数：传入输入图片的物理文件路径（必填项）
-    parser.add_argument("--coord", help="Crop coordinates in format x,y,w,h (e.g. 300,80,200,100). Default is scanning the entire image.")  # 添加局部裁剪坐标参数，用于定位填表人等位置
-    parser.add_argument("--save-crop", help="File path to save the cropped region image")  # 添加保存裁剪的局部子图像图片的路径参数
-    parser.add_argument("--save-markdown", help="File path to save the OCR scanned Markdown result")  # 添加保存识别出来的 markdown 文本路径参数
-    parser.add_argument("--device", choices=["cpu", "gpu"], default="cpu", help="Running device type: cpu (default) or gpu")  # 添加运行硬件设备 CPU / GPU 的枚举配置参数
-    parser.add_argument("--engine", choices=["paddleocr", "vision"], default="paddleocr", help="OCR engine type: paddleocr (default) or vision (Vision LLM)")  # 添加引擎的参数配置
-    parser.add_argument("--api-key", help="API key for Vision LLM (required if engine is vision)")  # 添加 Vision API 鉴权所需的 API 密码参数
-    parser.add_argument("--base-url", default="https://api.siliconflow.cn/v1", help="API base URL for Vision LLM")  # 添加 Vision 大模型的默认基地址参数（默认使用硅基流动）
-    parser.add_argument("--model-name", default="Qwen/Qwen2.5-7B-Instruct", help="Model name for Vision LLM")  # 添加 Vision 大模型默认的模型名称（默认使用 Qwen）
-    parser.add_argument("--det-thresh", type=float, default=None, help="Detection threshold for DB box (det_db_box_thresh)")
-    parser.add_argument("--drop-score", type=float, default=None, help="Drop score for text recognition")
-    
-    args = parser.parse_args()  # 触发解析，捕获并保存命令行中所有的输入参数属性
-    
-    coords = None  # 初始化裁剪坐标元组为空，作为默认值
-    if args.coord:  # 检测用户在命令行中是否定义了 `--coord` 输入参数
-        try:  # 开启参数转换的异常处理快
-            parts = [int(p.strip()) for p in args.coord.split(",")]  # 以逗号为界分割参数文本并逐一剥离空格、强转为整数
-            if len(parts) != 4:  # 判断解析出来的数值个数是否不等于要求的 4 个（x, y, w, h）
-                raise ValueError("Coordinates must consist of 4 integers: x,y,w,h")  # 抛出非法长度的值错误异常
-            coords = tuple(parts)  # 转换为不可变的坐标元组以匹配后面的函数签名要求
-        except Exception as e:  # 捕获以上转换及校验过程中的全部异常情况
-            parser.error(f"Invalid format for --coord: {e}. Please use x,y,w,h format.")  # 直接调用解析器抛出错误详情，并退出进程
 
-    try:  # 启动主流程执行防护
-        res = run_ocr(  # 核心运行 run_ocr 接口，传递命令行中的对应参数
-            image_path=args.image,  # 传入解析得到的输入图片物理地址
-            coords=coords,  # 传入裁剪坐标元组或默认的 None值
-            save_crop_path=args.save_crop,  # 传入裁剪出的子图保存路径或者默认的 None 值
-            save_markdown_path=args.save_markdown,  # 传入保存文本的 markdown 路径
-            device=args.device,  # 传入指定的 CPU 或 GPU 计算设备
-            engine=args.engine,  # 传入选定的本地或大模型检测引擎
-            api_key=args.api_key if hasattr(args, "api_key") else getattr(args, "api_key", None),  # 传入 API Key，不存在时返回 None
-            base_url=args.base_url,  # 传入基地址参数
-            model_name=args.model_name,  # 传入模型具体名称参数
-            det_db_box_thresh=args.det_thresh,  # 传入文本框检测阈值
-            drop_score=args.drop_score  # 传入识别结果置信度阈值
-        )  # 结束 run_ocr 主控运行调用
-        print("\n=== OCR Scanned Result ===")  # 终端打印输出结果展示头部装饰线
-        print(res)  # 打印输出最终的识别文本表格及原文坐标详情信息结果
-    except Exception as e:  # 捕获在 run_ocr 执行流程中抛出的任何系统异常
-        print(f"[OCR] Execution error: {e}")  # 终端输出 OCR 模块最终的报错指示原因信息，以供调试排查
+def run_ocr(
+    image_path: str,
+    coords: Optional[tuple] = None,
+    save_crop_path: Optional[str] = None,
+    save_markdown_path: Optional[str] = None,
+    mode: str = "cluster",
+    device: str = "gpu",
+    engine: str = "paddleocr",
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+    model_name: Optional[str] = None,
+    det_db_box_thresh: Optional[float] = None,
+    drop_score: Optional[float] = None,
+    **paddle_kwargs: Any,
+) -> str:
+    """
+    OCR 扫描主控。
+
+    本地引擎下，det_db_box_thresh / drop_score 及 **paddle_kwargs 中的模型参数
+    会全部透传给 get_ocr_instance → PaddleOCR。
+    """
+    if engine == "vision":
+        print(f"[OCR] Running Vision LLM OCR: {image_path} (model: {model_name})")
+        ocr_result = run_vision_ocr(image_path, api_key or "", base_url or "", model_name or "")
+        if save_markdown_path:
+            os.makedirs(os.path.dirname(os.path.abspath(save_markdown_path)), exist_ok=True)
+            with open(save_markdown_path, "w", encoding="utf-8") as f:
+                f.write(ocr_result)
+            print(f"[OCR] Saved scan result in Markdown format to: {save_markdown_path}")
+        return ocr_result
+
+    if coords:
+        x, y, w, h = coords
+        print(f"[OCR] 区域裁剪 OCR: x={x}, y={y}, w={w}, h={h} (使用设备: {device})")
+        img_for_ocr = crop_image(image_path, x, y, w, h, save_crop_path)
+        x_offset, y_offset = x, y
+    else:
+        print(f"[OCR] 默认扫描全图 OCR: {image_path} (使用设备: {device})")
+        img_for_ocr = cv2.imread(image_path)
+        if img_for_ocr is None:
+            raise FileNotFoundError(f"无法读取图片: {image_path}")
+        x_offset, y_offset = 0, 0
+
+    ocr = get_ocr_instance(
+        device=device,
+        det_db_box_thresh=det_db_box_thresh,
+        drop_score=drop_score,
+        **paddle_kwargs,
+    )
+    result = ocr.predict(img_for_ocr)
+
+    entries = []
+    if result and hasattr(result[0], "json") and result[0].json is not None:
+        res = result[0].json.get("res", {}) or {}
+        texts = res.get("rec_texts", []) or []
+        polys = res.get("rec_polys", []) or []
+        if texts:
+            for i, text in enumerate(texts):
+                box = polys[i] if i < len(polys) else []
+                if (
+                    isinstance(box, (list, tuple, np.ndarray))
+                    and len(box) >= 3
+                    and all(
+                        isinstance(pt, (list, tuple, np.ndarray)) and len(pt) >= 2
+                        for pt in box[:3]
+                    )
+                ):
+                    y_center = (box[0][1] + box[2][1]) / 2
+                    x_left = box[0][0]
+                    height = abs(box[2][1] - box[0][1])
+                    width = abs(box[1][0] - box[0][0]) if len(box) >= 2 else 0
+                else:
+                    y_center, x_left, height, width = 0, 0, 20, 0
+                entries.append({
+                    "text": text, "y": y_center, "x": x_left, "h": height, "w": width,
+                })
+
+    print(f"[OCR] OCR 识别完成，共 {len(entries)} 个文本块")
+    if not entries:
+        ocr_result = ""
+    else:
+        table_text = format_table_cluster(entries)
+        flat_text = "\n".join(
+            f"{e['text']}  [{int(e['x'] + x_offset)},{int(e['y'] + y_offset)},{int(e['w'])},{int(e['h'])}]"
+            for e in sorted(entries, key=lambda e: (e["y"] // 15, e["x"]))
+        )
+        ocr_result = f"{table_text}\n---\n{flat_text}"
+
+    if save_markdown_path:
+        os.makedirs(os.path.dirname(os.path.abspath(save_markdown_path)), exist_ok=True)
+        with open(save_markdown_path, "w", encoding="utf-8") as f:
+            f.write(ocr_result)
+        print(f"[OCR] 已将扫描结果以 Markdown 格式保存至: {save_markdown_path}")
+
+    return ocr_result
+
+
+# ---------------------------------------------------------------------------
+# CLI 参数构建
+# ---------------------------------------------------------------------------
+
+def _str2bool(value: str) -> bool:
+    """将命令行字符串解析为 bool（true/false/1/0/yes/no/on/off）。"""
+    if isinstance(value, bool):
+        return value
+    s = str(value).strip().lower()
+    if s in ("1", "true", "t", "yes", "y", "on"):
+        return True
+    if s in ("0", "false", "f", "no", "n", "off"):
+        return False
+    raise argparse.ArgumentTypeError(
+        f"无效布尔值 {value!r}，请使用 true/false、1/0、yes/no、on/off"
+    )
+
+
+def _parse_int_triple(value: str) -> Tuple[int, int, int]:
+    """解析 C,H,W 形式的输入形状，例如 3,32,320。"""
+    parts = [p.strip() for p in value.replace("x", ",").split(",")]
+    if len(parts) != 3:
+        raise argparse.ArgumentTypeError(
+            f"输入形状须为 3 个整数 C,H,W，例如 3,32,320；收到: {value!r}"
+        )
+    try:
+        c, h, w = (int(parts[0]), int(parts[1]), int(parts[2]))
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"输入形状须为整数: {value!r}") from e
+    return (c, h, w)
+
+
+_CLI_EPILOG = r"""
+================================================================================
+模型与参数说明（PaddleOCR 3.x / PP-OCRv6 流水线）
+================================================================================
+
+本 CLI 对应本地引擎 paddleocr 下的四类核心模型（以及可选的文档展平）：
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ 1) 文档整页方向  PP-LCNet_x1_0_doc_ori                                   │
+  │    判断整张图是 0°/90°/180°/270°，必要时旋转后再做后续 OCR。             │
+  │ 2) 文本检测      PP-OCRv6_medium_det                                     │
+  │    在图中找出文字区域（多边形框），不负责认字。                           │
+  │ 3) 文本行方向    PP-LCNet_x1_0_textline_ori                              │
+  │    对每个文本行判断是否需 180° 翻转（倒置文字行）。                       │
+  │ 4) 文本识别      PP-OCRv6_medium_rec                                     │
+  │    对裁出的文本行图像识别出具体字符。                                     │
+  │ (可选) 文档展平  UVDoc                                                   │
+  │    校正弯曲/卷曲纸面，与 doc_ori 同属文档预处理子流水线。                 │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+默认模型目录：未指定 --*-model-dir 时，自动使用官方缓存
+  Windows:  %%USERPROFILE%%\.paddlex\official_models\<模型名>
+  日志中 Creating model: ('模型名', None, None) 表示 model_dir / engine 用默认。
+
+--------------------------------------------------------------------------------
+【重要】模型名与 ocr-version / lang 的关系
+--------------------------------------------------------------------------------
+  - 若未指定 --text-detection-model-name / --text-recognition-model-name
+    （及其 model-dir），则由 --lang + --ocr-version 自动配对，例如：
+      --lang ch --ocr-version PP-OCRv6
+        → det=PP-OCRv6_medium_det , rec=PP-OCRv6_medium_rec
+  - 一旦显式指定了 det 或 rec 的 model-name 或 model-dir，
+    --lang 与 --ocr-version 对模型选择将失效（PaddleOCR 官方行为）。
+  - 方向类模型不受 ocr-version 映射影响，始终可用 --*-model-name 覆盖。
+
+--------------------------------------------------------------------------------
+【调参建议】提高作业票类表格识别率
+--------------------------------------------------------------------------------
+  漏检小字/手写勾叉：
+    --text-det-box-thresh 0.2~0.4   （默认流水线约 0.6，越低框越多）
+    --text-det-thresh 0.2~0.3       （像素级阈值，越低越敏感）
+  框切字导致识别错：
+    --text-det-unclip-ratio 1.6~2.0 （框扩张，过大可能粘连相邻字）
+  低置信结果被丢掉：
+    --text-rec-score-thresh 0.0~0.1 （默认 0.0 表示几乎不过滤）
+  票面方向固定且已对齐：
+    --use-doc-orientation-classify false
+    --use-textline-orientation false
+    --use-doc-unwarping false         （可明显加速）
+  手机拍照整页颠倒/横放：
+    --use-doc-orientation-classify true
+  个别行倒立：
+    --use-textline-orientation true
+
+  兼容旧参数（与上表等价）：
+    --det-thresh  <->  --text-det-box-thresh
+    --drop-score  <->  --text-rec-score-thresh
+
+--------------------------------------------------------------------------------
+示例
+--------------------------------------------------------------------------------
+  # 查看本说明
+  python ocr.py -h
+
+  # 默认全图识别（CPU）
+  python ocr.py ticket.png
+
+  # GPU + 调低检测阈值，少漏手写符号
+  python ocr.py ticket.png --device gpu \
+    --text-det-box-thresh 0.2 --text-det-thresh 0.25 --text-rec-score-thresh 0.1
+
+  # 关闭方向校正加速（票面已对齐时）
+  python ocr.py ticket.png \
+    --use-doc-orientation-classify false \
+    --use-textline-orientation false \
+    --use-doc-unwarping false
+
+  # 指定本地模型目录（自训练或离线拷贝）
+  python ocr.py ticket.png \
+    --text-detection-model-dir "D:/models/PP-OCRv6_medium_det" \
+    --text-recognition-model-dir "D:/models/PP-OCRv6_medium_rec"
+
+  # 换用更轻量检测模型（更快，精度可能下降）
+  python ocr.py ticket.png \
+    --text-detection-model-name PP-OCRv6_small_det \
+    --text-recognition-model-name PP-OCRv6_small_rec
+
+  # 裁剪区域并保存结果
+  python ocr.py ticket.png --coord 300,80,200,100 \
+    --save-crop crop.jpg --save-markdown out.md
+
+  # 视觉大模型引擎
+  python ocr.py ticket.png --engine vision \
+    --api-key sk-xxx --base-url https://api.siliconflow.cn/v1 \
+    --model-name Qwen/Qwen2.5-VL-7B-Instruct
+================================================================================
+"""
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    """构建带分组、详细 help 的命令行解析器。"""
+    parser = argparse.ArgumentParser(
+        prog="ocr.py",
+        description=(
+            "中燃安全数字监督员 · OCR 命令行工具\n"
+            "支持本地 PaddleOCR（PP-OCRv6 四模型流水线）与视觉大模型双引擎。"
+        ),
+        epilog=_CLI_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    # ---------- 基础 ----------
+    g_base = parser.add_argument_group("基础输入/输出")
+    g_base.add_argument(
+        "image",
+        help="待识别图片路径（必填）。支持常见格式：png/jpg/jpeg/bmp 等。",
+    )
+    g_base.add_argument(
+        "--coord",
+        default=None,
+        metavar="X,Y,W,H",
+        help=(
+            "可选裁剪区域，格式 x,y,w,h（像素，相对原图左上角）。"
+            "例：--coord 300,80,200,100 。省略则扫描全图。"
+        ),
+    )
+    g_base.add_argument(
+        "--save-crop",
+        default=None,
+        metavar="PATH",
+        help="若指定了 --coord，将裁剪子图保存到此路径。",
+    )
+    g_base.add_argument(
+        "--save-markdown",
+        default=None,
+        metavar="PATH",
+        help="将 OCR 结果（表格聚类文本 + 坐标明细）保存为 UTF-8 文本/Markdown 文件。",
+    )
+    g_base.add_argument(
+        "--device",
+        choices=["cpu", "gpu"],
+        default="cpu",
+        help="推理设备。cpu：兼容性好；gpu：需安装 CUDA 版 PaddlePaddle。默认: cpu。",
+    )
+    g_base.add_argument(
+        "--engine",
+        choices=["paddleocr", "vision"],
+        default="paddleocr",
+        help=(
+            "OCR 引擎。paddleocr=本地四模型流水线（可调下方全部模型参数）；"
+            "vision=云端视觉大模型（忽略本地模型参数）。默认: paddleocr。"
+        ),
+    )
+    g_base.add_argument(
+        "--lang",
+        default=None,
+        metavar="LANG",
+        help=(
+            "OCR 语言代码。与 --ocr-version 一起决定默认 det/rec 模型名。"
+            "常用: ch（简体中文，默认）、en、chinese_cht、japan 等。"
+            "注意：一旦显式指定 det/rec 的 model-name 或 model-dir，本项对模型选择失效。"
+        ),
+    )
+    g_base.add_argument(
+        "--ocr-version",
+        default=None,
+        choices=["PP-OCRv3", "PP-OCRv4", "PP-OCRv5", "PP-OCRv6"],
+        metavar="VER",
+        help=(
+            "PP-OCR 版本。本项目默认逻辑为 PP-OCRv6（在未指定时由代码注入）。"
+            "PP-OCRv6 + ch → PP-OCRv6_medium_det + PP-OCRv6_medium_rec。"
+            "可选: PP-OCRv3 / PP-OCRv4 / PP-OCRv5 / PP-OCRv6。"
+        ),
+    )
+
+    # ---------- 1. 文档整页方向 ----------
+    g_doc = parser.add_argument_group(
+        "① 文档整页方向模型  PP-LCNet_x1_0_doc_ori  "
+        "(doc_orientation_classify)"
+    )
+    g_doc.add_argument(
+        "--use-doc-orientation-classify",
+        type=_str2bool,
+        default=None,
+        metavar="BOOL",
+        help=(
+            "是否启用整页方向分类（0°/90°/180°/270°）。"
+            "true=启用（适合手机随意拍摄、整页颠倒）；"
+            "false=关闭（票面已摆正/已对齐时建议关闭以提速）。"
+            "未指定则使用 PaddleOCR/PaddleX 流水线默认（通常为开启）。"
+            "取值: true/false、1/0、yes/no。"
+        ),
+    )
+    g_doc.add_argument(
+        "--doc-orientation-classify-model-name",
+        default=None,
+        metavar="NAME",
+        help=(
+            "整页方向分类模型名称。默认: PP-LCNet_x1_0_doc_ori。"
+            "仅在需要替换为其它已注册官方模型名时修改。"
+        ),
+    )
+    g_doc.add_argument(
+        "--doc-orientation-classify-model-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "整页方向分类模型本地目录（含推理文件）。"
+            "None/省略=自动下载并使用 %%USERPROFILE%%\\.paddlex\\official_models\\PP-LCNet_x1_0_doc_ori 。"
+            "离线部署时指向已拷贝的模型文件夹。"
+        ),
+    )
+
+    # ---------- 文档展平（预处理，常与 doc_ori 一起讨论） ----------
+    g_unwarp = parser.add_argument_group(
+        "①b 文档展平模型  UVDoc  (doc_unwarping，可选预处理)"
+    )
+    g_unwarp.add_argument(
+        "--use-doc-unwarping",
+        type=_str2bool,
+        default=None,
+        metavar="BOOL",
+        help=(
+            "是否启用文档展平（弯曲纸面矫正）。"
+            "true=启用，适合严重卷曲/透视弯曲的拍照；"
+            "false=关闭，平面扫描件/已透视对齐的作业票建议关闭（更快）。"
+            "未指定则用流水线默认。取值: true/false、1/0、yes/no。"
+        ),
+    )
+    g_unwarp.add_argument(
+        "--doc-unwarping-model-name",
+        default=None,
+        metavar="NAME",
+        help="文档展平模型名称。默认: UVDoc。",
+    )
+    g_unwarp.add_argument(
+        "--doc-unwarping-model-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "文档展平模型本地目录。省略则使用官方缓存 "
+            "%%USERPROFILE%%\\.paddlex\\official_models\\UVDoc 。"
+        ),
+    )
+
+    # ---------- 2. 文本检测 ----------
+    g_det = parser.add_argument_group(
+        "② 文本检测模型  PP-OCRv6_medium_det  (text_detection)  "
+        "— 对「找不找得到字」影响最大"
+    )
+    g_det.add_argument(
+        "--text-detection-model-name",
+        default=None,
+        metavar="NAME",
+        help=(
+            "文本检测模型名称。PP-OCRv6 常见取值：\n"
+            "  PP-OCRv6_medium_det  （默认，精度与速度均衡）\n"
+            "  PP-OCRv6_small_det   （更轻更快，精度略降）\n"
+            "  PP-OCRv6_tiny_det    （最快，精度最低）\n"
+            "也可使用 v5 等其它已安装的检测模型名。"
+            "若设置本项或 model-dir，则 --lang/--ocr-version 的自动配对失效。"
+        ),
+    )
+    g_det.add_argument(
+        "--text-detection-model-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "文本检测模型本地目录。省略则使用 "
+            "%%USERPROFILE%%\\.paddlex\\official_models\\PP-OCRv6_medium_det 。"
+        ),
+    )
+    g_det.add_argument(
+        "--text-det-thresh",
+        type=float,
+        default=None,
+        metavar="FLOAT",
+        help=(
+            "检测「像素级」概率阈值（DB 算法，对应旧名 det_db_thresh）。"
+            "概率图中高于该阈值的像素视为文字像素。"
+            "流水线默认约 0.3。范围建议 0.1~0.5。"
+            "↓ 降低：淡字、浅笔迹、细线更易被检出，噪声也可能增多；"
+            "↑ 升高：更干净，但易漏检浅色手写。"
+        ),
+    )
+    g_det.add_argument(
+        "--text-det-box-thresh",
+        type=float,
+        default=None,
+        metavar="FLOAT",
+        help=(
+            "检测「文本框」置信度阈值（对应旧名 det_db_box_thresh / --det-thresh）。"
+            "框内平均得分高于此值才保留为文本区域。"
+            "流水线默认约 0.6；作业票手写符号场景常降到 0.2~0.4 以减少漏检。"
+            "↓ 降低：框更多（含小符号），误检可能上升；"
+            "↑ 升高：框更少、更干净，易漏小字。"
+        ),
+    )
+    g_det.add_argument(
+        "--det-thresh",
+        type=float,
+        default=None,
+        metavar="FLOAT",
+        help=(
+            "[兼容旧参数] 等价于 --text-det-box-thresh。"
+            "若两者同时给出，以 --text-det-box-thresh 为准。"
+        ),
+    )
+    g_det.add_argument(
+        "--text-det-unclip-ratio",
+        type=float,
+        default=None,
+        metavar="FLOAT",
+        help=(
+            "文本框扩张系数（对应旧名 det_db_unclip_ratio）。"
+            "流水线默认约 1.5。越大框扩得越大，能包住更完整笔画，"
+            "过大则相邻文字框可能粘连。建议 1.5~2.0。"
+        ),
+    )
+    g_det.add_argument(
+        "--text-det-limit-side-len",
+        type=int,
+        default=None,
+        metavar="INT",
+        help=(
+            "送入检测模型前，对图像边长的限制数值。"
+            "与 --text-det-limit-type 配合：type=min 时限制最短边，type=max 时限制最长边。"
+            "PP-OCRv6 general 流水线默认 limit_side_len=64、limit_type=min。"
+            "增大可保留更多细节（更慢、更占显存）；过小可能漏小字。"
+        ),
+    )
+    g_det.add_argument(
+        "--text-det-limit-type",
+        default=None,
+        choices=["min", "max"],
+        metavar="TYPE",
+        help=(
+            "边长限制方式：min=限制最短边；max=限制最长边。"
+            "须与 --text-det-limit-side-len 一起理解。默认流水线为 min。"
+        ),
+    )
+    g_det.add_argument(
+        "--text-det-input-shape",
+        type=_parse_int_triple,
+        default=None,
+        metavar="C,H,W",
+        help=(
+            "检测模型输入张量形状，格式 C,H,W（例如 3,640,640）。"
+            "一般无需设置，仅在自定义模型或官方要求固定 shape 时使用。"
+        ),
+    )
+
+    # ---------- 3. 文本行方向 ----------
+    g_cls = parser.add_argument_group(
+        "③ 文本行方向模型  PP-LCNet_x1_0_textline_ori  "
+        "(textline_orientation)"
+    )
+    g_cls.add_argument(
+        "--use-textline-orientation",
+        type=_str2bool,
+        default=None,
+        metavar="BOOL",
+        help=(
+            "是否启用文本行方向分类（0°/180°）。"
+            "true=对每个检测行判断是否倒置并翻转；"
+            "false=关闭（行方向正确时建议关闭提速）。"
+            "旧参数名 use_angle_cls 已映射到本开关。"
+            "取值: true/false、1/0、yes/no。未指定则用流水线默认。"
+        ),
+    )
+    g_cls.add_argument(
+        "--textline-orientation-model-name",
+        default=None,
+        metavar="NAME",
+        help=(
+            "文本行方向模型名称。默认: PP-LCNet_x1_0_textline_ori。"
+            "另有更轻量 PP-LCNet_x0_25_textline_ori（若环境已提供）。"
+        ),
+    )
+    g_cls.add_argument(
+        "--textline-orientation-model-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "文本行方向模型本地目录。省略则使用 "
+            "%%USERPROFILE%%\\.paddlex\\official_models\\PP-LCNet_x1_0_textline_ori 。"
+        ),
+    )
+    g_cls.add_argument(
+        "--textline-orientation-batch-size",
+        type=int,
+        default=None,
+        metavar="INT",
+        help=(
+            "文本行方向分类的批大小。默认流水线约 6。"
+            "↑ 增大：吞吐更高，显存占用更大；"
+            "↓ 减小：更省显存，略慢。通常无需修改。"
+        ),
+    )
+
+    # ---------- 4. 文本识别 ----------
+    g_rec = parser.add_argument_group(
+        "④ 文本识别模型  PP-OCRv6_medium_rec  (text_recognition)  "
+        "— 对「认对字」影响最大"
+    )
+    g_rec.add_argument(
+        "--text-recognition-model-name",
+        default=None,
+        metavar="NAME",
+        help=(
+            "文本识别模型名称。PP-OCRv6 常见取值：\n"
+            "  PP-OCRv6_medium_rec  （默认，与 medium_det 配对）\n"
+            "  PP-OCRv6_small_rec\n"
+            "  PP-OCRv6_tiny_rec\n"
+            "若设置本项或 model-dir，则 --lang/--ocr-version 自动配对失效，"
+            "请同时确认 det 模型与之匹配。"
+        ),
+    )
+    g_rec.add_argument(
+        "--text-recognition-model-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "文本识别模型本地目录。省略则使用 "
+            "%%USERPROFILE%%\\.paddlex\\official_models\\PP-OCRv6_medium_rec 。"
+            "命令行 Creating model 日志中 rec 常在 det/方向之后最后加载，"
+            "请滚到日志末尾确认 'PP-OCRv6_medium_rec'。"
+        ),
+    )
+    g_rec.add_argument(
+        "--text-recognition-batch-size",
+        type=int,
+        default=None,
+        metavar="INT",
+        help=(
+            "识别批大小。默认流水线约 6。"
+            "↑ 更大批次通常更快但更占显存；OOM 时可降到 1~2。"
+        ),
+    )
+    g_rec.add_argument(
+        "--text-rec-score-thresh",
+        type=float,
+        default=None,
+        metavar="FLOAT",
+        help=(
+            "识别结果置信度阈值：得分低于该值的文本会被丢弃。"
+            "流水线默认 0.0（不过滤）。"
+            "手写/模糊场景可保持 0.0~0.1；需要更干净结果可升到 0.5+（会丢低置信行）。"
+            "对应旧参数 --drop-score。"
+        ),
+    )
+    g_rec.add_argument(
+        "--drop-score",
+        type=float,
+        default=None,
+        metavar="FLOAT",
+        help=(
+            "[兼容旧参数] 等价于 --text-rec-score-thresh。"
+            "若两者同时给出，以 --text-rec-score-thresh 为准。"
+        ),
+    )
+    g_rec.add_argument(
+        "--text-rec-input-shape",
+        type=_parse_int_triple,
+        default=None,
+        metavar="C,H,W",
+        help=(
+            "识别模型输入形状 C,H,W（例如 3,48,320）。"
+            "一般无需设置，仅自定义模型时使用。"
+        ),
+    )
+    g_rec.add_argument(
+        "--return-word-box",
+        type=_str2bool,
+        default=None,
+        metavar="BOOL",
+        help=(
+            "是否返回识别结果的字级/词级坐标框（若模型与流水线支持）。"
+            "true=返回更细粒度坐标；false=仅行级。默认由流水线决定。"
+            "取值: true/false、1/0、yes/no。"
+        ),
+    )
+
+    # ---------- Vision ----------
+    g_vis = parser.add_argument_group("视觉大模型引擎 (engine=vision 时生效)")
+    g_vis.add_argument(
+        "--api-key",
+        default=None,
+        help="Vision LLM API Key（engine=vision 时必填）。",
+    )
+    g_vis.add_argument(
+        "--base-url",
+        default="https://api.siliconflow.cn/v1",
+        help="Vision LLM API Base URL。默认: https://api.siliconflow.cn/v1",
+    )
+    g_vis.add_argument(
+        "--model-name",
+        default="Qwen/Qwen2.5-7B-Instruct",
+        help=(
+            "Vision LLM 模型名（注意：这是云端模型，不是 PP-OCRv6_medium_rec）。"
+            "默认: Qwen/Qwen2.5-7B-Instruct"
+        ),
+    )
+
+    return parser
+
+
+def _cli_to_paddle_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
+    """从 argparse Namespace 提取非 None 的 PaddleOCR 参数。"""
+    # 新参数优先于旧别名
+    box_thresh = args.text_det_box_thresh
+    if box_thresh is None:
+        box_thresh = args.det_thresh
+
+    rec_score = args.text_rec_score_thresh
+    if rec_score is None:
+        rec_score = args.drop_score
+
+    mapping = {
+        "lang": args.lang,
+        "ocr_version": args.ocr_version,
+        # doc ori
+        "use_doc_orientation_classify": args.use_doc_orientation_classify,
+        "doc_orientation_classify_model_name": args.doc_orientation_classify_model_name,
+        "doc_orientation_classify_model_dir": args.doc_orientation_classify_model_dir,
+        # unwarping
+        "use_doc_unwarping": args.use_doc_unwarping,
+        "doc_unwarping_model_name": args.doc_unwarping_model_name,
+        "doc_unwarping_model_dir": args.doc_unwarping_model_dir,
+        # det
+        "text_detection_model_name": args.text_detection_model_name,
+        "text_detection_model_dir": args.text_detection_model_dir,
+        "text_det_thresh": args.text_det_thresh,
+        "text_det_box_thresh": box_thresh,
+        "text_det_unclip_ratio": args.text_det_unclip_ratio,
+        "text_det_limit_side_len": args.text_det_limit_side_len,
+        "text_det_limit_type": args.text_det_limit_type,
+        "text_det_input_shape": args.text_det_input_shape,
+        # textline ori
+        "use_textline_orientation": args.use_textline_orientation,
+        "textline_orientation_model_name": args.textline_orientation_model_name,
+        "textline_orientation_model_dir": args.textline_orientation_model_dir,
+        "textline_orientation_batch_size": args.textline_orientation_batch_size,
+        # rec
+        "text_recognition_model_name": args.text_recognition_model_name,
+        "text_recognition_model_dir": args.text_recognition_model_dir,
+        "text_recognition_batch_size": args.text_recognition_batch_size,
+        "text_rec_score_thresh": rec_score,
+        "text_rec_input_shape": args.text_rec_input_shape,
+        "return_word_box": args.return_word_box,
+    }
+    return {k: v for k, v in mapping.items() if v is not None}
+
+
+if __name__ == "__main__":
+    parser = build_arg_parser()
+    args = parser.parse_args()
+
+    coords = None
+    if args.coord:
+        try:
+            parts = [int(p.strip()) for p in args.coord.split(",")]
+            if len(parts) != 4:
+                raise ValueError("Coordinates must consist of 4 integers: x,y,w,h")
+            coords = tuple(parts)
+        except Exception as e:
+            parser.error(f"Invalid format for --coord: {e}. Please use x,y,w,h format.")
+
+    paddle_kwargs = _cli_to_paddle_kwargs(args)
+
+    try:
+        res = run_ocr(
+            image_path=args.image,
+            coords=coords,
+            save_crop_path=args.save_crop,
+            save_markdown_path=args.save_markdown,
+            device=args.device,
+            engine=args.engine,
+            api_key=args.api_key,
+            base_url=args.base_url,
+            model_name=args.model_name,
+            **paddle_kwargs,
+        )
+        print("\n=== OCR Scanned Result ===")
+        print(res)
+    except Exception as e:
+        print(f"[OCR] Execution error: {e}")
+        raise SystemExit(1) from e

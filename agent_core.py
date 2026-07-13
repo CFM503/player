@@ -777,6 +777,7 @@ class AgentTools:
     # === 类属性变量声明 / Class Attribute Declarations ===
     _last_image_path = ""        # 缓存最后处理对齐后的图片路径 / Cached path of the last aligned image
     _last_ocr_device = "cpu"     # 缓存最后一次 OCR 推理使用的计算硬件设备 / Cached device (CPU/GPU) for the last OCR run
+    _last_ocr_params = None      # 缓存侧边栏/config 中的 PaddleOCR 四模型参数
     _last_ocr_raw = ""           # 缓存全图 OCR 识别提取得到的原始纯文本 / Cached raw text output from full-image OCR scanning
     _last_approver_name = ""     # 缓存第二阶段预提取并清洗的发起人签字姓名 / Cached hand-written name of the approver pre-extracted in phase 2
 
@@ -842,10 +843,12 @@ class AgentTools:
         return md
 
     @staticmethod
-    def ocr_tool(image_path: str, mode: str = "cluster", brain=None, progress_callback=None, engine: str = "paddleocr", vision_brain=None, device: str = "gpu", ticket_type: str = None) -> str:  # 核心OCR引擎调用门面方法，支持切换本地 PaddleOCR 和 Vision LLM，device 控制推理硬件
+    def ocr_tool(image_path: str, mode: str = "cluster", brain=None, progress_callback=None, engine: str = "paddleocr", vision_brain=None, device: str = "gpu", ticket_type: str = None, ocr_params: dict = None) -> str:  # 核心OCR引擎调用门面方法，支持切换本地 PaddleOCR 和 Vision LLM，device 控制推理硬件
         """调用 ocr 模块进行 OCR 识别，支持坐标聚类和自适应边框检测；可选视觉大模型"""
         AgentTools._last_image_path = image_path
         AgentTools._last_ocr_device = device  # 缓存当前推理设备选择，供 _ocr_crop_region 等静态方法复用。【注意】后续新增的 OCR 功能都应读取此变量，保持与侧边栏设置同步
+        if ocr_params is not None:
+            AgentTools._last_ocr_params = ocr_params
         def _prog(pct, msg):  # 定义内部进度更新辅助回调
             if progress_callback:  # 如果主线程注册了进度通知函数
                 progress_callback(pct, msg)  # 执行进度通知更新
@@ -950,10 +953,16 @@ class AgentTools:
             return AgentTools._vision_llm_ocr(image_path, vb)  # 调用 _vision_llm_ocr 读图并返回 markdown
 
         # ---- PaddleOCR（带坐标） ----
-        from ocr import run_ocr  # 动态从独立 ocr 模块中导入核心 run_ocr 执行函数
+        from ocr import run_ocr, merge_ocr_params  # 动态从独立 ocr 模块中导入核心 run_ocr 执行函数
         
         _prog(15, "启动 PaddleOCR 扫描")  # 触发 15% 进度更新
         
+        # 合并侧边栏/config 中的四模型参数；未传入时用默认（含 box_thresh=0.2, score=0.1）
+        _paddle_kwargs = merge_ocr_params(
+            ocr_params if ocr_params is not None else getattr(AgentTools, "_last_ocr_params", None)
+        )
+        AgentTools._last_ocr_params = _paddle_kwargs
+
         sim_ocr = _ProgressSim(progress_callback, 15, 50, "OCR 文字识别中", 3, 0.6)  # 实例化后台进度模拟线程，在识别期间平滑推动进度条从 15% 到 50%
         sim_ocr.start()  # 开启模拟线程
         try:  # 开启 OCR 识别防护
@@ -962,8 +971,7 @@ class AgentTools:
                 coords=None,  # 扫描全图
                 mode=mode,  # 表格聚类模式
                 device=device,  # 使用用户选择的推理设备（cpu/gpu）
-                det_db_box_thresh=0.2,  # 强制调低文本检测阈值，防止细小的手写 √、× 被漏检
-                drop_score=0.1  # 强制调低置信度过滤阈值，保留低置信度的手写符号
+                **_paddle_kwargs,  # 四模型参数：det/rec/行方向/页方向等
             )  # 结束调用
         finally:  # 无论识别成功失败
             sim_ocr.done()  # 必须停止进度模拟线程，直接跳进 50% 进度
@@ -1037,15 +1045,17 @@ class AgentTools:
     @staticmethod
     def _ocr_crop_region(image_path: str, x: int, y: int, w: int, h: int, save_crop_path: Optional[str] = None) -> str:
         """裁剪图片指定区域做 PaddleOCR，返回识别文本"""
-        from ocr import run_ocr
+        from ocr import run_ocr, merge_ocr_params
         _device = getattr(AgentTools, "_last_ocr_device", "cpu")  # 读取用户选择的推理设备，默认 cpu
+        _paddle_kwargs = merge_ocr_params(getattr(AgentTools, "_last_ocr_params", None))
         try:
             ocr_result = run_ocr(
                 image_path=image_path,
                 coords=(x, y, w, h),
                 save_crop_path=save_crop_path,
                 mode="cluster",
-                device=_device  # 使用与全图扫描相同的推理设备
+                device=_device,  # 使用与全图扫描相同的推理设备
+                **_paddle_kwargs,
             )
             if "---" in ocr_result:
                 flat_text = ocr_result.split("---", 1)[1].strip()
@@ -1507,12 +1517,13 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
 
     MAX_REFLECT_RETRIES = 2  # 校验失败时，大模型最大反思重试修正次数设为 2 次
 
-    def __init__(self, brain: LLMBrain, ocr_mode: str = "cluster", ocr_engine: str = "paddleocr", ocr_device: str = "cpu", progress_callback=None, vision_brain: LLMBrain = None):  # 编排器构造函数，注入大脑实例、配置参数、推理设备及进度回调函数
+    def __init__(self, brain: LLMBrain, ocr_mode: str = "cluster", ocr_engine: str = "paddleocr", ocr_device: str = "cpu", progress_callback=None, vision_brain: LLMBrain = None, ocr_params: dict = None):  # 编排器构造函数，注入大脑实例、配置参数、推理设备及进度回调函数
         self.brain = brain  # 绑定大模型推理大脑
         self.tools = AgentTools()  # 实例化本智能体持有的执行工具集类
         self.ocr_mode = ocr_mode  # 配置表格 OCR 识别模式
         self.ocr_engine = ocr_engine  # 绑定物理 OCR 识别引擎（PaddleOCR 或 Vision）
         self.ocr_device = ocr_device  # 绑定推理硬件设备类型（cpu 或 gpu）
+        self.ocr_params = ocr_params  # 侧边栏/config 中的 PaddleOCR 四模型参数
         self._progress = progress_callback  # 绑定主线程前端进度显示回调
         self.vision_brain = vision_brain  # 绑定多模态视觉大模型大脑
 
@@ -1533,7 +1544,17 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         prog = self._progress  # 获取进度条回调函数
         if prog: prog(5, "图像预处理")  # 前端更新进度为 5%
         safe_print("[Agent Perceive] OpenCV + PaddleOCR 感知...")  # 打印感知阶段日志
-        text = self.tools.ocr_tool(image_path, mode=self.ocr_mode, brain=self.brain, progress_callback=prog, engine=self.ocr_engine, vision_brain=self.vision_brain, device=self.ocr_device, ticket_type=ticket_type)  # 调用 ocr_tool 接口识别图片，传入推理设备
+        text = self.tools.ocr_tool(
+            image_path,
+            mode=self.ocr_mode,
+            brain=self.brain,
+            progress_callback=prog,
+            engine=self.ocr_engine,
+            vision_brain=self.vision_brain,
+            device=self.ocr_device,
+            ticket_type=ticket_type,
+            ocr_params=self.ocr_params,
+        )  # 调用 ocr_tool 接口识别图片，传入推理设备与四模型参数
         n = len(text.strip().split("\n"))  # 计算识别出的文本总行数
         summary = f"提取 {n} 行文本"  # 汇总感知报告
         safe_print(f"[Agent Perceive] {summary}")  # 打印行数汇总日志
