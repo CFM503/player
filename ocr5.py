@@ -55,6 +55,66 @@ except ImportError:
 #   - 依赖 scikit-image 的 skeletonize，比单纯统计墨迹密度占比稳健。
 # ---------------------------------------------------------------------------
 
+def _load_mark_train_overrides():
+    """
+    加载 ocr10 导出的训练参数/模型（可选）。
+    查找顺序：环境变量 OCR5_MARK_PARAMS → 项目根 ocr5_mark_params.json
+              → ocr_mark_workspace/models/active_mark_params.json
+    模型：ocr5_mark_model.pkl 或 active_mark_model.pkl
+    """
+    import json as _json
+    from pathlib import Path as _Path
+    root = _Path(__file__).resolve().parent
+    candidates = []
+    env_p = os.environ.get("OCR5_MARK_PARAMS", "").strip()
+    if env_p:
+        candidates.append(_Path(env_p))
+    candidates.extend([
+        root / "ocr5_mark_params.json",
+        root / "ocr_mark_workspace" / "models" / "active_mark_params.json",
+    ])
+    params = {}
+    for p in candidates:
+        try:
+            if p.is_file():
+                params = _json.loads(p.read_text(encoding="utf-8"))
+                break
+        except Exception:
+            continue
+
+    model_path = None
+    for mp in (
+        root / "ocr5_mark_model.pkl",
+        root / "ocr_mark_workspace" / "models" / "active_mark_model.pkl",
+    ):
+        if mp.is_file():
+            model_path = mp
+            break
+    return params or {}, model_path
+
+
+_MARK_PARAMS_CACHE = None
+_MARK_MODEL_CACHE = None
+
+
+def _get_mark_overrides():
+    global _MARK_PARAMS_CACHE, _MARK_MODEL_CACHE
+    if _MARK_PARAMS_CACHE is None:
+        params, mpath = _load_mark_train_overrides()
+        _MARK_PARAMS_CACHE = params
+        if mpath is not None:
+            try:
+                import pickle
+                with mpath.open("rb") as f:
+                    _MARK_MODEL_CACHE = pickle.load(f)
+            except Exception as e:
+                logger.warning("加载 ocr10 标记模型失败: %s", e)
+                _MARK_MODEL_CACHE = None
+        else:
+            _MARK_MODEL_CACHE = None
+    return _MARK_PARAMS_CACHE, _MARK_MODEL_CACHE
+
+
 def classify_mark(cell_gray, inset=4, ink_ratio_thresh=0.008, min_component_area=15):
     """
     对单个格子(签字/确认列的一个单元格)判断其中的标记类型。
@@ -67,8 +127,18 @@ def classify_mark(cell_gray, inset=4, ink_ratio_thresh=0.008, min_component_area
 
     返回:
         (label, debug_info)
-        label: 'blank' | 'stroke' | 'cross'
+        label: 'blank' | 'stroke' | 'cross' | 'slash'
     """
+    # ocr10 训练覆盖（未导出时 params 为空，行为与原来一致）
+    tr_params, tr_model = _get_mark_overrides()
+    if tr_params:
+        if "ink_ratio_thresh" in tr_params:
+            ink_ratio_thresh = float(tr_params["ink_ratio_thresh"])
+        if "min_component_area" in tr_params:
+            min_component_area = int(tr_params["min_component_area"])
+        if "inset" in tr_params:
+            inset = int(tr_params["inset"])
+
     h, w = cell_gray.shape
     y0, y1 = inset, max(inset + 1, h - inset)
     x0, x1 = inset, max(inset + 1, w - inset)
@@ -133,31 +203,32 @@ def classify_mark(cell_gray, inset=4, ink_ratio_thresh=0.008, min_component_area
     }
     logger.debug("classify_mark debug: %s", debug)
 
-    # 判定规则：存在分支点 + 端点数3~5 + 骨架整体连通(=1块) + 最小分支距离>3px
+    ep_min = int(tr_params.get("cross_endpoint_min", 3)) if tr_params else 3
+    ep_max = int(tr_params.get("cross_endpoint_max", 5)) if tr_params else 5
+    spur_th = float(tr_params.get("cross_min_spur_dist", 3)) if tr_params else 3
+    slash_rms_th = float(tr_params.get("slash_line_rms", 1.2)) if tr_params else 1.2
+
+    # 判定规则：存在分支点 + 端点数范围 + 骨架整体连通(=1块) + 最小分支距离
     is_cross = (
         n_branch > 0
-        and 3 <= n_endpoint <= 5
+        and ep_min <= n_endpoint <= ep_max
         and n_skel_cc == 1
-        and min_spur_dist > 3
+        and min_spur_dist > spur_th
     )
 
     if is_cross:
         label = 'cross'
     else:
         # stroke：区分对勾(✓) 与 斜杠(\)
-        # 斜杠近似单一直线（骨架端点=2、无分支、骨架点近似共线）；对勾有明显折角
         label = 'stroke'
         if n_endpoint == 2 and n_branch == 0 and n_skel_px >= 4:
             coords = np.argwhere(skel)
             if len(coords) >= 4:
-                # 用首末端点拟合直线，残差小 → 斜杠
                 ys = coords[:, 0].astype(np.float64)
                 xs = coords[:, 1].astype(np.float64)
-                # 端点取 y 最小/最大两点近似
                 i_min, i_max = int(np.argmin(ys)), int(np.argmax(ys))
                 p1 = coords[i_min].astype(np.float64)
                 p2 = coords[i_max].astype(np.float64)
-                # 若几乎水平则改用 x 极值
                 if abs(p2[0] - p1[0]) < 2 and abs(p2[1] - p1[1]) < 2:
                     i_min, i_max = int(np.argmin(xs)), int(np.argmax(xs))
                     p1 = coords[i_min].astype(np.float64)
@@ -165,15 +236,42 @@ def classify_mark(cell_gray, inset=4, ink_ratio_thresh=0.008, min_component_area
                 seg = p2 - p1
                 seg_len = float(np.linalg.norm(seg))
                 if seg_len >= 4:
-                    # 点到线段距离的 RMS
-                    # cross((p-p1), seg) / |seg|
                     cross = np.abs((xs - p1[1]) * seg[0] - (ys - p1[0]) * seg[1])
                     rms = float(np.sqrt(np.mean((cross / seg_len) ** 2)))
                     debug['line_rms'] = round(rms, 3)
                     debug['seg_len'] = round(seg_len, 1)
-                    # 阈值：格子很小，直线残差通常 < 1.2px
-                    if rms < 1.2:
+                    if rms < slash_rms_th:
                         label = 'slash'
+
+    # ocr10 sklearn 模型覆盖（特征分类）
+    if tr_model is not None and isinstance(tr_model, dict) and "clf" in tr_model:
+        try:
+            keys = tr_model.get("feature_keys") or [
+                "ink_ratio", "n_branch_px", "n_endpoint", "n_skel_px",
+                "n_skel_components", "min_spur_dist", "line_rms", "aspect", "fill_area",
+            ]
+            feat = {
+                "ink_ratio": float(debug.get("ink_ratio") or 0),
+                "n_branch_px": float(n_branch),
+                "n_endpoint": float(n_endpoint),
+                "n_skel_px": float(n_skel_px),
+                "n_skel_components": float(n_skel_cc),
+                "min_spur_dist": float(min_spur_dist if min_spur_dist is not None else 999),
+                "line_rms": float(debug.get("line_rms") if debug.get("line_rms") is not None else 99),
+                "aspect": float(w) / max(float(h), 1.0),
+                "fill_area": float(h * w),
+            }
+            x = [[float(feat.get(k, 0)) for k in keys]]
+            ml = str(tr_model["clf"].predict(x)[0])
+            # 模型标签 check→stroke 与 ocr5 输出对齐
+            _map = {"check": "stroke", "cross": "cross", "slash": "slash", "blank": "blank"}
+            if ml in _map:
+                debug["ml_pred"] = ml
+                debug["rule_pred"] = label
+                label = _map[ml]
+        except Exception as e:
+            logger.debug("ML 覆盖失败，沿用规则: %s", e)
+
     logger.debug("classify_mark → %s", label)
     return label, debug
 
@@ -208,36 +306,189 @@ MEASURES = [
 ]
 
 
+# 标准对齐图（template dq.png / align 输出）参考尺寸与勾选区几何
+REF_W, REF_H = 1052, 1487
+# 25 行安全措施区：26 条水平线（在 1052×1487 上标定）
+REF_Y_LINES = [
+    459, 483, 507, 531, 555, 579, 603, 627, 653, 699,
+    745, 775, 802, 846, 872, 899, 926, 972, 1001, 1025,
+    1071, 1097, 1126, 1155, 1184, 1228,
+]
+# 五列确认格 x 边界
+REF_X_BOUNDS = [675, 715, 791, 829, 890, 951]
+
+
+def get_x_bounds(img_w: int):
+    """按图像宽度比例缩放五列 x 边界。"""
+    sx = float(img_w) / float(REF_W)
+    return [int(round(x * sx)) for x in REF_X_BOUNDS]
+
+
+def _scale_ref_y_lines(img_h: int):
+    sy = float(img_h) / float(REF_H)
+    return [int(round(y * sy)) for y in REF_Y_LINES]
+
+
+def _detect_h_peaks(row_sums, y0, y1, width_ref, ratio_thresh, nms=3):
+    """在 row_sums[y0:y1] 上找水平线峰。"""
+    lines_y = []
+    thr = ratio_thresh * width_ref
+    y1 = min(y1, len(row_sums) - 1)
+    y0 = max(0, y0)
+    for y in range(y0, y1):
+        if row_sums[y] <= thr:
+            continue
+        is_max = True
+        for dy in range(-nms, nms + 1):
+            yy = y + dy
+            if yy < 0 or yy >= len(row_sums):
+                continue
+            if row_sums[yy] > row_sums[y]:
+                is_max = False
+                break
+            if row_sums[yy] == row_sums[y] and dy < 0:
+                is_max = False
+                break
+        if is_max:
+            lines_y.append(y)
+    return lines_y
+
+
+def _merge_nearby_lines(lines, min_gap=6):
+    """合并过近的峰，避免双线。"""
+    if not lines:
+        return []
+    lines = sorted(lines)
+    out = [lines[0]]
+    for y in lines[1:]:
+        if y - out[-1] < min_gap:
+            # 保留 ink 更强的需外部；此处取中点
+            out[-1] = (out[-1] + y) // 2
+        else:
+            out.append(y)
+    return out
+
+
+def _pick_26_from_candidates(cands, img_h):
+    """
+    候选线多于/少于 26 时，用与 REF_Y 比例最接近的子集对齐选 26 条。
+    """
+    if len(cands) == 26:
+        return cands
+    if len(cands) < 10:
+        return cands
+    ref = _scale_ref_y_lines(img_h)
+    # 对每条参考线找最近候选
+    chosen = []
+    used = set()
+    for ry in ref:
+        best, best_d = None, 1e9
+        for i, cy in enumerate(cands):
+            if i in used:
+                continue
+            d = abs(cy - ry)
+            if d < best_d:
+                best_d, best = d, i
+        if best is not None and best_d < max(25, img_h * 0.025):
+            used.add(best)
+            chosen.append(cands[best])
+        else:
+            chosen.append(ry)  # 该行候选缺失，用比例参考
+    return sorted(chosen)
+
+
 def get_y_lines(img_g):
     """
-    动态检测水平网格线（25 行需 26 条线）。
-    【禁止兜底】检测不到恰好 26 条时直接报错，禁止用默认坐标表硬套（会导致错行/假识别）。
-    若失败：检查对齐尺寸是否为 1052x1487、表格线是否清晰。
-    """
-    binary_img = img_g < 80
-    width = 951 - 675
-    row_sums = np.sum(binary_img[:, 675:951], axis=1)
-    lines_y = []
-    for y in range(350, 1250):
-        if row_sums[y] > 0.6 * width:
-            is_max = True
-            for dy in range(-3, 4):
-                if row_sums[y + dy] > row_sums[y]:
-                    is_max = False
-                    break
-                elif row_sums[y + dy] == row_sums[y] and dy < 0:
-                    is_max = False
-                    break
-            if is_max:
-                lines_y.append(y)
+    检测安全措施区 26 条水平网格线。
 
-    if len(lines_y) != 26:
-        # 曾用默认 [459,483,...1228] 兜底；已删除。出现问题请修检测/对齐，不要恢复硬编码线。
-        raise RuntimeError(
-            f"安全措施网格水平线数量异常: 检测到 {len(lines_y)} 条，需要恰好 26 条。"
-            f"禁止使用默认坐标兜底。lines={lines_y[:8]}{'...' if len(lines_y) > 8 else ''}"
+    重要：必须在「仍含表格线」的灰度图上调用。
+    若先做 ocr7 去表格线再检测，水平线被抹掉会得到 0 条。
+
+    策略：
+      1) 按图像尺寸缩放检测窗，多阈值峰值检测
+      2) 形态学水平线增强再检
+      3) 候选数接近 26 时与标准比例网格对齐选线
+      4) 仍失败且图足够大：使用按高宽比缩放的标准对齐网格（标定几何，非乱编）
+    """
+    if img_g is None or img_g.size == 0:
+        raise RuntimeError("get_y_lines: 输入灰度图为空")
+
+    h, w = img_g.shape[:2]
+    sx = w / float(REF_W)
+    sy = h / float(REF_H)
+    x0 = max(0, int(round(675 * sx)))
+    x1 = min(w, int(round(951 * sx)))
+    if x1 - x0 < 20:
+        # 宽度异常时用右半幅
+        x0, x1 = int(w * 0.60), w - 2
+    y0 = max(0, int(round(350 * sy)))
+    y1 = min(h - 1, int(round(1250 * sy)))
+    band_w = max(1, x1 - x0)
+
+    best = []
+    # 方法 A：多阈值墨迹投影
+    for thr_gray in (50, 70, 80, 100, 120, 140):
+        binary = img_g < thr_gray
+        row_sums = np.sum(binary[:, x0:x1], axis=1).astype(np.float64)
+        for ratio in (0.35, 0.45, 0.55, 0.65, 0.75):
+            peaks = _detect_h_peaks(row_sums, y0, y1, band_w, ratio, nms=3)
+            peaks = _merge_nearby_lines(peaks, min_gap=max(4, int(8 * sy)))
+            if len(peaks) == 26:
+                logger.info("get_y_lines: 投影检测成功 thr=%s ratio=%.2f size=%dx%d", thr_gray, ratio, w, h)
+                return peaks
+            if abs(len(peaks) - 26) < abs(len(best) - 26):
+                best = peaks
+
+    # 方法 B：形态学提取水平线
+    try:
+        inv = 255 - img_g
+        _, bw = cv2.threshold(inv, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        klen = max(15, int(band_w * 0.35))
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (klen, 1))
+        morph = cv2.morphologyEx(bw[:, x0:x1], cv2.MORPH_OPEN, kernel)
+        row_sums = np.sum(morph > 0, axis=1).astype(np.float64)
+        # 对齐到全图 y
+        full_sums = np.zeros(h, dtype=np.float64)
+        # morph 只有 band 高度=h
+        full_sums = np.sum((morph > 0), axis=1).astype(np.float64)
+        for ratio in (0.25, 0.4, 0.55):
+            peaks = _detect_h_peaks(full_sums, y0, y1, band_w, ratio, nms=2)
+            peaks = _merge_nearby_lines(peaks, min_gap=max(4, int(8 * sy)))
+            if len(peaks) == 26:
+                logger.info("get_y_lines: 形态学检测成功 ratio=%.2f", ratio)
+                return peaks
+            if abs(len(peaks) - 26) < abs(len(best) - 26):
+                best = peaks
+    except Exception as e:
+        logger.debug("形态学检线失败: %s", e)
+
+    # 方法 C：候选对齐到 26
+    if 15 <= len(best) <= 45:
+        picked = _pick_26_from_candidates(best, h)
+        if len(picked) == 26:
+            logger.warning(
+                "get_y_lines: 原始峰 %d 条，已与标准比例网格对齐为 26 条 (size=%dx%d)",
+                len(best), w, h,
+            )
+            return picked
+
+    # 方法 D：标准对齐几何按比例缩放（仅当图尺寸合理，说明是对齐票）
+    if w >= 700 and h >= 1000:
+        scaled = _scale_ref_y_lines(h)
+        logger.warning(
+            "get_y_lines: 动态检测失败(best=%d条, size=%dx%d)。"
+            "使用标准对齐票比例网格（REF 1052x1487 按高度缩放）。"
+            "若结果错行，请确认输入为「对齐图」且勿在去表格线之后检线。",
+            len(best), w, h,
         )
-    return lines_y
+        return scaled
+
+    raise RuntimeError(
+        f"安全措施网格水平线数量异常: 检测到 {len(best)} 条，需要 26 条；"
+        f"图像 {w}x{h}。请使用模板对齐后的带气作业票（约 {REF_W}x{REF_H}），"
+        f"且必须在去表格线之前检测网格。"
+        f" best_lines={best[:12]}{'...' if len(best) > 12 else ''}"
+    )
 
 
 def main():
@@ -292,12 +543,13 @@ def main():
 
     img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
-    x_bounds = [675, 715, 791, 829, 890, 951]
+    # 必须在去表格线之前检水平线（线抹掉后会变成 0 条）
+    x_bounds = get_x_bounds(img_bgr.shape[1])
     roles = ["作业人", "施工方现场负责人", "监理", "监护人", "带气现场负责人"]
     y_lines = get_y_lines(img_gray)
-    logger.info("检测到网格线数量: %d", len(y_lines))
+    logger.info("检测到网格线数量: %d  x_bounds=%s", len(y_lines), x_bounds)
 
-    # 去表格化处理并保存图片
+    # 去表格化：仅用于格子内像素分类，不用于检线
     logger.info("开始对图像进行去表格线处理...")
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from ocr7 import remove_table_lines, imwrite_unicode, default_output_path
