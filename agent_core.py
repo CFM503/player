@@ -381,9 +381,16 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
         self._json_object_supported = None
 
     def _extract_sign_columns(self, ocr_text: str) -> dict:
-        """基于 OCR 坐标从签批区域精准提取5列签名姓名，避免纯文本拼接导致的列错位"""
+        """基于 OCR 坐标从签批区域精准提取5列签名姓名。
+
+        规则：
+        - 列头仅允许「整词」匹配（可带冒号），禁止 startswith，避免
+          「作业人员严禁…」「带气现场负责人签字」误当成列头导致 y 窗偏移串列。
+        - 签名允许 1~4 个汉字（OCR 常把监理签字识成单字如「华」）。
+        - 按「签名 x ↔ 列头 x」距离全局贪心一对一分配，防止串列。
+        - 不在此做 LLM 兜底；识别不到的列返回缺失（None 由调用方写入）。
+        """
         result = {}
-        # 签批区域的5列列头关键字及对应字段名
         col_headers = [
             ("作业人员", "operators"),
             ("施工方现场负责人", "construction_leader"),
@@ -391,6 +398,7 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             ("项目公司监护人", "company_monitor"),
             ("带气现场负责人", "gas_leader"),
         ]
+        header_kw_set = {kw for kw, _ in col_headers}
 
         # 从 OCR 坐标段（--- 分隔符之后）解析所有带坐标的文本片段
         coord_section = ""
@@ -399,9 +407,8 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
         elif "\r\n---\r\n" in ocr_text:
             coord_section = ocr_text.split("\r\n---\r\n")[-1]
         if not coord_section:
-            return result  # 无坐标数据，回退给 LLM 结果
+            return result
 
-        # 解析所有坐标行: "文本内容  [x, y, w, h]"
         coord_pattern = re.compile(r"^(.+?)\s+\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\]\s*$")
         all_items = []  # [(text, x, y, w, h), ...]
         for line in coord_section.strip().split("\n"):
@@ -415,62 +422,82 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
         if not all_items:
             return result
 
-        # 步骤1: 找到5个列头的 x 坐标
+        def _header_clean(text: str) -> str:
+            # 去掉冒号/空白后做整词比对；「…签字」等后缀不会等于五列列头
+            return text.replace("：", "").replace(":", "").strip()
+
+        # 步骤1: 严格匹配5列列头（只认整词，可带冒号）
         col_positions = []  # [(field_name, header_x, header_y)]
         for text, x, y, w, h in all_items:
+            clean = _header_clean(text)
             for header_kw, field_name in col_headers:
-                # 列头文本匹配（含冒号或不含）
-                clean = text.replace("：", "").replace(":", "").strip()
-                if clean == header_kw or text.startswith(header_kw):
+                if clean == header_kw:
                     col_positions.append((field_name, x, y))
                     break
 
         if len(col_positions) < 3:
             safe_print(f"[Sanitize] 签批列头匹配不足({len(col_positions)}列)，跳过坐标提取")
-            return result  # 列头识别不够，回退
+            return result
 
-        # 步骤2: 确定签批区域的 y 范围（列头 y 到列头 y + 120px 之间的手写文字）
+        # 若同一 field 因重复 OCR 出现多次，取 y 最大的一组（票面底部签批行）
+        best_by_field = {}
+        for field, x, y in col_positions:
+            prev = best_by_field.get(field)
+            if prev is None or y > prev[1]:
+                best_by_field[field] = (x, y)
+        col_positions = [(f, xy[0], xy[1]) for f, xy in best_by_field.items()]
+
+        # 步骤2: 签名 y 窗 = 列头下方（单字签名框可能较高，放宽到 +150）
         header_y = min(y for _, _, y in col_positions)
-        sign_y_min = header_y + 15   # 签名在列头下方
-        sign_y_max = header_y + 120  # 签名区域高度范围
+        sign_y_min = header_y + 10
+        sign_y_max = header_y + 150
 
-        # 步骤3: 在签名 y 范围内找到所有候选的人名文本片段
-        # 过滤掉明显非人名的干扰文本
-        _NOISE_KW = ("已确认", "确认", "项目公司", "我已接受", "安全教", "签批",
-                      "年", "月", "日", "时", "分", "育：认")
-        candidates = []  # [(text, x, y)]
+        # 步骤3: 候选签名 —— 整段清洗后仅为 1~4 个汉字（保留「华」等单字）
+        _NOISE_SUB = (
+            "已确认", "确认", "项目公司", "我已接受", "安全教", "签批",
+            "内认", "完工", "时间", "负责人签字",
+        )
+        candidates = []  # [(name, x, y)]
         for text, x, y, w, h in all_items:
-            if sign_y_min <= y <= sign_y_max:
-                # 过滤: 保留含中文字符且像人名的片段 (1-4个汉字，兼容 OCR 只识别出部分姓名)
-                name_m = re.search(r"[一-龥]{1,4}", text)
-                if name_m:
-                    name = name_m.group(0)
-                    # 排除干扰关键字
-                    if any(kw in text for kw in _NOISE_KW):
-                        continue
-                    candidates.append((name, x, y))
+            if not (sign_y_min <= y <= sign_y_max):
+                continue
+            if any(kw in text for kw in _NOISE_SUB):
+                continue
+            # 列头自身不算签名
+            if _header_clean(text) in header_kw_set:
+                continue
+            core = re.sub(r"[\s：:。.，,、·\-—_（）()【】\[\]]+", "", text)
+            if not re.fullmatch(r"[\u4e00-\u9fff]{1,4}", core):
+                continue
+            candidates.append((core, x, y))
 
         if not candidates:
             safe_print("[Sanitize] 签批区域未找到候选签名，跳过坐标提取")
             return result
 
-        # 步骤4: 将每个候选签名按 x 坐标最近邻分配到最接近的列
+        # 步骤4: 全局按距离贪心一对一匹配（先最近，列/签名各用一次）→ 单字「华」归监理列不串位
         col_x_map = {field: x for field, x, _ in col_positions}
+        pairs = []
         for name, name_x, name_y in candidates:
-            # 找 x 坐标最近的列头
-            best_field = None
-            best_dist = float("inf")
             for field, hx in col_x_map.items():
                 dist = abs(name_x - hx)
-                if dist < best_dist:
-                    best_dist = dist
-                    best_field = field
-            # 容差: 签名 x 与列头 x 差距不超过 200px 才算有效匹配
-            if best_field and best_dist < 200:
-                # 若同一列已有值，选 y 较小（更靠上）的
-                if best_field not in result:
-                    result[best_field] = name
-                    safe_print(f"[Sanitize] 签批坐标匹配: {best_field} = {name} (x={name_x}, 列头x={col_x_map[best_field]}, 距离={best_dist})")
+                if dist < 200:
+                    pairs.append((dist, name_y, name, field, name_x, hx))
+        pairs.sort(key=lambda t: (t[0], t[1]))  # 距离优先，其次更靠上
+
+        used_fields = set()
+        used_names = set()  # (name, x) 防同一 OCR 块重复
+        for dist, name_y, name, field, name_x, hx in pairs:
+            name_key = (name, name_x)
+            if field in used_fields or name_key in used_names:
+                continue
+            used_fields.add(field)
+            used_names.add(name_key)
+            result[field] = name
+            safe_print(
+                f"[Sanitize] 签批坐标匹配: {field} = {name} "
+                f"(x={name_x}, 列头x={hx}, 距离={dist})"
+            )
 
         safe_print(f"[Sanitize] 签批坐标提取结果: {result}")
         return result
@@ -638,15 +665,17 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             
         raw_dict["approver_name"] = approver or None
         
-        # ---- 签批区域5列签名：基于 OCR 坐标精准匹配列位置 ----
-        # OCR 文本含有 [x, y, w, h] 坐标，利用列头 x 坐标与签名 x 坐标的最近邻匹配
-        # 来精准定位每个手写签名属于哪一列，彻底解决纯文本行拼接导致的列错位问题
+        # ---- 签批区域5列签名：仅坐标提取，禁止 LLM 兜底（避免单字签名如「华」导致串列） ----
         sign_fields = self._extract_sign_columns(ocr_text)
-        raw_dict["operators"] = sign_fields.get("operators") or raw_dict.get("operators") or None
-        raw_dict["construction_leader"] = sign_fields.get("construction_leader") or raw_dict.get("construction_leader") or None
-        raw_dict["supervisor"] = sign_fields.get("supervisor") or raw_dict.get("supervisor") or None
-        raw_dict["company_monitor"] = sign_fields.get("company_monitor") or raw_dict.get("company_monitor") or None
-        raw_dict["gas_leader"] = sign_fields.get("gas_leader") or raw_dict.get("gas_leader") or None
+        for _sf in (
+            "operators",
+            "construction_leader",
+            "supervisor",
+            "company_monitor",
+            "gas_leader",
+        ):
+            # 有坐标段时一律以坐标结果为准（含空缺）；无坐标数据时 sign_fields 为空，字段置空
+            raw_dict[_sf] = sign_fields.get(_sf) or None
         
         raw_dict["risk_level"] = raw_dict.get("risk_level") or None  # 若无则设为 None
 
