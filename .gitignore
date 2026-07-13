@@ -16,8 +16,11 @@ upload/
 uploads/
 archives/
 
-# 文字 OCR 训练工作区（ocr9，样本大时可本地保留）
-ocr_train_workspace/
+# 文字 OCR 训练工作区（ocr9）— 允许提交裁剪样本与标注，便于多机协同
+# 忽略体积大的原图、临时预览与 run 日志
+ocr_train_workspace/raw/
+ocr_train_workspace/runs/
+ocr_train_workspace/_tmp_preview.png
 
 # 勾选格训练工作区（ocr10）— 允许提交样本与导出，便于多机协同训练
 # 忽略体积大的原图上传与临时 run 日志

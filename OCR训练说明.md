@@ -274,41 +274,63 @@ python ocr10.py -h
 
 ## 七、多机协同训练（家里 + 单位）
 
-勾选格训练数据已纳入版本库约定（见 `ocr_mark_workspace/README.md`）。
+**ocr9（文字）** 与 **ocr10（勾选格）** 都可 Git 同步，约定见：
+
+- `ocr_train_workspace/README.md`  
+- `ocr_mark_workspace/README.md`  
 
 ### 会提交到 Git 的文件
 
+#### ocr10（勾选格）
+
 | 文件/目录 | 作用 |
 |-----------|------|
-| `ocr5_mark_params.json` | ocr10 导出的规则参数，**ocr5 自动加载** |
+| `ocr5_mark_params.json` | 导出规则参数，**ocr5 自动加载** |
 | `ocr5_mark_model.pkl` | 可选分类器，有则提交 |
-| `ocr_mark_workspace/labels.jsonl` | 标注记录 |
-| `ocr_mark_workspace/cells/**` | 单格裁剪样本 |
-| `ocr_mark_workspace/config.json` | ocr10 参数 |
-| `ocr_mark_workspace/memory/` | 纠错记忆 |
-| `ocr_mark_workspace/models/` | active 导出副本 |
+| `ocr_mark_workspace/labels.jsonl` + `cells/**` | 标注与裁剪 |
+| `ocr_mark_workspace/config.json`、`memory/`、`models/` | 参数与记忆 |
+
+#### ocr9（文字）
+
+| 文件/目录 | 作用 |
+|-----------|------|
+| `ocr_train_workspace/labels.jsonl` | 文字行标注 |
+| `ocr_train_workspace/crops/**` | 行裁剪样本 |
+| `ocr_train_workspace/rec/*.txt` | Paddle 列表 |
+| `ocr_train_workspace/config.json`、`memory/`、`models/` | 参数、记忆、导出模型 |
 
 ### 不提交（体积大）
 
-- `ocr_mark_workspace/raw/`（整张图）  
-- `ocr_mark_workspace/runs/`（日志）  
-- `ocr_train_workspace/`（ocr9 文字训练，仍默认本地）  
+- `ocr_mark_workspace/raw/`、`ocr_mark_workspace/runs/`  
+- `ocr_train_workspace/raw/`、`ocr_train_workspace/runs/`、`_tmp_preview.png`  
 
 ### 同步步骤
 
 ```bash
-# 上班/在家训练完后
+# 任一端训练完后
 git pull
-# … ocr10 入库、导出 …
+
+# ocr10
 git add ocr5_mark_params.json ocr5_mark_model.pkl ocr_mark_workspace
+
+# ocr9
+git add ocr_train_workspace
+
 git status   # 确认 raw/ runs/ 未被加入
-git commit -m "chore: sync ocr10 mark training data"
+git commit -m "chore: sync OCR training data (ocr9/ocr10)"
 git push
 
 # 另一台电脑
 git pull
-python ocr10.py    # 继续训练
-# 主程序直接跑票即可使用已提交的 ocr5_mark_params.json
+python ocr9.py     # 继续文字
+python ocr10.py    # 继续勾选
 ```
+
+### 主程序分别怎么生效
+
+| 工具 | pull 之后主程序 |
+|------|-----------------|
+| **ocr10** 已导出并提交 `ocr5_mark_params.json` | **立刻**：ocr5 自动读参数 |
+| **ocr9** 只同步标注/记忆 | 主程序 **不会**自动变准；记忆只在 ocr9 预览用。真·变准需 rec 模型进 `models/` 并配置 `text_recognition_model_dir` |
 
 版本与实现细节以代码及 `CHANGELOG.md` 为准。
