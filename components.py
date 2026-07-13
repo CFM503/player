@@ -156,9 +156,9 @@ def render_guide(step: int, text: str) -> None:  # 定义顶部操作向导提�
 
 
 
-def render_record_badge(risk: str | None, abnormal: bool) -> str:  # 定义用于在历史看版 Tab2 的摘要条中渲染彩字风险级别的函数
-    # 拼接并生成彩色指示后缀
-    if not risk:  # 判断该条目是否尚无评估风险级别
-        return ""  # 若没有，返回空串不追加任何后缀
-    st_color = RISK_ST_COLOR.get(risk, "blue")  # 根据风险名在 Streamlit 颜色字典中提取出对应的文本着色名称
-    return f" | :{st_color}[{risk}]"  # 拼接并返回满足 Streamlit Markdown 着色语法的彩色标记字符串后缀，如 " | :red[重大]"
+def render_record_badge(grade: str | None, abnormal: bool) -> str:
+    """历史列表标题后缀：作业等级着色（一级/二级 或旧值兼容）。"""
+    if not grade or grade in ("-", "未识别", "未填"):
+        return ""
+    st_color = RISK_ST_COLOR.get(grade, "blue")
+    return f" · :{st_color}[{grade}]"

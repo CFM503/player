@@ -75,6 +75,13 @@ LABEL_COLOR_BGR = {
     "blank": (160, 160, 160),  # 灰
     "wrong": (0, 255, 255),    # 黄：预测≠真值
 }
+# Web 展示用（与预览框一致：绿✓ 红× 蓝\ 灰-）
+LABEL_COLOR_HEX = {
+    "check": "#16a34a",
+    "cross": "#dc2626",
+    "slash": "#2563eb",
+    "blank": "#6b7280",
+}
 
 ROLES = ["作业人", "施工方现场负责人", "监理", "监护人", "带气现场负责人"]
 X_BOUNDS = [675, 715, 791, 829, 890, 951]
@@ -417,7 +424,8 @@ def draw_grid(img_bgr, cells: List[dict], highlight: Optional[Tuple[int, int]] =
         else:
             thick = 2
         cv2.rectangle(vis, (cell["x1"], cell["y1"]), (cell["x2"], cell["y2"]), color, thick)
-        tag = {"check": "V", "cross": "X", "slash": "/", "blank": "-"}[pred]
+        # 票面图例：落实√ / 未落实× / 不适用\ / 空白-（斜杠是反斜杠 \，不是 /）
+        tag = {"check": "V", "cross": "X", "slash": "\\", "blank": "-"}[pred]
         cv2.putText(
             vis, tag, (cell["x1"] + 2, min(cell["y2"] - 2, cell["y1"] + 14)),
             cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA,
@@ -964,7 +972,7 @@ def render_app() -> None:
         path_now = st.session_state.get("ocr10_path")
 
         with c2:
-            st.subheader("2. 预览（绿✓ 红× 蓝/ 灰-  黄=定位）")
+            st.subheader("2. 预览（绿✓ 红× 蓝\\ 灰-  黄=定位）")
             if path_now and cells:
                 img = load_bgr(path_now)
                 hi = st.session_state.get("ocr10_hi")
@@ -995,11 +1003,40 @@ def render_app() -> None:
                     or (c.get("debug") or {}).get("line_rms") is not None
                 ] or cells
 
-            # 分页减轻负担
-            page_size = 25
+            # 分页：默认一页 50 格，可选 25/50/全部 125
+            pc1, pc2 = st.columns([1, 2])
+            with pc1:
+                page_size_opt = st.selectbox(
+                    "每页格数",
+                    options=[25, 50, 75, 100, 125],
+                    index=1,  # 默认 50
+                    help="25 行×5 列共 125 格；选 125 可一页看完",
+                    key=_k("page_size"),
+                )
+            page_size = int(page_size_opt)
             n_pages = max(1, (len(view) + page_size - 1) // page_size)
-            page = st.number_input("页码", 1, n_pages, 1)
-            chunk = view[(page - 1) * page_size: page * page_size]
+            page_key = _k("page_num")
+            # 换「每页格数」后页码可能超出，先钳制
+            if page_key in st.session_state:
+                try:
+                    st.session_state[page_key] = max(
+                        1, min(int(st.session_state[page_key]), n_pages)
+                    )
+                except Exception:
+                    st.session_state[page_key] = 1
+            with pc2:
+                page = st.number_input(
+                    f"页码（共 {n_pages} 页 / {len(view)} 格）",
+                    min_value=1,
+                    max_value=n_pages,
+                    value=1,
+                    key=page_key,
+                )
+            chunk = view[(int(page) - 1) * page_size: int(page) * page_size]
+            st.caption(
+                f"本页显示第 {(int(page)-1)*page_size + 1}–"
+                f"{min(int(page)*page_size, len(view))} 格"
+            )
 
             for cell in chunk:
                 rid, cid = cell["row"], cell["col"]
@@ -1015,7 +1052,14 @@ def render_app() -> None:
                             if crop.size:
                                 st.image(bgr_to_rgb(crop), use_container_width=True)
                     with cols[2]:
-                        st.caption(f"预测: {LABEL_CN.get(cell['pred'], cell['pred'])}")
+                        _pred = cell["pred"]
+                        _cn = LABEL_CN.get(_pred, _pred)
+                        _hex = LABEL_COLOR_HEX.get(_pred, "#374151")
+                        st.markdown(
+                            f'预测: <span style="color:{_hex};font-weight:700;'
+                            f'font-size:1.1em">{_cn}</span>',
+                            unsafe_allow_html=True,
+                        )
                         dbg = cell.get("debug") or {}
                         st.caption(
                             f"ink={dbg.get('ink_ratio', '-')} ep={dbg.get('n_endpoint', '-')} "

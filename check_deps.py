@@ -27,6 +27,7 @@ _DEPS = [  # 构建要求校验的依赖包元数据列表
     # 签字格标记分类依赖
     ("scikit-image",   "skimage",        "0.22.0",       "scikit-image"),  # skimage 用于骨架化分类
     ("scipy",          "scipy",          "1.15.0",       "scipy"),         # scipy 用于连通域标记
+    ("scikit-learn",   "sklearn",        "1.5.0",        "scikit-learn"),  # ocr10 特征分类 / ocr5 加载 pkl
 ]  # 结束列表定义
 
 # paddlepaddle 支持 CPU 版 (paddlepaddle) 和 GPU 版 (paddlepaddle-gpu) 两种安装方式

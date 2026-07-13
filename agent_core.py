@@ -95,6 +95,58 @@ def safe_print(*args, sep=" ", end="\n", file=None, flush=False):  # 定义安�
             pass  # 忽略错误
 
 
+def _decode_subprocess_bytes(data: bytes | None) -> str:
+    """
+    解码子进程 stdout/stderr。
+    Windows 中文环境子进程常以 GBK/CP936 写中文，父进程若强制 UTF-8 会在 Web 日志里显示为 。
+    优先 UTF-8，失败或大量替换符时回退 GBK。
+    """
+    if not data:
+        return ""
+    # 1) 纯 UTF-8
+    try:
+        text = data.decode("utf-8")
+        if "\ufffd" not in text:
+            return text
+    except UnicodeDecodeError:
+        text = None
+    # 2) GBK / CP936（中文 Windows 控制台默认）
+    for enc in ("gbk", "cp936", "gb18030"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    # 3) 带替换的 UTF-8
+    if text is not None:
+        return text
+    return data.decode("utf-8", errors="replace")
+
+
+def run_python_script(cmd: list, **kwargs):
+    """
+    运行本仓库 Python 子脚本，强制 UTF-8 IO，并对输出做稳健解码。
+    返回与 subprocess.CompletedProcess 兼容的对象（stdout/stderr 为 str）。
+    """
+    import subprocess
+
+    env = kwargs.pop("env", None)
+    if env is None:
+        env = os.environ.copy()
+    else:
+        env = dict(env)
+    # 让子进程 print 使用 UTF-8，避免管道上的 GBK 乱码
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUTF8", "1")
+    # 二进制捕获，自行解码（兼容未设 PYTHONUTF8 的旧环境）
+    kwargs.pop("text", None)
+    kwargs.pop("encoding", None)
+    kwargs.pop("errors", None)
+    proc = subprocess.run(cmd, capture_output=True, env=env, **kwargs)
+    proc.stdout = _decode_subprocess_bytes(proc.stdout)
+    proc.stderr = _decode_subprocess_bytes(proc.stderr)
+    return proc
+
+
 def clean_thinking(text: str) -> str:  # 定义用于过滤大模型输出中包含的 <think> 思考过程标签及 markdown 标记的函数
     """过滤模型输出中的思考过程标签并清理 markdown 格式"""
     if not text:  # 检查文本是否为空
@@ -111,47 +163,18 @@ def clean_thinking(text: str) -> str:  # 定义用于过滤大模型输出中包
     return text.strip()  # 去除两侧空白后返回纯净的文本字串
 
 
-# 根据国家和行业 HSE 标准配置作业票对应的法规及限值参数
-TICKET_STANDARDS = {  # 定义标准比对字典
-    "动火作业票": {  # 动火安全标准
-        "standard_name": "GB 30871-2022",  # 法规文号
-        "standard_desc": "《危险化学品企业特殊作业安全规范》",  # 法规全称
-        "clear_dist_desc": "动火点10m内清除可燃物并配备合适足量的消防器材"  # 安全警戒距离说明
-    },  # 结束动火
-    "带气作业票": {  # 带气作业安全标准
-        "standard_name": "CJJ 51-2016",  # 法规文号
-        "standard_desc": "《城镇燃气设施运行、维护和抢修安全技术规程》",  # 法规全称
-        "clear_dist_desc": "作业区域与周边做到可靠的隔离，现场设置明显标志，夜间设置警示灯"  # 隔离防爆标志要求说明
-    }  # 结束带气
-}  # 结束字典定义
+# 带气作业票 HSE 标准（本系统仅支持带气作业票，已移除动火作业票）
+TICKET_STANDARDS = {
+    "带气作业票": {
+        "standard_name": "CJJ 51-2016",
+        "standard_desc": "《城镇燃气设施运行、维护和抢修安全技术规程》",
+        "clear_dist_desc": "作业区域与周边做到可靠的隔离，现场设置明显标志，夜间设置警示灯",
+    }
+}
 
-
-# 国家及企业关于不同作业票中规定必须逐一落实的法定安全措施条款
-STANDARD_MEASURES = {  # 定义法定防范措施表字典
-    "动火作业票": [  # 动火作业对应的 21 条安全检查措施列表
-        (1, "动火人已接受作业安全教育。"),
-        (2, "实际动火人与作业票上的动火人相符，持有效证件。"),
-        (3, "监护人已到位。"),
-        (4, "作业机具经过检验合格。"),
-        (5, "动火作业使用的脚手架、吊篮经检查合格。"),
-        (6, "所有与动火设备相连的设备、管线加盲板/堵头等有效隔断，连通作业段的阀门处于关闭状态。不得以水封或仅关闭阀门代替盲板隔断。"),
-        (7, "动火管线、设备内部清理干净，吹扫合格，达到动火条件。"),
-        (8, "动火点15米内无可燃物，下水井、地漏、地沟覆盖严密。"),
-        (9, "动火点15米内无可燃液体排放，30米内无可燃气体排放。"),
-        (10, "同一动火区域内无可燃溶剂清洗、喷漆及刷油漆作业。"),
-        (11, "五级风及以上天气，禁止露天动火作业，确需动火，应升级管理。"),
-        (12, "乙炔气瓶应立放、安装阻火器，乙炔瓶和氧气瓶无泄漏，与火源的距离大于10米，要有防晒、防倾倒措施。"),
-        (13, "特级动火作业应全过程作业影像，且作业现场使用的摄录设备为防爆型."),
-        (14, "实际动火部位、内容、时间与动火作业票相符。"),
-        (15, "已对相关人员进行安全交底。"),
-        (16, "采样检测结果符合动火条件。每日动火作业前必须进行检测，检测后超过30分钟未动火，复测合格后方可动火。特级、一级动火作业中断时间超过30分钟，二级动火作业中断时间超过60分钟，必须重新检测合格后方可动火。特级动火作业期间必须连续进行监测。"),
-        (17, "现场所有人员按规范穿戴个人防护用品。"),
-        (18, "高处动火作业应采取防火花飞溅措施。"),
-        (19, "紧急疏散通道与消防通道保持畅通。"),
-        (20, "动火点配备合适的消防器材，现场配备消防水带（0）根，灭火器（/）台，灭火毯（）块。"),
-        (21, "其他补充安全措施：")
-    ],  # 结束动火措施列表
-    "带气作业票": [  # 带气抢修对应的 25 条安全检查措施列表
+# 带气作业票 25 条法定安全措施
+STANDARD_MEASURES = {
+    "带气作业票": [
         (1, "作业人具备相应的作业资格。"),
         (2, "作业人已接受作业安全教育，包括应急处置方案学习。"),
         (3, "现场人员已穿戴好安全防护用品，如防静电工作服、鞋、空气呼吸器等"),
@@ -177,8 +200,8 @@ STANDARD_MEASURES = {  # 定义法定防范措施表字典
         (23, "已根据不同带气作业场景制定现场处置方案。"),
         (24, "作业现场已配备有效、适用 and 足量的灭火器材。"),
         (25, "带气作业过程中，如有紧急或异常情况，应由现场负责人立即通知停止作业，应急处置并消除隐患后才能继续实施作业。")
-    ]  # 结束带气措施列表
-}  # 结束字典定义
+    ]
+}
 
 
 # 带气作业票安全措施确认列（每项固定 5 格，图例：落实√ 未落实× 不适用\）
@@ -454,7 +477,7 @@ class HandWrittenIssue(BaseModel):  # 定义表示 HSE 作业票中具体手写�
 
 
 class SafetyMeasureItem(BaseModel):  # 定义安全防范措施条款单条执行状态的模型类
-    """带气/动火安全措施逐项落实状态"""
+    """带气安全措施逐项落实状态"""
     measure_id: int = Field(..., description="措施序号")  # 法定安全措施条款对应的数字序号
     description: str = Field(..., description="措施内容原文")  # 安全防范条款的具体文字内容描述说明
     implemented: bool = Field(..., description="True=已落实, False=未落实")  # 是否成功落实并在票上打勾落实的布尔标记
@@ -463,8 +486,8 @@ class SafetyMeasureItem(BaseModel):  # 定义安全防范措施条款单条执�
 
 
 class SecuritySheetData(BaseModel):  # 定义包含完整作业票所有要素的结构化数据主模型类
-    """牡丹江中燃 HSE 作业票结构化数据"""
-    ticket_type: str = Field(default="动火作业票", description="作业票类型，例如：动火作业票/带气作业票")  # 作业票类型分类字段
+    """牡丹江中燃 HSE 带气作业票结构化数据"""
+    ticket_type: str = Field(default="带气作业票", description="作业票类型（仅支持带气作业票）")
     ticket_id: str = Field(..., description="作业票编号")  # 作业票物理编号，如 MDJ2025xxxx
     station_name: str = Field(..., description="地点/场站")  # 作业现场场站或所属管理所名称
     content: str = Field(..., description="作业内容")  # 作业的具体施工内容
@@ -482,8 +505,8 @@ class SecuritySheetData(BaseModel):  # 定义包含完整作业票所有要素�
     company_monitor: Optional[str] = Field(None, description="项目公司监护人")
     gas_leader: Optional[str] = Field(None, description="带气现场负责人")
     approval_opinion: Optional[str] = Field(None, description="自动生成的审批建议")  # AI 智能建议意见文本
-    # 带气作业票：取表头「作业等级」一级/二级（一级危险最高）；非带气可沿用重大/较大/一般/低风险
-    risk_level: Optional[str] = Field(None, description="风险/作业等级：带气为一级|二级；其他为重大/较大/一般/低风险")
+    # 带气作业票：表头「作业等级」一级/二级（一级危险最高）
+    risk_level: Optional[str] = Field(None, description="作业等级：一级|二级")
     # 待审批/已驳回：人工介入 = 经 MCP 推送钉钉 AI 表格
     approval_status: Optional[str] = Field(None, description="审批状态：自动通过/待审批/已驳回")
     approval_level: Optional[str] = Field(None, description="审批路由：自动通过/钉钉人工介入/禁止作业")
@@ -637,12 +660,9 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
     def _sanitize_sheet_data(self, raw_dict: dict, ocr_text: str) -> dict:  # 使用规则引擎启发式地校验和兜底 LLM 返回的 JSON 字典数据，规避幻觉错误
         """用 Python + OCR 启发式规则兜底重构和校验 LLM 提取的结构化数据"""
         # 1. 确定作业票类型
-        ticket_type = raw_dict.get("ticket_type", "动火作业票")  # 提取作业票类型，若缺省则默认为动火作业票
-        if "带气" in ocr_text:  # 检查如果 OCR 文本字元中明显含有“带气”关键字
-            ticket_type = "带气作业票"  # 强制纠偏为带气作业票
-        elif "动火" in ocr_text:  # 检查如果含有“动火”关键字
-            ticket_type = "动火作业票"  # 强制纠偏为动火作业票
-        raw_dict["ticket_type"] = ticket_type  # 保存纠偏后的票类型结果
+        # 本系统仅支持带气作业票
+        ticket_type = "带气作业票"
+        raw_dict["ticket_type"] = ticket_type
 
         # 2. 规范化票号 (ticket_id)
         ticket_id = raw_dict.get("ticket_id", "")  # 获取大模型提取出的票号字串
@@ -675,13 +695,13 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
                     m = re.search(r"(?:地点|场站|部位|单位)[：:]?\s*([^\n]+)", ocr_text)  # 从 OCR 中正则搜索地点场站关键字后面的行内容
                     val = m.group(1).strip() if m else ""  # 命中时取值，否则留空串，不填造假占位
                 elif field == "content":  # 若施工作业内容字段缺失
-                    m = re.search(r"(?:内容|作业内容|动火内容)[：:]?\s*([^\n]+)", ocr_text)  # 正则获取作业内容行
+                    m = re.search(r"(?:内容|作业内容)[：:]?\s*([^\n]+)", ocr_text)  # 正则获取作业内容行
                     val = m.group(1).strip() if m else ""  # 命中时赋值，否则留空串，不填造假占位
                 elif field == "work_time":  # 若作业时间字段缺失
-                    m = re.search(r"(?:作业时间|施工时间|动火时间)[：:]?\s*([^\n]+)", ocr_text)  # 正则搜索作业时间行
+                    m = re.search(r"(?:作业时间|施工时间)[：:]?\s*([^\n]+)", ocr_text)  # 正则搜索作业时间行
                     val = m.group(1).strip() if m else ""  # 命中时取值，否则留空串，不填造假占位
                 elif field == "worker_id":  # 若作业人或证书字段缺失
-                    m = re.search(r"(?:作业人员|动火人|作业人|证书编号)[：:]?\s*([^\n]+)", ocr_text)  # 正则搜索作业人姓名
+                    m = re.search(r"(?:作业人员|作业人|证书编号)[：:]?\s*([^\n]+)", ocr_text)  # 正则搜索作业人姓名
                     val = m.group(1).strip() if m else ""  # 命中包装，否则留空串，不填造假占位
             raw_dict[field] = str(val).strip()  # 将清洗后的文本强转为纯净的剥离空白后的字符串保存入字典
 
@@ -724,49 +744,32 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
         blank_measure_ids = []  # 带气：五列存在空白漏项的措施序号
 
         # 带气票：优先解析 ocr5 的 25×5 网格（✓/×/\ /空白）
-        gas_grid = parse_gas_measure_grid(ocr_text) if ticket_type == "带气作业票" else {}
-        if ticket_type == "带气作业票":
-            safe_print(f"[Sanitize] 带气安全措施网格解析: {len(gas_grid)}/{GAS_MEASURE_COUNT} 行")
+        gas_grid = parse_gas_measure_grid(ocr_text)
+        safe_print(f"[Sanitize] 带气安全措施网格解析: {len(gas_grid)}/{GAS_MEASURE_COUNT} 行")
 
         for mid, desc in std_measures:  # 逐一遍历标准要求落实的每一条条款
-            column_marks: List[str] = []
-
-            if ticket_type == "带气作业票":
-                # 带气：每项 5 列，合法填写为 对号√ / 叉号× / 斜杠\；空白=漏项
-                # 【禁止兜底】网格未解析到该行时五列全 blank 并记漏项，禁止默认「已落实」
-                if mid not in gas_grid:
-                    marks = ["blank"] * 5
-                    safe_print(f"[Sanitize] 第{mid}项五列网格缺失，记为漏项（禁止默认落实）")
-                else:
-                    marks = list(gas_grid[mid])
-                    if len(marks) < 5:
-                        # 【禁止兜底】列数不足 → 右侧补 blank，禁止补 check
-                        marks = marks + ["blank"] * (5 - len(marks))
-                column_marks = marks[:5]
-                has_blank = any(mk in GAS_MARK_EMPTY or mk == "blank" for mk in column_marks)
-                has_cross = any(mk == "cross" for mk in column_marks)
-                # 业务落实：五列无叉号且无空白（√ 与 \ 均视为该项对该角色已确认）
-                impl = (not has_cross) and (not has_blank)
-                if has_blank:
-                    blank_measure_ids.append(mid)
+            # 带气：每项 5 列，合法填写为 对号√ / 叉号× / 斜杠\；空白=漏项
+            # 【禁止兜底】网格未解析到该行时五列全 blank 并记漏项，禁止默认「已落实」
+            if mid not in gas_grid:
+                marks = ["blank"] * 5
+                safe_print(f"[Sanitize] 第{mid}项五列网格缺失，记为漏项（禁止默认落实）")
             else:
-                # 非带气：仅明确 True/False 采信；【禁止兜底】None/LLM 猜测一律未落实并报问题
-                h_status = check_measure_status_in_ocr(ocr_text, desc, ticket_type)
-                if h_status is True:
-                    impl = True
-                elif h_status is False:
-                    impl = False
-                else:
-                    # 【禁止兜底】OCR 不确定时禁止采信 LLM True，一律未落实，暴露问题
-                    impl = False
-                    safe_print(f"[Sanitize] 第{mid}项符号无法判定，记未落实（禁止 LLM/默认 True 兜底）")
+                marks = list(gas_grid[mid])
+                if len(marks) < 5:
+                    marks = marks + ["blank"] * (5 - len(marks))
+            column_marks = marks[:5]
+            has_blank = any(mk in GAS_MARK_EMPTY or mk == "blank" for mk in column_marks)
+            has_cross = any(mk == "cross" for mk in column_marks)
+            impl = (not has_cross) and (not has_blank)
+            if has_blank:
+                blank_measure_ids.append(mid)
 
-            sanitized_measures.append({  # 将重组后的措施字典加入措施数组中
-                "measure_id": mid,  # 措施条款编号
-                "description": desc,  # 措施条款具体内容
-                "implemented": impl,  # 校验后的执行落实状态布尔值
-                "column_marks": column_marks,  # 带气五列标记；其他票型为空列表
-            })  # 结束条目添加
+            sanitized_measures.append({
+                "measure_id": mid,
+                "description": desc,
+                "implemented": impl,
+                "column_marks": column_marks,
+            })
             if not impl:  # 若该防范项为 False 未落实状态，说明现场存在安全隐患
                 has_abnormal = True  # 触发将整张作业票的 has_abnormal 标记强制强制提升为 True
                 unimplemented_ids.append(mid)  # 将当前有问题的条款 ID 号加入隐患列表
@@ -840,18 +843,14 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
         ):
             raw_dict[_sf] = sign_fields.get(_sf) or None
         
-        # 带气作业票：风险等级 = 表头 OCR「作业等级」一级/二级（一级危险最高）
-        # 【禁止兜底】禁止用 LLM risk_level/work_grade 猜测；提不到就空，交路由/完整性报错
-        if ticket_type == "带气作业票":
-            grade = extract_gas_work_grade(ocr_text)
-            raw_dict["risk_level"] = grade or None
-            if grade:
-                safe_print(f"[Sanitize] 带气作业等级（风险等级）: {grade}（一级危险最高）")
-            else:
-                safe_print("[Sanitize] 带气作业等级未识别到，置空（禁止编造一级/二级）")
+        # 作业等级 = 表头 OCR「作业等级」一级/二级（一级危险最高）
+        # 【禁止兜底】禁止用 LLM 猜测；提不到就空，交路由/完整性报错
+        grade = extract_gas_work_grade(ocr_text)
+        raw_dict["risk_level"] = grade or None
+        if grade:
+            safe_print(f"[Sanitize] 带气作业等级: {grade}（一级危险最高）")
         else:
-            # 非带气：本阶段不维护假等级
-            raw_dict["risk_level"] = None
+            safe_print("[Sanitize] 带气作业等级未识别到，置空（禁止编造一级/二级）")
 
         return raw_dict  # 返回整理后的新字典数据
 
@@ -883,7 +882,7 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             "你是牡丹江中燃 HSE 管理体系的专职安全审计专家。将经 OCR 识别后的文本，"
             "精准解析并提取为以下 JSON 结构：\n"
             "{\n"
-            '  "ticket_type": "作业票类型，填“动火作业票”或“带气作业票”",\n'
+            '  "ticket_type": "作业票类型，固定填“带气作业票”",\n'
             '  "ticket_id": "作业票编号（如 MDJZR2025011007 或 MDJZR2026004001）",\n'
             '  "station_name": "作业单位",\n'
             '  "content": "作业内容",\n'
@@ -1065,9 +1064,8 @@ class AgentTools:
         if os.path.exists(template_dir):
             for f in os.listdir(template_dir):
                 if f.lower().endswith(".png") and not f.startswith("aligned") and not f.startswith("match"):
-                    if ticket_type == "带气作业票" and f != "dq.png":
-                        continue
-                    if ticket_type == "动火作业票" and f != "dh.png":
+                    # 仅带气模板 dq.png
+                    if f != "dq.png":
                         continue
                     templates.append(f)
         
@@ -1098,26 +1096,42 @@ class AgentTools:
                 ]
                 
                 try:
-                    # 运行 align_to_template.py 并等待其完成
-                    subprocess.run(cmd, capture_output=True, text=True, check=True)
-                    
-                    # 检查对齐图片是否生成成功并读取
+                    # 运行 align_to_template.py（UTF-8 IO + 稳健解码，避免 Web 日志中文乱码）
+                    proc = run_python_script(cmd)
+                    if proc.returncode != 0:
+                        err = (proc.stderr or proc.stdout or "").strip()
+                        safe_print(f"[OCR] 对齐脚本失败 {t_file}: {err[:300]}")
+                        continue
+                    if proc.stderr:
+                        # 透出对齐方法选择日志，便于排查歪图
+                        for line in (proc.stderr or "").splitlines()[-6:]:
+                            if line.strip():
+                                safe_print(f"[Align] {line.strip()}")
+
+                    # 检查对齐图片是否生成成功并读取（支持中文路径）
                     if os.path.exists(aligned_path):
-                        aligned_img = cv2.imread(aligned_path)
+                        import numpy as np
+                        aligned_img = cv2.imdecode(
+                            np.fromfile(aligned_path, dtype=np.uint8), cv2.IMREAD_COLOR
+                        )
                         if aligned_img is not None:
-                            # 坐标适配：为保证 codebase 原有 hardcoded 坐标（基于旧模板大小）能够完全对正，
-                            # 我们需要将对齐至新模版尺寸后的图片，resize 回原代码所期待的规范尺度大小：
-                            # - 带气票 (dq.png)：期待的旧尺寸为 1052x1487
-                            # - 动火票 (dh.png)：期待的旧尺寸为 1000x1414
-                            t_name = t_file.lower()
-                            if "dq.png" in t_name:
-                                aligned_img = cv2.resize(aligned_img, (1052, 1487))
-                                cv2.imwrite(aligned_path, aligned_img)
-                            elif "dh.png" in t_name:
-                                aligned_img = cv2.resize(aligned_img, (1000, 1414))
-                                cv2.imwrite(aligned_path, aligned_img)
-                                
-                            # 方案 A：在感知阶段，对匹配成功的对齐图统一执行去表格线处理并保存为 "去表格化.png"
+                            # 规范尺寸：带气票 1052x1487（ocr5/签字坐标兼容）
+                            # 模板 dq 本身已是该尺寸时跳过 resize，避免二次插值发虚
+                            target_size = (1052, 1487)
+                            if (
+                                aligned_img.shape[1] != target_size[0]
+                                or aligned_img.shape[0] != target_size[1]
+                            ):
+                                aligned_img = cv2.resize(
+                                    aligned_img, target_size, interpolation=cv2.INTER_AREA
+                                    if aligned_img.shape[1] > target_size[0]
+                                    else cv2.INTER_LINEAR,
+                                )
+                                ext = os.path.splitext(aligned_path)[1] or ".png"
+                                ok, buf = cv2.imencode(ext, aligned_img)
+                                if ok:
+                                    buf.tofile(aligned_path)
+
                             try:
                                 safe_print(f"[OCR] 启动 ocr7.py 对对齐图片进行去表格线处理...")
                                 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1130,19 +1144,16 @@ class AgentTools:
                                     safe_print(f"[OCR] ⚠️ 去表格化图像保存失败: {out_path}")
                             except Exception as e:
                                 safe_print(f"[OCR] ⚠️ 去表格化处理异常: {e}")
-                                
-                            safe_print(f"[OCR] 模板匹配对齐完成：使用 {t_file} 模板")
-                            image_path = aligned_path  # 覆盖后续全图 OCR 扫描 of 源图片路径
-                            AgentTools._last_image_path = aligned_path  # 覆盖缓存路径，确保之后的裁剪操作也使用对齐图
+
+                            safe_print(f"[OCR] 模板匹配对齐完成：使用 {t_file}（带气）→ {aligned_img.shape[1]}x{aligned_img.shape[0]}")
+                            image_path = aligned_path
+                            AgentTools._last_image_path = aligned_path
                             matched = True
-                            if t_file == "dq.png":
-                                matched_template_type = "带气作业票"
-                            elif t_file == "dh.png":
-                                matched_template_type = "动火作业票"
+                            matched_template_type = "带气作业票"
                             break
                 except Exception as e:
-                    # 对齐失败，继续尝试下一个模板
-                    safe_print(f"[OCR] 调用 align_to_template.py 失败或不匹配 {t_file}: {e}")
+                    safe_print(f"[OCR] 对齐异常 {t_file}: {e}")
+                    # 对齐失败，继续尝试下一个模板                    safe_print(f"[OCR] 调用 align_to_template.py 失败或不匹配 {t_file}: {e}")
             
             if not matched:
                 # 所有模板都无法匹配，可能是完全不同的图片
@@ -1206,16 +1217,8 @@ class AgentTools:
                 coords_val = (int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5)))
                 clean_txt = re.sub(r"[^\u4e00-\u9fa5a-zA-Z0-9]", "", text_part)  # 清洗文本，只保留中文、英文字母及数字
                 
-                if "动火作业票" in clean_txt:
-                    ocr_type = "动火作业票"
-                    ocr_coords = coords_val
-                    break
-                elif "带气作业票" in clean_txt:
+                if "带气作业票" in clean_txt or "带气" in clean_txt:
                     ocr_type = "带气作业票"
-                    ocr_coords = coords_val
-                    break
-                elif "临时用电作业票" in clean_txt or "用电作业票" in clean_txt:
-                    ocr_type = "临时用电作业票"
                     ocr_coords = coords_val
                     break
 
@@ -1234,7 +1237,7 @@ class AgentTools:
                 os.path.join(os.path.dirname(__file__), "ocr5.py"),
                 "--input", image_path
             ]
-            res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+            res = run_python_script(cmd)
             if res.returncode != 0:
                 err = (res.stderr or res.stdout or "").strip()
                 raise RuntimeError(
@@ -1304,18 +1307,18 @@ class AgentTools:
             desc = current.get("lang_zh", [{}])[0].get("value", current.get("weatherDesc", [{}])[0].get("value", ""))
             weather_code = int(current.get("weather_code", 0))
 
-            # 判断是否符合动火条件
+            # 判断是否符合带气作业条件
             issues = []
             if temp_c <= -5:
                 issues.append(f"气温{temp_c}℃(≤-5℃)，低温警告，需加强防冻防滑措施")
             if wind_level >= 5:
-                issues.append(f"风力{wind_level}级(≥5级)，禁止露天动火")
+                issues.append(f"风力{wind_level}级(≥5级)，禁止露天带气作业")
             if weather_code in [386, 389, 392, 395, 200]:  # 雷雨/暴雨
-                issues.append(f"天气{desc}，禁止动火作业")
+                issues.append(f"天气{desc}，禁止带气作业")
             if temp_c >= 40:
                 issues.append(f"气温{temp_c}℃(≥40℃)，需加强防暑")
             if wind_level >= 4:
-                issues.append(f"风力{wind_level}级(4级)，需加强防火措施")
+                issues.append(f"风力{wind_level}级(4级)，需加强现场防护措施")
 
             ok = len(issues) == 0
             result = {
@@ -1793,7 +1796,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             mem.remember("推理", "⚠️", "LLM 提取失败", f"高风险拦截: {e}", status="error")  # 记忆体记录提取失败
             sim.done()  # 停止模拟线程
             data = SecuritySheetData(  # 构造明确的高风险失败体，has_abnormal=True 强制走暂缓/拦截分支
-                ticket_type="动火作业票",  # 安全审计: 失败回退默认票型仅为构造合法对象，不影响审批结果(已标异常)
+                ticket_type="带气作业票",
                 ticket_id="LLM提取失败",  # 占位票号，标记异常来源
                 station_name="", content="", work_time="", worker_id="",  # 关键字段一律留空，绝不编造
                 check_date="",  # 日期留空
@@ -1828,7 +1831,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                     return ""
                 return val_str
 
-            # ========== 带气作业票专用完整性校验（不与动火交叉） ==========
+            # ========== 带气作业票数据完整性校验 ==========
             # 规则1：25 项安全措施 × 每项 5 列确认格；每格须填 对号√ / 叉号× / 斜杠\ 之一，空白=漏项
             # 图例：确认（落实√ 未落实× 不适用\）
             expected_count = GAS_MEASURE_COUNT  # 25
@@ -1982,7 +1985,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         if weather and not weather.get("ok"):
             weather_desc = "\n天气异常：" + "；".join(weather.get("issues", []))
 
-        std_info = TICKET_STANDARDS.get(data.ticket_type, TICKET_STANDARDS["动火作业票"])
+        std_info = TICKET_STANDARDS.get(data.ticket_type, TICKET_STANDARDS["带气作业票"])
         std_name = std_info["standard_name"]
         std_desc = std_info["standard_desc"]
         clear_dist = std_info["clear_dist_desc"]
@@ -2440,7 +2443,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                 approver_name = ""
                 if crop_text:
                     _LABEL_KW = ("责任", "填表", "编号", "票号", "日期", "场站", "部位", "作业",
-                                 "动火", "检测", "采样", "确认", "签批", "盖章", "部门", "时间",
+                                 "检测", "采样", "确认", "签批", "盖章", "部门", "时间",
                                  "地点", "内容", "方式", "单位", "人员", "完工", "验收")
                     clean_text = crop_text
                     for kw in _LABEL_KW:

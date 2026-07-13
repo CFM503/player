@@ -1,33 +1,25 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 align_to_template.py
 ---------------------
-将手填照片(如手机拍摄、带透视畸变)中的表格四角，对齐到模板图片中表格的四角，
-输出一张与模板画布尺寸完全一致、表格可以完全重叠的新图片。
+将手填照片(手机拍摄、带透视畸变)中的表格四角，对齐到模板图片坐标系，
+输出与模板画布尺寸一致、表格尽量重叠的新图片。
 
 用法示例：
 
-1) 全自动模式（脚本自动检测两张图里最大的矩形/表格轮廓作为四个角点）：
-    python3 align_to_template.py \
-        --template dq123.png \
-        --input 4455667788.jpg \
-        --output aligned.png
+1) 全自动：
+    python align_to_template.py --template template/dq.png --input photo.jpg --output aligned.png
 
-2) 手动指定角点模式（当自动检测不准确时，可以手动提供四个角点坐标）：
-    自己在图片查看器里读出四个角点像素坐标，顺序不限（脚本会自动按 左上/右上/右下/左下 排序）
-    python3 align_to_template.py \
-        --template dq123.png \
-        --input 4455667788.jpg \
-        --output aligned.png \
-        --src-points "563,684 435,3631 2584,3586 2498,755" \
-        --dst-points "42,216 1933,216 1933,2754 42,2754"
+2) 手动角点：
+    python align_to_template.py --template template/dq.png --input photo.jpg --output aligned.png \\
+        --src-points "x1,y1 x2,y2 x3,y3 x4,y4"
 
-3) 调试模式：额外输出角点标注图，方便肉眼核对检测是否准确
-    python3 align_to_template.py --template dq123.png --input 4455667788.jpg --output aligned.png --debug
-
-4) 输出叠加对比图（半透明叠加模板和对齐后的照片，方便验证是否重叠）：
-    python3 align_to_template.py --template dq123.png --input 4455667788.jpg --output aligned.png --overlay overlay.png
+3) 调试角点：
+    python align_to_template.py --template template/dq.png --input photo.jpg --output aligned.png --debug
 """
+
+from __future__ import annotations
 
 import argparse
 import sys
@@ -36,150 +28,300 @@ import cv2
 import numpy as np
 
 
+def _force_utf8_stdio() -> None:
+    """子进程被父进程管道捕获时，强制 stdout/stderr 为 UTF-8，避免 Web 日志中文乱码。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def _imread(path: str) -> np.ndarray:
-    """支持中文路径的图片读取（cv2.imread 在 Windows 中文路径下会返回 None）"""
+    """支持中文路径的图片读取"""
     return cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
 
 
 def _imwrite(path: str, img: np.ndarray) -> bool:
     """支持中文路径的图片写入"""
-    ret, buf = cv2.imencode(path[path.rfind('.'):], img)
+    ret, buf = cv2.imencode(path[path.rfind("."):], img)
     if ret:
         buf.tofile(path)
     return ret
 
 
 def order_points(pts: np.ndarray) -> np.ndarray:
-    """将任意顺序的4个点，按照 左上、右上、右下、左下 的顺序重新排列。"""
-    pts = pts.astype("float32")
-    rect = np.zeros((4, 2), dtype="float32")
-
-    s = pts.sum(axis=1)
-    rect[0] = pts[np.argmin(s)]  # top-left：x+y 最小
-    rect[2] = pts[np.argmax(s)]  # bottom-right：x+y 最大
-
-    diff = np.diff(pts, axis=1)
-    rect[1] = pts[np.argmin(diff)]  # top-right：x-y 最小
-    rect[3] = pts[np.argmax(diff)]  # bottom-left：x-y 最大
-    return rect
-
-
-def detect_quad(image: np.ndarray, min_area_ratio: float = 0.15):
     """
-    自动检测图片中面积最大的四边形轮廓（用于定位表格/纸张边框）。
-    同时尝试两种策略：
-      1) Canny 边缘检测：适合手机拍照场景（纸张与背景有明显对比）
-      2) 二值化阈值：适合扫描件/生成模板（表格黑色边框线）
-    返回：排序后的四个角点 (4,2) ndarray，以及该轮廓占图片总面积的比例。
-    若未找到合适的四边形，返回 (None, 0)。
+    将 4 点排成 TL, TR, BR, BL。
+    先用中心角排序，再用 sum/diff 校正，减少严重透视下的错序。
+    """
+    pts = np.asarray(pts, dtype=np.float32).reshape(4, 2)
+    c = pts.mean(axis=0)
+    ang = np.arctan2(pts[:, 1] - c[1], pts[:, 0] - c[0])
+    order = np.argsort(ang)
+    # 从左上开始：在角排序环上找 x+y 最小的点作为起点
+    ordered = pts[order]
+    start = int(np.argmin(ordered.sum(axis=1)))
+    ordered = np.roll(ordered, -start, axis=0)
+
+    # 验证是否大致为 TL,TR,BR,BL（顺时针或逆时针）
+    # 若第二点在第一点左侧太多，可能逆序，反转 1..3
+    if ordered[1, 0] < ordered[0, 0] and ordered[3, 0] > ordered[0, 0]:
+        ordered = np.array([ordered[0], ordered[3], ordered[2], ordered[1]], dtype=np.float32)
+
+    # 二次用经典方法 refine（对接近矩形更稳）
+    s = ordered.sum(axis=1)
+    d = np.diff(ordered, axis=1).reshape(-1)
+    tl = ordered[np.argmin(s)]
+    br = ordered[np.argmax(s)]
+    tr = ordered[np.argmin(d)]
+    bl = ordered[np.argmax(d)]
+    return np.array([tl, tr, br, bl], dtype=np.float32)
+
+
+def axis_aligned_quad(quad: np.ndarray) -> np.ndarray:
+    """将任意四边形收成轴对齐外接矩形（用于已是正视图的模板图，避免检测抖动引入歪斜）。"""
+    q = np.asarray(quad, dtype=np.float32).reshape(4, 2)
+    x0, y0 = float(q[:, 0].min()), float(q[:, 1].min())
+    x1, y1 = float(q[:, 0].max()), float(q[:, 1].max())
+    return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.float32)
+
+
+def _rect_score(quad: np.ndarray, img_shape, target_aspect: float | None = None) -> float:
+    """
+    四边形质量分：越大越好。
+    惩罚：过扁、非凸、面积太小、边长极不对称、顶边/底边斜率过大。
+    """
+    q = order_points(quad)
+    h, w = img_shape[:2]
+    area = cv2.contourArea(q.astype(np.float32))
+    if area < 1:
+        return -1e9
+    area_ratio = area / float(h * w)
+
+    # 边长
+    def L(i, j):
+        return float(np.linalg.norm(q[i] - q[j]))
+
+    top, right, bot, left = L(0, 1), L(1, 2), L(2, 3), L(3, 0)
+    if min(top, right, bot, left) < 10:
+        return -1e9
+
+    # 对边长度比接近 1 更好
+    hr = min(top, bot) / max(top, bot)
+    vr = min(left, right) / max(left, right)
+
+    # 宽高比
+    bw = (top + bot) / 2.0
+    bh = (left + right) / 2.0
+    aspect = bw / max(bh, 1e-6)
+    asp_pen = 0.0
+    if target_aspect and target_aspect > 0:
+        # 票面高>宽，aspect 约 0.7
+        ratio = aspect / target_aspect
+        if ratio < 0.55 or ratio > 1.8:
+            asp_pen = 2.0
+        else:
+            asp_pen = abs(np.log(ratio)) * 0.5
+
+    # 顶边/底边应接近水平（照片里可有透视，但不能极端）
+    top_slope = abs(q[1, 1] - q[0, 1]) / max(abs(q[1, 0] - q[0, 0]), 1.0)
+    bot_slope = abs(q[2, 1] - q[3, 1]) / max(abs(q[2, 0] - q[3, 0]), 1.0)
+    slope_pen = max(0.0, top_slope - 0.35) + max(0.0, bot_slope - 0.35)
+
+    # 凸性
+    hull = cv2.convexHull(q.reshape(-1, 1, 2))
+    hull_area = cv2.contourArea(hull)
+    convexity = area / max(hull_area, 1.0)
+
+    score = (
+        area_ratio * 3.0
+        + hr * 1.2
+        + vr * 1.2
+        + convexity * 1.0
+        - asp_pen
+        - slope_pen * 1.5
+    )
+    return float(score)
+
+
+def detect_quad(image: np.ndarray, min_area_ratio: float = 0.12,
+                target_aspect: float | None = None):
+    """
+    自动检测表格/纸张四边形。多策略 + 打分选最优，避免误抓到内框或歪边。
+    返回：(排序后的四点, 面积占比)；失败 (None, 0)。
     """
     h, w = image.shape[:2]
-    total_area = h * w
+    total_area = float(h * w)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    # 轻度均衡，减轻阴影
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    gray_eq = clahe.apply(gray)
 
-    candidate_contours = []
+    candidates = []  # (quad, area_ratio)
 
-    # 策略一：Canny 边缘
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges = cv2.Canny(blur, 50, 150)
-    edges = cv2.dilate(edges, np.ones((5, 5), np.uint8), iterations=2)
-    cnts, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    candidate_contours.extend(cnts)
+    def _collect_from_binary(bin_img, dilate_k=5, dilate_iter=2):
+        k = np.ones((dilate_k, dilate_k), np.uint8)
+        edges = cv2.dilate(bin_img, k, iterations=dilate_iter)
+        cnts, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        for c in cnts:
+            area = cv2.contourArea(c)
+            if area < total_area * min_area_ratio:
+                continue
+            if area > total_area * 0.98:
+                continue  # 整图边框
+            peri = cv2.arcLength(c, True)
+            for eps in (0.015, 0.02, 0.03, 0.04, 0.055):
+                approx = cv2.approxPolyDP(c, eps * peri, True)
+                if len(approx) == 4:
+                    q = order_points(approx.reshape(4, 2))
+                    candidates.append((q, area / total_area))
+                    break
+            # 非严格 4 点：用最小外接矩形
+            rect = cv2.minAreaRect(c)
+            box = cv2.boxPoints(rect)
+            q = order_points(box)
+            ar = area / total_area
+            if ar >= min_area_ratio:
+                candidates.append((q, ar))
 
-    # 策略二：二值化阈值（找深色边框线）
-    _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
-    thresh = cv2.dilate(thresh, np.ones((7, 7), np.uint8), iterations=2)
-    cnts2, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    candidate_contours.extend(cnts2)
+    # 策略1：Canny
+    blur = cv2.GaussianBlur(gray_eq, (5, 5), 0)
+    for lo, hi in ((30, 100), (50, 150), (80, 200)):
+        edges = cv2.Canny(blur, lo, hi)
+        _collect_from_binary(edges, dilate_k=5, dilate_iter=2)
 
-    best_quad = None
-    best_area = 0
-    for c in candidate_contours:
-        area = cv2.contourArea(c)
-        if area < total_area * min_area_ratio:
-            continue
-        peri = cv2.arcLength(c, True)
-        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-        if len(approx) == 4 and area > best_area:
-            best_quad = approx.reshape(4, 2)
-            best_area = area
+    # 策略2：自适应阈值
+    thr = cv2.adaptiveThreshold(
+        gray_eq, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 8
+    )
+    _collect_from_binary(thr, dilate_k=5, dilate_iter=1)
 
-    if best_quad is None:
+    # 策略3：Otsu
+    _, otsu = cv2.threshold(gray_eq, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    _collect_from_binary(otsu, dilate_k=7, dilate_iter=2)
+
+    if not candidates:
         return None, 0.0
 
-    return order_points(best_quad), best_area / total_area
+    best_q, best_s, best_ar = None, -1e18, 0.0
+    for q, ar in candidates:
+        s = _rect_score(q, image.shape, target_aspect=target_aspect)
+        # 面积也略加权
+        s += ar * 0.3
+        if s > best_s:
+            best_s, best_q, best_ar = s, q, ar
+
+    if best_q is None or best_s < -10:
+        return None, 0.0
+    return order_points(best_q), float(best_ar)
 
 
 def align_by_features(template: np.ndarray, src_img: np.ndarray,
-                      min_matches: int = 15) -> np.ndarray | None:
+                      min_matches: int = 25) -> tuple[np.ndarray | None, dict]:
     """
-    当四边形轮廓检测失败时，使用 ORB 特征点匹配求单应矩阵，
-    直接将 src_img 透视变换到 template 坐标空间。
-    返回对齐后的图像，若特征匹配不足则返回 None。
+    ORB 特征匹配求单应矩阵。返回 (aligned, info)。
     """
+    info = {"method": "orb", "inliers": 0, "good": 0}
     th, tw = template.shape[:2]
     g_tmpl = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
-    g_src  = cv2.cvtColor(src_img,  cv2.COLOR_BGR2GRAY)
+    g_src = cv2.cvtColor(src_img, cv2.COLOR_BGR2GRAY)
 
-    # 缩放到同等分辨率，加快特征提取
-    scale  = min(1.0, 1200 / max(g_src.shape))
+    # 轻度均衡
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    g_tmpl = clahe.apply(g_tmpl)
+    g_src = clahe.apply(g_src)
+
+    scale = min(1.0, 1400 / max(g_src.shape))
     if scale < 1.0:
-        g_src_s = cv2.resize(g_src, None, fx=scale, fy=scale)
+        g_src_s = cv2.resize(g_src, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
     else:
         g_src_s = g_src
-        scale   = 1.0
+        scale = 1.0
 
-    orb = cv2.ORB_create(nfeatures=3000)
+    orb = cv2.ORB_create(nfeatures=5000, scaleFactor=1.2, nlevels=8)
     kp1, des1 = orb.detectAndCompute(g_tmpl, None)
     kp2, des2 = orb.detectAndCompute(g_src_s, None)
 
-    if des1 is None or des2 is None or len(kp1) < 4 or len(kp2) < 4:
+    if des1 is None or des2 is None or len(kp1) < 8 or len(kp2) < 8:
         print("[特征匹配] 特征点不足，无法匹配", file=sys.stderr)
-        return None
+        return None, info
 
-    bf      = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
     matches = bf.knnMatch(des1, des2, k=2)
-
-    # Lowe's ratio test
-    good = [m for m, n in matches if m.distance < 0.75 * n.distance]
+    good = []
+    for pair in matches:
+        if len(pair) < 2:
+            continue
+        m, n = pair
+        if m.distance < 0.7 * n.distance:
+            good.append(m)
+    info["good"] = len(good)
     print(f"[特征匹配] 有效匹配点数: {len(good)} / {len(matches)}", file=sys.stderr)
 
     if len(good) < min_matches:
-        print(f"[特征匹配] 有效匹配点数({len(good)})不足 {min_matches}，匹配失败", file=sys.stderr)
-        return None
+        print(f"[特征匹配] 有效匹配点数({len(good)})不足 {min_matches}", file=sys.stderr)
+        return None, info
+
+    # 取距离最好的前 N 个，减少噪声
+    good = sorted(good, key=lambda m: m.distance)[: min(400, len(good))]
 
     pts1 = np.float32([kp1[m.queryIdx].pt for m in good])
-    pts2 = np.float32([kp2[m.trainIdx].pt for m in good]) / scale  # 还原到原始尺寸
+    pts2 = np.float32([kp2[m.trainIdx].pt for m in good]) / scale
 
-    H, mask = cv2.findHomography(pts2, pts1, cv2.RANSAC, 5.0)
+    H, mask = cv2.findHomography(pts2, pts1, cv2.RANSAC, ransacReprojThreshold=3.0, maxIters=5000)
     if H is None:
         print("[特征匹配] RANSAC 单应矩阵求解失败", file=sys.stderr)
-        return None
+        return None, info
 
     inliers = int(mask.sum()) if mask is not None else 0
+    info["inliers"] = inliers
     print(f"[特征匹配] RANSAC 内点数: {inliers} / {len(good)}", file=sys.stderr)
-    if inliers < 8:
+    if inliers < 15:
         print("[特征匹配] 内点数不足，结果不可靠", file=sys.stderr)
-        return None
+        return None, info
+
+    # 单应矩阵病态检测：过大缩放/剪切
+    try:
+        det = abs(np.linalg.det(H[:2, :2]))
+        if det < 0.05 or det > 20:
+            print(f"[特征匹配] 单应行列式异常 det={det:.3f}，丢弃", file=sys.stderr)
+            return None, info
+    except Exception:
+        pass
 
     aligned = cv2.warpPerspective(
         src_img, H, (tw, th),
-        flags=cv2.INTER_LANCZOS4,
+        flags=cv2.INTER_LINEAR,
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=(255, 255, 255),
     )
-    return aligned
+    return aligned, info
+
+
+def edge_overlap_score(template: np.ndarray, aligned: np.ndarray) -> float:
+    """模板边缘与对齐结果边缘的重合度（0~1），用于选择更好的对齐结果。"""
+    g1 = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+    g2 = cv2.cvtColor(aligned, cv2.COLOR_BGR2GRAY)
+    e1 = cv2.Canny(g1, 50, 150) > 0
+    e2 = cv2.Canny(g2, 50, 150) > 0
+    # 膨胀后重合
+    k = np.ones((3, 3), np.uint8)
+    e1d = cv2.dilate(e1.astype(np.uint8), k, iterations=1).astype(bool)
+    e2d = cv2.dilate(e2.astype(np.uint8), k, iterations=1).astype(bool)
+    inter = np.logical_and(e1d, e2).sum()
+    denom = max(int(e1.sum()), 1)
+    return float(inter) / float(denom)
 
 
 def parse_points(s: str) -> np.ndarray:
-    """解析形如 'x1,y1 x2,y2 x3,y3 x4,y4' 的字符串为 (4,2) ndarray"""
     pts = []
     for token in s.replace(";", " ").split():
         x_str, y_str = token.split(",")
         pts.append([float(x_str), float(y_str)])
     if len(pts) != 4:
         raise ValueError(f"需要正好4个点，实际解析到 {len(pts)} 个：{s}")
-    return order_points(np.array(pts, dtype="float32"))
+    return order_points(np.array(pts, dtype=np.float32))
 
 
 def draw_quad(image: np.ndarray, quad: np.ndarray, color=(0, 0, 255)):
@@ -189,9 +331,24 @@ def draw_quad(image: np.ndarray, quad: np.ndarray, color=(0, 0, 255)):
     labels = ["TL", "TR", "BR", "BL"]
     for (x, y), label in zip(pts, labels):
         cv2.circle(out, (x, y), max(6, image.shape[1] // 200), (0, 255, 0), -1)
-        cv2.putText(out, label, (x + 10, y - 10), cv2.FONT_HERSHEY_SIMPLEX,
-                    image.shape[1] / 1000, (255, 0, 0), max(2, image.shape[1] // 500))
+        cv2.putText(
+            out, label, (x + 10, y - 10), cv2.FONT_HERSHEY_SIMPLEX,
+            max(0.4, image.shape[1] / 1200), (255, 0, 0), max(1, image.shape[1] // 500),
+        )
     return out
+
+
+def warp_quad(src_img: np.ndarray, src_quad: np.ndarray, dst_quad: np.ndarray,
+              out_w: int, out_h: int) -> np.ndarray:
+    M = cv2.getPerspectiveTransform(
+        src_quad.astype(np.float32), dst_quad.astype(np.float32)
+    )
+    return cv2.warpPerspective(
+        src_img, M, (out_w, out_h),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(255, 255, 255),
+    )
 
 
 def main():
@@ -200,102 +357,130 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--template", required=True, help="模板图片路径（如 dq123.png）")
-    parser.add_argument("--input", required=True, help="手填照片路径（如 4455667788.jpg）")
+    parser.add_argument("--template", required=True, help="模板图片路径（如 template/dq.png）")
+    parser.add_argument("--input", required=True, help="手填照片路径")
     parser.add_argument("--output", required=True, help="输出对齐后图片路径")
     parser.add_argument("--src-points", default=None,
-                        help="手动指定照片中表格四个角点，格式 'x1,y1 x2,y2 x3,y3 x4,y4'")
+                        help="手动指定照片四个角点 'x1,y1 x2,y2 x3,y3 x4,y4'")
     parser.add_argument("--dst-points", default=None,
-                        help="手动指定模板中表格四个角点，格式同上")
-    parser.add_argument("--min-area-ratio", type=float, default=0.15,
-                        help="自动检测时，轮廓面积占图片总面积的最小比例阈值，默认0.15")
+                        help="手动指定模板四个角点（一般不必；模板会强制轴对齐）")
+    parser.add_argument("--min-area-ratio", type=float, default=0.12,
+                        help="轮廓面积占全图最小比例，默认 0.12")
     parser.add_argument("--debug", action="store_true",
-                        help="额外保存角点标注图（<output>_debug_src.png / _debug_dst.png），用于人工核对")
+                        help="保存角点调试图")
     parser.add_argument("--overlay", default=None,
-                        help="额外输出一张模板与对齐结果的半透明叠加对比图路径")
+                        help="输出模板边缘叠加对比图")
+    parser.add_argument("--no-axis-align-template", action="store_true",
+                        help="不对模板角点做轴对齐（默认会轴对齐，减少模板检测抖动导致的歪斜）")
     args = parser.parse_args()
 
     template = _imread(args.template)
-    src_img  = _imread(args.input)
-
+    src_img = _imread(args.input)
     if template is None:
         sys.exit(f"错误：无法读取模板图片 {args.template}")
     if src_img is None:
         sys.exit(f"错误：无法读取输入图片 {args.input}")
 
     th, tw = template.shape[:2]
+    target_aspect = tw / float(th)  # 约 0.707 for 1052x1487
 
-    # ---- 获取模板中表格的四个角点 ----
+    # ---- 模板角点 ----
     if args.dst_points:
         dst_quad = parse_points(args.dst_points)
-        print(f"[模板] 使用手动指定的角点：\n{dst_quad}")
+        print(f"[模板] 手动角点：\n{dst_quad}")
     else:
-        dst_quad, ratio = detect_quad(template, args.min_area_ratio)
+        dst_quad, ratio = detect_quad(template, args.min_area_ratio, target_aspect=target_aspect)
         if dst_quad is None:
-            sys.exit(
-                "错误：未能在模板图片中自动检测到表格边框。\n"
-                "请使用 --dst-points 手动指定四个角点坐标，例如：\n"
-                '  --dst-points "42,216 1933,216 1933,2754 42,2754"'
+            # 模板检测失败：使用整幅画布（模板本身即标准页）
+            margin = 0
+            dst_quad = np.array(
+                [[margin, margin], [tw - 1 - margin, margin],
+                 [tw - 1 - margin, th - 1 - margin], [margin, th - 1 - margin]],
+                dtype=np.float32,
             )
-        print(f"[模板] 自动检测到表格边框（占图片面积 {ratio:.1%}）：\n{dst_quad}")
+            print("[模板] 未检出内框，使用整幅画布四角")
+        else:
+            print(f"[模板] 自动检出边框（面积比 {ratio:.1%}）：\n{dst_quad}")
 
-    # ---- 获取照片中表格的四个角点 ----
-    feature_fallback = False
+    # 关键：模板已是正视图，强制轴对齐外接矩形，避免检测抖动导致顶边不水平→整图歪
+    if not args.no_axis_align_template:
+        before = dst_quad.copy()
+        dst_quad = axis_aligned_quad(dst_quad)
+        if not np.allclose(before, dst_quad, atol=1.5):
+            print(f"[模板] 已轴对齐目标角点（消除检测抖动引入的歪斜）：\n{dst_quad}")
+
+    # ---- 照片角点 / 特征对齐 ----
+    candidates = []  # (name, aligned_img, meta)
+
+    src_quad = None
     if args.src_points:
         src_quad = parse_points(args.src_points)
-        print(f"[照片] 使用手动指定的角点：\n{src_quad}")
+        print(f"[照片] 手动角点：\n{src_quad}")
+        aligned_q = warp_quad(src_img, src_quad, dst_quad, tw, th)
+        sc = edge_overlap_score(template, aligned_q)
+        candidates.append(("manual_quad", aligned_q, {"score": sc, "src_quad": src_quad}))
+        print(f"[照片] 手动四点对齐 边缘重合={sc:.3f}")
     else:
-        src_quad, ratio = detect_quad(src_img, args.min_area_ratio)
-        if src_quad is None:
-            print(
-                "[照片] 四边形轮廓检测失败，尝试 ORB 特征点匹配兜底...",
-                file=sys.stderr
-            )
-            feature_fallback = True
+        src_quad, ratio = detect_quad(src_img, args.min_area_ratio, target_aspect=target_aspect)
+        if src_quad is not None:
+            qscore = _rect_score(src_quad, src_img.shape, target_aspect=target_aspect)
+            print(f"[照片] 自动检出边框（面积比 {ratio:.1%}，质量分 {qscore:.2f}）：\n{src_quad}")
+            aligned_q = warp_quad(src_img, src_quad, dst_quad, tw, th)
+            sc = edge_overlap_score(template, aligned_q)
+            candidates.append(("quad", aligned_q, {"score": sc, "qscore": qscore, "ratio": ratio}))
+            print(f"[照片] 四点透视对齐 边缘重合={sc:.3f}")
         else:
-            print(f"[照片] 自动检测到表格边框（占图片面积 {ratio:.1%}）：\n{src_quad}")
+            print("[照片] 四边形检测失败", file=sys.stderr)
 
-    if args.debug:
-        debug_src_path = args.output + "_debug_src.png"
-        debug_dst_path = args.output + "_debug_dst.png"
-        if not feature_fallback:
-            _imwrite(debug_src_path, draw_quad(src_img, src_quad))
-        _imwrite(debug_dst_path, draw_quad(template, dst_quad))
-        print(f"[调试] 已保存角点标注图：{debug_src_path} , {debug_dst_path}")
-        print("       请打开查看红框绿点是否准确落在表格四角，若不准确请改用 --src-points/--dst-points 手动指定")
+    # 始终尝试 ORB，与四点结果比质量（很多歪图是因为四点抓错）
+    aligned_f, finfo = align_by_features(template, src_img, min_matches=20)
+    if aligned_f is not None:
+        sc = edge_overlap_score(template, aligned_f)
+        candidates.append(("orb", aligned_f, {"score": sc, **finfo}))
+        print(f"[照片] ORB 特征对齐 边缘重合={sc:.3f} 内点={finfo.get('inliers')}")
 
-    # ---- 计算透视变换矩阵，并将照片warp到模板画布大小 ----
-    if feature_fallback:
-        # 使用特征匹配直接求单应矩阵
-        aligned = align_by_features(template, src_img)
-        if aligned is None:
-            sys.exit(
-                "错误：ORB 特征匹配也失败，无法对齐照片。\n"
-                "请使用 --src-points 手动指定照片中表格的四个角点坐标。"
-            )
-        print("[照片] 特征匹配对齐成功")
-    else:
-        M = cv2.getPerspectiveTransform(src_quad, dst_quad)
-        aligned = cv2.warpPerspective(
-            src_img, M, (tw, th),
-            flags=cv2.INTER_LANCZOS4,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=(255, 255, 255),
+    if not candidates:
+        sys.exit(
+            "错误：无法对齐照片（四边形与 ORB 均失败）。\n"
+            "请保证纸张四角完整入镜、背景对比明显，或使用 --src-points 手动指定四角。"
         )
 
+    # 选边缘重合最高者；四点质量过差时优先 ORB
+    def rank(item):
+        name, img, meta = item
+        s = float(meta.get("score") or 0)
+        if name == "quad" and float(meta.get("qscore") or 0) < 0.5:
+            s -= 0.15  # 劣质四点降权
+        if name == "orb":
+            s += 0.02  # 同分略偏好特征（更贴模板）
+        return s
+
+    best_name, aligned, best_meta = max(candidates, key=rank)
+    print(f"[选定] 使用 {best_name} 对齐（边缘重合={best_meta.get('score', 0):.3f}）")
+
+    if args.debug:
+        debug_dst = args.output + "_debug_dst.png"
+        _imwrite(debug_dst, draw_quad(template, dst_quad))
+        if src_quad is not None:
+            debug_src = args.output + "_debug_src.png"
+            _imwrite(debug_src, draw_quad(src_img, src_quad))
+            print(f"[调试] 角点图: {debug_src} , {debug_dst}")
+        else:
+            print(f"[调试] 模板角点图: {debug_dst}")
+
     _imwrite(args.output, aligned)
-    print(f"完成：已生成对齐后的图片 -> {args.output} （尺寸与模板一致：{tw}x{th}）")
+    print(f"完成：{args.output} （{tw}x{th}）")
 
     if args.overlay:
-        # 半透明叠加：模板轮廓线（红）叠加在对齐后的照片上，便于肉眼核对是否完全重叠
         template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
         edges = cv2.Canny(template_gray, 50, 150)
         edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=1)
         overlay_img = aligned.copy()
-        overlay_img[edges > 0] = (0, 0, 255)  # 模板边线标红，叠加在对齐后的照片上
+        overlay_img[edges > 0] = (0, 0, 255)
         _imwrite(args.overlay, overlay_img)
-        print(f"完成：已生成叠加对比图 -> {args.overlay}")
+        print(f"完成：叠加对比图 {args.overlay}")
 
 
 if __name__ == "__main__":
+    _force_utf8_stdio()
     main()

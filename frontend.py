@@ -406,7 +406,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)  # 通过 markdown 注入上面拼接的 Hero html 代码，允许 HTML 标签渲染
 
-tab1, tab2 = st.tabs(["📷 处理作业票", "📊 AI 看板"])  # 在主面板创建两个大标签 Tab：📷 处理作业票 以及 📊 AI 看板
+tab1, tab2 = st.tabs(["📷 处理作业票", "📊 数据看板"])  # 处理 / 历史数据
 
 
 # ==================== Tab 1: 作业票智能感知、分析与反思执行流程 ====================
@@ -457,8 +457,8 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
 
     # ---- 文件拖拽选择器 ----
     if st.session_state.get("show_uploader"):  # 判断如果控制显示上传面板的标志为真
-        chosen_type = st.radio("选择作业票类型", ["带气作业票", "动火作业票"], index=0, horizontal=True)
-        st.session_state.selected_ticket_type = chosen_type
+        st.caption("作业票类型：**带气作业票**（本系统仅支持带气）")
+        st.session_state.selected_ticket_type = "带气作业票"
         # 动态传入后缀 key 强制在点击“重新上传”后复位组件
         uploader_key = f"fu_main_{st.session_state.uploader_key_suffix}"
         picked = st.file_uploader("选择图片", type=["jpg","jpeg","png","bmp"], accept_multiple_files=False, label_visibility="collapsed", key=uploader_key)  # 显示 Streamlit 原生上传面板，限制单张图片
@@ -491,7 +491,7 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
             <div class="empty-state">
                 <div class="empty-icon">🛡️</div>
                 <div class="empty-title">上传作业票照片，AI 自动完成全部分析</div>
-                <div class="empty-desc">支持：动火作业票 · 带气作业票 · 临时用电作业票</div>
+                <div class="empty-desc">当前主流程：带气作业票（对齐拍照上传后点「处理」）</div>
                 <div class="empty-action">点击上方 <b>📤 上传</b> 选择照片开始分析</div>
             </div>
             """, unsafe_allow_html=True)  # 渲染高质感的空状态面板 HTML 代码
@@ -723,160 +723,178 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
             st.dataframe(pd.DataFrame(rows), use_container_width=True, height=min(len(rows)*28+30, 200))  # 渲染精美的数据表报表汇总视图
 
 
-# ==================== Tab 2: 历史作业票数据总看板与数据删除流 ====================
-with tab2:  # 进入第二个 Tab 页签渲染上下文环境
-    import sqlite3  # 引入本地嵌入式数据库驱动模块 SQLite
-    db_path = os.path.join(os.path.dirname(__file__), "security_data.db")  # 定位并合成数据保存的目标数据库路径
-    _del_pwd = _cfg.get("delete_password", "123")  # 从配置字典中提取用于物理删除的安全验证码（默认 123）
+# ==================== Tab 2: 数据看板（精简） ====================
+with tab2:
+    import sqlite3
+    db_path = os.path.join(os.path.dirname(__file__), "security_data.db")
+    _del_pwd = _cfg.get("delete_password", "123")
 
-    if not os.path.exists(db_path):  # 检查物理数据库文件是否尚未建立
-        st.caption("📭 暂无数据，处理作业票后自动保存。")  # 若无文件，显示灰色提示词说明
-    else:  # 若数据库文件已建立并可用
-        conn = None  # 初始化连接变量为 None
-        try:  # 开启数据库异常监视防护
-            conn = sqlite3.connect(db_path)  # 建立与 security_data.db 数据库的连接句柄
-            try:  # 开启首次数据拉取
-                rows_db = conn.execute("SELECT id,ticket_id,station_name,content,work_time,worker_id,check_date,has_abnormal,approval_opinion,risk_level,approval_status,approval_level,created_at,image_path FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()  # 降序查询所有安全监督归档行
-            except Exception:  # 若查询发生字段异常（例如旧库结构版本不一致）
-                try:  # 尝试兼容查询
-                    rows_db = conn.execute("SELECT id,ticket_id,station_name,content,work_time,worker_id,check_date,has_abnormal,approval_opinion,risk_level,approval_status,approval_level,created_at,image_path FROM hse_fire_work_tickets ORDER BY id DESC").fetchall()  # 降序查询
-                except Exception:  # 二次失败说明库表损坏
-                    rows_db = []  # 重置数据列表为空
+    st.caption("历史带气作业票 · 作业等级一级/二级 · 审批：自动通过 / 待审批(钉钉人工) / 已驳回")
 
-            total = len(rows_db)  # 计算库内已存储的作业票总数记录行数
-            abn_cnt = sum(1 for r in rows_db if r[7])  # 计算字段 has_abnormal(位置7) 值为真的高危隐患记录数
+    if not os.path.exists(db_path):
+        st.caption("📭 暂无数据，在「处理作业票」中处理后自动入库。")
+    else:
+        conn = None
+        try:
+            conn = sqlite3.connect(db_path)
+            try:
+                rows_db = conn.execute(
+                    "SELECT id,ticket_id,station_name,content,work_time,worker_id,check_date,"
+                    "has_abnormal,approval_opinion,risk_level,approval_status,approval_level,"
+                    "created_at,image_path FROM hse_fire_work_tickets ORDER BY id DESC"
+                ).fetchall()
+            except Exception:
+                rows_db = []
 
-            # 全局指标大横幅卡片组渲染展示
-            render_kpi_row([  # 调用 KPI 卡片组件展示看板四大核心总统计数
-                ("总票数", str(total), ""),  # 数据库存储的历史作业票总量
-                ("有隐患", str(abn_cnt), "#d6131c" if abn_cnt else "#059669"),  # 发现隐患数（有隐患红，无隐患绿）
-                ("正常", str(total - abn_cnt), "#059669"),  # 合规正常通过的作业票数
-                ("隐患率", f"{abn_cnt/total*100:.0f}%" if total else "0%", ""),  # 隐患发生率百分比
-            ])  # 结束指标卡片定义
+            total = len(rows_db)
+            abn_cnt = sum(1 for r in rows_db if r[7])
+            auto_cnt = sum(1 for r in rows_db if (r[10] or "") == "自动通过")
+            human_cnt = sum(1 for r in rows_db if (r[10] or "") in ("待审批", "已驳回"))
 
-            # 统计高频高危隐患发生频次的前五项（Top 5 Rank）
-            issue_counter = {}  # 初始化隐患频次统计词典
-            try:  # 开启隐患字段反序列化解析过程防护
-                for (ij,) in conn.execute("SELECT issues_json FROM hse_fire_work_tickets WHERE has_abnormal=1").fetchall():  # 获取所有异常作业票的 issues_json 隐患详情字段数据
-                    if ij:  # 确保字段非空
-                        for item in json.loads(ij):  # 反序列化隐患列表，遍历每一项问题
-                            n = item.get("item_name", "未知")  # 获取问题发生的违规项目名称，默认未知
-                            issue_counter[n] = issue_counter.get(n, 0) + 1  # 频次计数累加 1
-            except Exception:  # 捕获解析过程异常
-                pass  # 安全跳过频次统计
+            # 精简 KPI：短标签，避免长文案撑歪
+            render_kpi_row([
+                ("总票数", str(total), ""),
+                ("有隐患", str(abn_cnt), "#d6131c" if abn_cnt else "#059669"),
+                ("自动通过", str(auto_cnt), "#059669"),
+                ("钉钉介入", str(human_cnt), "#0052CC" if human_cnt else ""),
+            ])
 
-            if issue_counter:  # 若发现至少一项隐患记录频次
-                top5 = sorted(issue_counter.items(), key=lambda x: -x[1])[:5]  # 按发生次数进行降序排序，截取前 5 位高危项
-                render_kpi_row([(name, f"{count}次", "#d6131c") for name, count in top5])  # 渲染一整排高频隐患红色高亮警告卡片组
-        finally:  # 最终关闭清理
-            if conn:  # 判断连接有效
-                conn.close()  # 回收数据库句柄连接资源并归还系统
-                conn = None  # 置空变量
+            # 高频问题 Top5：标题缩短，名称过长截断
+            issue_counter = {}
+            try:
+                for (ij,) in conn.execute(
+                    "SELECT issues_json FROM hse_fire_work_tickets WHERE has_abnormal=1"
+                ).fetchall():
+                    if not ij:
+                        continue
+                    for item in json.loads(ij):
+                        n = item.get("item_name") or "其他"
+                        # 看板展示用短名
+                        if len(n) > 12:
+                            n = n[:12] + "…"
+                        issue_counter[n] = issue_counter.get(n, 0) + 1
+            except Exception:
+                pass
 
-        # 历史记录确认物理删除提示弹窗 (Dialog)
-        if st.session_state.delete_id:  # 判断当前是否已触发了对某一条 ID 记录行的删除行为
-            @st.dialog("🗑️ 确认删除", width="small")  # 使用 Streamlit 官方自带的 dialog 模态弹框装饰器，宽度为小
-            def confirm_delete():  # 定义弹框内部的交互函数
-                st.warning(f"确定要永久删除记录 **#{st.session_state.delete_id}** 吗？")  # 渲染安全警告提示语
-                pwd = st.text_input("请输入删除权限验证码", type="password")  # 渲染验证码输入框，并使用密码字符隐藏
-                fc1, fc2 = st.columns(2)  # 对话框内按钮排版左右划分
-                with fc1:  # 左栏
-                    if st.button("✅ 确认", type="primary", use_container_width=True):  # 确认按键，设为红色主格按键样式
-                        if pwd == _del_pwd:  # 判断输入的密码与配置的 delete_password 是否一致
-                            try:  # 启动删除流程防崩溃
-                                c2 = sqlite3.connect(db_path)  # 重新建立独立的 SQLite 删除通道连接句柄
-                                c2.execute("DELETE FROM hse_fire_work_tickets WHERE id=?", (st.session_state.delete_id,))  # 执行 DELETE 物理删除删除数据库对应主键行
-                                c2.commit()  # 提交执行以使事务在磁盘生效永久固化
-                            except Exception as e:  # 捕获可能出现的报错情况
-                                st.error(f"删除失败: {e}")  # 弹红色错误
-                            finally:  # 清理
-                                c2.close()  # 安全关闭删除通道
-                            st.session_state.delete_id = None  # 复位清空删除 ID 状态变量
-                            st.rerun()  # 触发 Streamlit 重绘刷新，重置看板记录列表
-                        else: st.error("验证码错误，请重试")  # 提示密码不匹配
-                with fc2:  # 右栏
-                    if st.button("❌ 取消", use_container_width=True):  # 取消删除按键
-                        st.session_state.delete_id = None  # 仅清空删除 ID，不执行任何数据库指令
-                        st.rerun()  # 触发重绘重写关闭模态弹窗
-            confirm_delete()  # 执行该弹窗组件函数
+            if issue_counter:
+                st.markdown("**高频问题 Top5**")
+                top5 = sorted(issue_counter.items(), key=lambda x: -x[1])[:5]
+                render_kpi_row([(name, f"{count}", "#d6131c") for name, count in top5])
+        finally:
+            if conn:
+                conn.close()
+                conn = None
 
-        # 数据表单多维搜索框（基于原生 Streamlit Form 封装以降低重绘频次，提高输入流畅度）
-        with st.form("search_form", clear_on_submit=False):  # 创建搜索表单
-            sf1, sf2 = st.columns([5, 1])  # 比例为 5:1 的检索输入布局划分
-            with sf1:  # 检索列
-                search = st.text_input("🔍 搜索票号", placeholder="输入票号模糊查询...", label_visibility="collapsed")  # 渲染搜索框输入，隐藏顶部的自带 Label 提示以防破坏紧凑感
-            with sf2:  # 按钮列
-                st.form_submit_button("🔍 搜索", use_container_width=True)  # 渲染触发提交并检索的表单提交按键
+        if st.session_state.delete_id:
+            @st.dialog("确认删除", width="small")
+            def confirm_delete():
+                st.warning(f"删除记录 #{st.session_state.delete_id}？不可恢复。")
+                pwd = st.text_input("删除验证码", type="password")
+                fc1, fc2 = st.columns(2)
+                with fc1:
+                    if st.button("确认", type="primary", use_container_width=True):
+                        if pwd == _del_pwd:
+                            try:
+                                c2 = sqlite3.connect(db_path)
+                                c2.execute(
+                                    "DELETE FROM hse_fire_work_tickets WHERE id=?",
+                                    (st.session_state.delete_id,),
+                                )
+                                c2.commit()
+                            except Exception as e:
+                                st.error(f"删除失败: {e}")
+                            finally:
+                                c2.close()
+                            st.session_state.delete_id = None
+                            st.rerun()
+                        else:
+                            st.error("验证码错误")
+                with fc2:
+                    if st.button("取消", use_container_width=True):
+                        st.session_state.delete_id = None
+                        st.rerun()
+            confirm_delete()
 
-        # 看板核心列表：遍历渲染历史记录条目列表
-        for row in rows_db:  # 遍历从数据库查出的所有历史作业票记录元组
-            rid = row[0]  # 提取数据库自增唯一 ID 号 rid
-            ticket = row[1]  # 提取历史识别所得票号 ticket_id
-            station = row[2]  # 提取场站中文名称 station_name
-            content = row[3]  # 提取作业内容
-            work_time = row[4]  # 提取作业时间
-            worker = row[5]  # 提取填表人姓名/工号 worker_id
-            date = row[6]  # 提取自检日期数据 check_date
-            abnormal = row[7]  # 提取是否存在隐患的布尔标记 has_abnormal (0/1)
-            opinion = row[8]  # 提取智能决策审核意见 approval_opinion
-            risk = row[9]  # 提取安全风险级别评估文字 risk_level
-            ap_status = row[10]  # 提取智能审批流的当前状态
-            ap_level = row[11]  # 提取智能审批审批人的建议级别
-            created = row[12]  # 提取数据库记录插入时间戳字符串 created_at
-            img_path = row[13]  # 提取原始作业票图片在本地硬盘的实际存放物理路径
-            
-            if search and search.lower() not in (ticket or "").lower():  # 检查如果开启了搜索框检索，且当前行票号并不匹配所查文字
-                continue  # 跳过这一行，不予以渲染展示
-                
-            icon = "🚨" if abnormal else "✅"  # 根据有无隐患为折叠面板的摘要头配置表情标志（异常为红色警铃，正常为绿色对勾）
-            badge_md = render_record_badge(risk, abnormal)  # 根据风险等级使用组件返回彩色 markdown 字体片段，如 " | :red[重大]"
+        with st.form("search_form", clear_on_submit=False):
+            sf1, sf2 = st.columns([5, 1])
+            with sf1:
+                search = st.text_input(
+                    "搜索", placeholder="票号关键字…", label_visibility="collapsed",
+                )
+            with sf2:
+                st.form_submit_button("搜索", use_container_width=True)
 
-            cm, cd = st.columns([9, 1])  # 将这一行分为 9:1 的两大部分列容器
-            with cm:  # 记录信息大折叠面板列
-                with st.expander(f"{icon} #{rid} | {ticket} | {station} | {date}{badge_md}", expanded=False):  # 新建默认折叠的 Expander 面板，头包含票号场站及彩色风险级标签
-                    ca, cb = st.columns(2)  # 折叠内部左右 1:1 分栏以对齐排版
-                    with ca: st.markdown(
-                        f"**票号** {ticket}  \n"
-                        f"**作业单位** {station}  \n"
-                        f"**作业时间** {work_time}  \n"
-                        f"**作业内容** {content}  \n"
-                        f"**作业人姓名及证书编号** {worker}  \n"
-                        f"**日期** {date}"
+        for row in rows_db:
+            rid = row[0]
+            ticket = row[1] or "-"
+            station = row[2] or "-"
+            content = row[3] or ""
+            work_time = row[4] or ""
+            worker = row[5] or ""
+            date = row[6] or ""
+            abnormal = row[7]
+            opinion = row[8] or ""
+            grade = row[9] or "-"  # 作业等级 一级/二级
+            ap_status = row[10] or "-"
+            created = row[12] or ""
+            img_path = row[13]
+
+            if search and search.lower() not in (ticket or "").lower():
+                continue
+
+            icon = "🚨" if abnormal else "✅"
+            badge_md = render_record_badge(grade, abnormal)
+            # 标题精简：票号 | 单位 | 等级 | 审批
+            title = f"{icon} {ticket} · {station} · {grade} · {ap_status}{badge_md}"
+
+            cm, cd = st.columns([9, 1])
+            with cm:
+                with st.expander(title, expanded=False):
+                    # 单列短标签，避免左右栏文字对不齐
+                    st.markdown(
+                        f"| 项目 | 内容 |\n"
+                        f"|---|---|\n"
+                        f"| 票号 | {ticket} |\n"
+                        f"| 单位 | {station} |\n"
+                        f"| 内容 | {content[:40]}{'…' if len(content) > 40 else ''} |\n"
+                        f"| 时间 | {work_time or date} |\n"
+                        f"| 作业人 | {worker} |\n"
+                        f"| 作业等级 | {grade}"
+                        f"{'（一级危险最高）' if grade == '一级' else ''} |\n"
+                        f"| 状态 | {'有隐患' if abnormal else '正常'} |\n"
+                        f"| 审批 | {ap_status} |\n"
+                        f"| 路径 | "
+                        + {
+                            "自动通过": "系统自动通过",
+                            "待审批": "钉钉人工介入",
+                            "已驳回": "钉钉禁止放行",
+                        }.get(ap_status, "-")
+                        + " |\n"
                     )
-                    with cb:  # 右侧栏
-                        st.markdown(f"**状态** {'🔴 有隐患' if abnormal else '🟢 正常'}")
-                        if risk:
-                            st.markdown(f"**作业等级** {risk}" + ("（一级危险最高）" if risk == "一级" else ""))
-                        if ap_status:
-                            # 待审批/已驳回：人工介入路径 = MCP 推送钉钉 AI 表格
-                            ap_hint = {
-                                "自动通过": "系统自动通过",
-                                "待审批": "人工介入：MCP 已/将推送钉钉 AI 表格",
-                                "已驳回": "禁止放行：MCP 已/将推送钉钉 AI 表格",
-                            }.get(ap_status, "")
-                            st.markdown(f"**审批** {ap_status}" + (f"  \n_{ap_hint}_" if ap_hint else ""))
-                        st.caption(f"处理: {created}")
-                        if opinion:
-                            st.caption(f"建议: {opinion}")
-                    
-                    # 看板详情内部的图片查看及导出下载功能
-                    if img_path and os.path.exists(img_path):  # 校验该本地图片路径有效并且磁盘物理文件确实完好存在
-                        dc1, dc2 = st.columns(2)  # 在底部开出左右两个平分按钮
-                        with dc1:  # 左按钮：查看原图弹窗动作
-                            if st.button("🖼️ 查看原图", key=f"img_{rid}", use_container_width=True):  # 渲染查看大图的按钮，附加 rid 后缀 key
-                                @st.dialog("原图", width="large")  # 新建查看原图大尺寸 dialog 弹窗组件，设定宽度为大模式
-                                def show_orig_img(_path=img_path, _name=ticket):  # 弹窗渲染内部函数
-                                    st.image(_path, caption=_name, use_container_width=True)  # 在弹窗居中展示该本地物理大图原图
-                                show_orig_img()  # 执行弹窗渲染
-                        with dc2:  # 右按钮：直连导出下载该原图到用户个人电脑
-                            ext = os.path.splitext(img_path)[1] or ".png"  # 从路径中拆分提取图片的后缀格式，默认使用 .png
-                            dl_name = f"{ticket or f'作业票_{rid}'}{ext}"  # 合成下载文件展示的文件名，首选票号命名
-                            with open(img_path, "rb") as f:  # 以二进制制度方式打开对应的本地物理大图原图
-                                img_bytes = f.read()  # 读取全部大图字节数据流
-                            st.download_button("⬇️ 下载原图", data=img_bytes, file_name=dl_name, mime="image/png", key=f"dl_{rid}", use_container_width=True)  # 调用 Streamlit download_button 实现将原图流通过浏览器直下载保存
-                    else:  # 若物理图片发生丢失或路径发生破坏
-                        st.caption("原图不可用")  # 显示灰色字说明原图已丢失损坏
-            with cd:  # 右侧独立的红色垃圾桶物理删除动作列
+                    if opinion:
+                        st.caption(f"建议：{opinion[:120]}{'…' if len(opinion) > 120 else ''}")
+                    st.caption(f"入库：{created}")
+
+                    if img_path and os.path.exists(img_path):
+                        dc1, dc2 = st.columns(2)
+                        with dc1:
+                            if st.button("查看原图", key=f"img_{rid}", use_container_width=True):
+                                @st.dialog("原图", width="large")
+                                def show_orig_img(_path=img_path, _name=ticket):
+                                    st.image(_path, caption=_name, use_container_width=True)
+                                show_orig_img()
+                        with dc2:
+                            ext = os.path.splitext(img_path)[1] or ".png"
+                            dl_name = f"{ticket or f'ticket_{rid}'}{ext}"
+                            with open(img_path, "rb") as f:
+                                img_bytes = f.read()
+                            st.download_button(
+                                "下载原图", data=img_bytes, file_name=dl_name,
+                                mime="image/png", key=f"dl_{rid}", use_container_width=True,
+                            )
+                    else:
+                        st.caption("原图不可用")
+            with cd:
                 st.markdown("<div style='padding-top:18px'></div>", unsafe_allow_html=True)  # 注入空的 CSS padding 高度以对齐左侧大折叠卡片的垂直居中高度
                 if st.button("🗑️", key=f"del_{rid}", help=f"删除 #{rid}"):  # 渲染垃圾桶按钮，悬停提示删除该 rid 条目
                     st.session_state.delete_id = rid  # 设置删除状态标志为当前行 rid

@@ -369,32 +369,67 @@ def _merge_nearby_lines(lines, min_gap=6):
     return out
 
 
+def _median_ref_gap(img_h: int) -> float:
+    ref = _scale_ref_y_lines(img_h)
+    gaps = [ref[i + 1] - ref[i] for i in range(len(ref) - 1)]
+    return float(np.median(gaps)) if gaps else 24.0
+
+
+def _ref_match_score(peaks, img_h: int) -> float:
+    """
+    候选峰与 REF 网格的贴合分（越小越好）。
+    不只看数量是否=26，避免「漏掉首线只剩 25 条」被当成最优。
+    """
+    if not peaks:
+        return 1e12
+    ref = _scale_ref_y_lines(img_h)
+    peaks = sorted(int(y) for y in peaks)
+    med = _median_ref_gap(img_h)
+    total = 0.0
+    for ry in ref:
+        total += min(abs(ry - cy) for cy in peaks)
+    total += abs(len(peaks) - 26) * med * 0.35
+    return total
+
+
 def _pick_26_from_candidates(cands, img_h):
     """
-    候选线多于/少于 26 时，用与 REF_Y 比例最接近的子集对齐选 26 条。
+    以 REF 几何为锚，在候选峰中「单调、就近」吸附为 26 条。
+
+    关键：旧逻辑 max_d 过大（约 0.025*H≈37px，超过一行高），
+    当首条水平线漏检时，会把第 2 条线（约 +24px）错配给第 1 行，
+    导致整表少取最上方一行（ocr5 / ocr10 共用本函数，两边一起错）。
     """
-    if len(cands) == 26:
-        return cands
-    if len(cands) < 10:
-        return cands
     ref = _scale_ref_y_lines(img_h)
-    # 对每条参考线找最近候选
+    if not cands:
+        return list(ref)
+    cands = sorted(set(int(y) for y in cands))
+    med_gap = _median_ref_gap(img_h)
+    # 约 0.4 行高；典型行高 24 → max_d≈10，绝不会跨行错配
+    max_d = max(8, int(round(0.4 * med_gap)))
+
     chosen = []
     used = set()
     for ry in ref:
-        best, best_d = None, 1e9
+        best_i, best_d = None, 1e9
         for i, cy in enumerate(cands):
             if i in used:
                 continue
+            # 严格递增，禁止两条 REF 抢同一峰 / 回退
+            if chosen and cy <= chosen[-1]:
+                continue
             d = abs(cy - ry)
             if d < best_d:
-                best_d, best = d, i
-        if best is not None and best_d < max(25, img_h * 0.025):
-            used.add(best)
-            chosen.append(cands[best])
+                best_d, best_i = d, i
+        if best_i is not None and best_d <= max_d:
+            used.add(best_i)
+            chosen.append(cands[best_i])
         else:
-            chosen.append(ry)  # 该行候选缺失，用比例参考
-    return sorted(chosen)
+            y = int(ry)
+            if chosen and y <= chosen[-1]:
+                y = chosen[-1] + max(1, int(round(med_gap)))
+            chosen.append(y)
+    return chosen
 
 
 def get_y_lines(img_g):
@@ -405,9 +440,9 @@ def get_y_lines(img_g):
     若先做 ocr7 去表格线再检测，水平线被抹掉会得到 0 条。
 
     策略：
-      1) 按图像尺寸缩放检测窗，多阈值峰值检测
+      1) 按图像尺寸缩放检测窗，多阈值峰值检测（按与 REF 贴合度选最优，非只看条数）
       2) 形态学水平线增强再检
-      3) 候选数接近 26 时与标准比例网格对齐选线
+      3) 所有候选最终都经 REF 单调吸附成 26 条（补首行漏线、去重、防整表错行）
       4) 仍失败且图足够大：使用按高宽比缩放的标准对齐网格（标定几何，非乱编）
     """
     if img_g is None or img_g.size == 0:
@@ -426,18 +461,25 @@ def get_y_lines(img_g):
     band_w = max(1, x1 - x0)
 
     best = []
-    # 方法 A：多阈值墨迹投影
-    for thr_gray in (50, 70, 80, 100, 120, 140):
+    best_score = 1e12
+
+    def _consider(peaks, tag=""):
+        nonlocal best, best_score
+        if not peaks:
+            return
+        score = _ref_match_score(peaks, h)
+        if score < best_score:
+            best_score = score
+            best = peaks
+
+    # 方法 A：多阈值墨迹投影（含较弱阈值，利于检出淡的首行线）
+    for thr_gray in (50, 70, 80, 100, 120, 140, 160):
         binary = img_g < thr_gray
         row_sums = np.sum(binary[:, x0:x1], axis=1).astype(np.float64)
-        for ratio in (0.35, 0.45, 0.55, 0.65, 0.75):
+        for ratio in (0.25, 0.35, 0.45, 0.55, 0.65, 0.75):
             peaks = _detect_h_peaks(row_sums, y0, y1, band_w, ratio, nms=3)
             peaks = _merge_nearby_lines(peaks, min_gap=max(4, int(8 * sy)))
-            if len(peaks) == 26:
-                logger.info("get_y_lines: 投影检测成功 thr=%s ratio=%.2f size=%dx%d", thr_gray, ratio, w, h)
-                return peaks
-            if abs(len(peaks) - 26) < abs(len(best) - 26):
-                best = peaks
+            _consider(peaks)
 
     # 方法 B：形态学提取水平线
     try:
@@ -446,31 +488,32 @@ def get_y_lines(img_g):
         klen = max(15, int(band_w * 0.35))
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (klen, 1))
         morph = cv2.morphologyEx(bw[:, x0:x1], cv2.MORPH_OPEN, kernel)
-        row_sums = np.sum(morph > 0, axis=1).astype(np.float64)
-        # 对齐到全图 y
-        full_sums = np.zeros(h, dtype=np.float64)
-        # morph 只有 band 高度=h
         full_sums = np.sum((morph > 0), axis=1).astype(np.float64)
         for ratio in (0.25, 0.4, 0.55):
             peaks = _detect_h_peaks(full_sums, y0, y1, band_w, ratio, nms=2)
             peaks = _merge_nearby_lines(peaks, min_gap=max(4, int(8 * sy)))
-            if len(peaks) == 26:
-                logger.info("get_y_lines: 形态学检测成功 ratio=%.2f", ratio)
-                return peaks
-            if abs(len(peaks) - 26) < abs(len(best) - 26):
-                best = peaks
+            _consider(peaks)
     except Exception as e:
         logger.debug("形态学检线失败: %s", e)
 
-    # 方法 C：候选对齐到 26
-    if 15 <= len(best) <= 45:
+    # 方法 C：候选经 REF 单调吸附 → 固定 26 条（即使原先恰好 26 条也可能错位，一律吸附）
+    if len(best) >= 12:
         picked = _pick_26_from_candidates(best, h)
         if len(picked) == 26:
+            # 若吸附后相对 REF 仍然整体偏离过大，退回比例网格
+            ref = _scale_ref_y_lines(h)
+            med = _median_ref_gap(h)
+            mad = float(np.mean([abs(a - b) for a, b in zip(picked, ref)]))
+            if mad <= med * 0.75:
+                logger.info(
+                    "get_y_lines: 峰 %d 条 → REF 吸附 26 条 (mad=%.1f, size=%dx%d) first=%s",
+                    len(best), mad, w, h, picked[:3],
+                )
+                return picked
             logger.warning(
-                "get_y_lines: 原始峰 %d 条，已与标准比例网格对齐为 26 条 (size=%dx%d)",
-                len(best), w, h,
+                "get_y_lines: 吸附结果偏离 REF 过大 (mad=%.1f > %.1f)，改用比例网格",
+                mad, med * 0.75,
             )
-            return picked
 
     # 方法 D：标准对齐几何按比例缩放（仅当图尺寸合理，说明是对齐票）
     if w >= 700 and h >= 1000:
