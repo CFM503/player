@@ -1,8 +1,8 @@
 # 配置文件（含API密钥）
 config.json
 
-# 模型文件（太大，不提交）
-models/
+# 模型文件（太大，不提交）— 仅根目录 models/，不含 ocr 训练工作区
+/models/
 
 # Python
 __pycache__/
@@ -16,12 +16,18 @@ upload/
 uploads/
 archives/
 
+# 文字 OCR 训练工作区（ocr9，样本大时可本地保留）
+ocr_train_workspace/
+
+# 勾选格训练工作区（ocr10）— 允许提交样本与导出，便于多机协同训练
+# 忽略体积大的原图上传与临时 run 日志
+ocr_mark_workspace/raw/
+ocr_mark_workspace/runs/
+
 # 临时文件
 *.tmp
 *.log
 .dingtalk_cache.json
-_*.json
+# 注意：不要用 _*.json 通配，以免误伤业务配置；仅忽略明确临时文件
 *_final*.json
-_*.txt
 *去表格化.png
-

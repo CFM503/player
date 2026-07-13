@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "updated_at": "2026-07-13 23:01:14",
+  "note": "repo shared defaults for multi-machine training",
+  "ink_ratio_thresh": 0.008,
+  "min_component_area": 12,
+  "inset": 0,
+  "cross_endpoint_min": 3,
+  "cross_endpoint_max": 5,
+  "cross_min_spur_dist": 3.0,
+  "slash_line_rms": 1.2,
+  "has_sklearn_model": false
+}
