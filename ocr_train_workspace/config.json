@@ -1,0 +1,20 @@
+{
+  "device": "cpu",
+  "text_det_box_thresh": 0.2,
+  "text_det_thresh": 0.3,
+  "text_rec_score_thresh": 0.1,
+  "text_recognition_model_name": "PP-OCRv6_medium_rec",
+  "text_detection_model_name": "PP-OCRv6_medium_det",
+  "custom_rec_model_dir": "",
+  "custom_det_model_dir": "",
+  "val_ratio": 0.1,
+  "test_ratio": 0.1,
+  "min_samples_for_train": 8,
+  "default_epochs": 5,
+  "batch_size": 8,
+  "learning_rate": 0.0005,
+  "hard_score_thresh": 0.75,
+  "auto_memory_apply": true,
+  "crop_pad_px": 2,
+  "use_textline_orientation": true
+}
