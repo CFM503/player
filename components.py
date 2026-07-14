@@ -96,49 +96,45 @@ def render_ticket_kpis(d) -> None:  # 定义单张作业票的完整摘要信息
     if ap_hint:
         st.caption(ap_hint)
 
-    # 审批建议
-    if d.approval_opinion:  # 检查该作业票是否含有由 Agent 产出的审批意见文本
-        ic = APPROVAL_ICON.get(ap_status, RISK_ICON.get(d.risk_level or "", ""))  # 获取匹配状态的 emoji 徽章，作为消息前缀
-        
-        # 格式化提取的核心变量信息，末尾附加 [变量名]
-        grade_line = ""
-        gl = d.risk_level or "未识别"
-        grade_line = (
-            f"作业等级：{gl}"
-            + ("（一级危险最高）" if gl == "一级" else "")
-            + ("（识别失败·禁止兜底）" if not d.risk_level else "")
-            + " [risk_level]"
-        )
-        info_lines = [
-            f"作业票编号：{d.ticket_id or ''} [ticket_id]",
-            f"作业单位：{d.station_name or ''} [station_name]",
-            f"作业内容：{d.content or ''} [content]",
-            f"作业时间：{d.work_time or ''} [work_time]",
-            f"作业人姓名及证书编号：{d.worker_id or ''} [worker_id]",
-        ]
-        if grade_line:
-            info_lines.append(grade_line)
-        info_lines += [
-            f"发起人签字确认：{d.approver_name or ''} [approver_name]",
-            f"作业人员：{d.operators or ''} [operators]",
-            f"施工方现场负责人：{d.construction_leader or ''} [construction_leader]",
-            f"监理人员：{d.supervisor or ''} [supervisor]",
-            f"项目公司监护人：{d.company_monitor or ''} [company_monitor]",
-            f"带气现场负责人：{d.gas_leader or ''} [gas_leader]",
-        ]
-        if ap_hint:
-            info_lines.append(f"审批路径：{ap_hint}")
-        info_block = "\n\n".join(info_lines)
-        
-        # 拼接审批结果与核心信息
-        full_text = f"{ic} {d.approval_opinion}\n\n---\n\n{info_block}"
-        
-        if ap_status == "已驳回":  # 禁止放行 → 钉钉人工介入
-            st.error(full_text)
-        elif ap_status == "待审批":  # 人工介入：MCP 推送钉钉 AI 表格
-            st.warning(full_text)
-        else:  # 自动通过
-            st.success(full_text)
+    # 审批建议（始终展示，禁止因空字段整块消失）
+    ic = APPROVAL_ICON.get(ap_status, RISK_ICON.get(d.risk_level or "", ""))
+    opinion = (d.approval_opinion or "").strip()
+    if not opinion:
+        opinion = "（未生成审批建议文本，请查看运行日志中的 Act/审批步骤）"
+
+    gl = d.risk_level or "未识别"
+    grade_line = (
+        f"作业等级：{gl}"
+        + ("（一级危险最高）" if gl == "一级" else "")
+        + ("（识别失败·禁止兜底）" if not d.risk_level else "")
+        + " [risk_level]"
+    )
+    info_lines = [
+        f"作业票编号：{d.ticket_id or ''} [ticket_id]",
+        f"作业单位：{d.station_name or ''} [station_name]",
+        f"作业内容：{d.content or ''} [content]",
+        f"作业时间：{d.work_time or ''} [work_time]",
+        f"作业人姓名及证书编号：{d.worker_id or ''} [worker_id]",
+        grade_line,
+        f"发起人签字确认：{d.approver_name or ''} [approver_name]",
+        f"作业人员：{d.operators or ''} [operators]",
+        f"施工方现场负责人：{d.construction_leader or ''} [construction_leader]",
+        f"监理人员：{d.supervisor or ''} [supervisor]",
+        f"项目公司监护人：{d.company_monitor or ''} [company_monitor]",
+        f"带气现场负责人：{d.gas_leader or ''} [gas_leader]",
+    ]
+    if ap_hint:
+        info_lines.append(f"审批路径：{ap_hint}")
+    info_block = "\n\n".join(info_lines)
+    full_text = f"{ic} {opinion}\n\n---\n\n{info_block}"
+
+    st.markdown("**审批建议**")
+    if ap_status == "已驳回":
+        st.error(full_text)
+    elif ap_status == "待审批":
+        st.warning(full_text)
+    else:
+        st.success(full_text)
 
 
 def render_guide(step: int, text: str) -> None:  # 定义顶部操作向导提示框的渲染函数

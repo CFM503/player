@@ -163,6 +163,103 @@ def clean_thinking(text: str) -> str:  # 定义用于过滤大模型输出中包
     return text.strip()  # 去除两侧空白后返回纯净的文本字串
 
 
+def _llm_field_text(msg, *names: str) -> str:
+    """从 message 属性或 model_extra 取字符串字段。"""
+    if msg is None:
+        return ""
+    for name in names:
+        v = getattr(msg, name, None)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    extra = getattr(msg, "model_extra", None) or {}
+    if isinstance(extra, dict):
+        for name in names:
+            v = extra.get(name)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+    return ""
+
+
+def message_text_from_llm(msg) -> str:
+    """从单次 completion message 取可解析文本（只读同一次响应，不二次请求）。
+
+    优先 content 中含 JSON 的文本；content 空或无花括号时再用 reasoning_content。
+    """
+    if msg is None:
+        return ""
+    content = getattr(msg, "content", None)
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("text"):
+                parts.append(str(block["text"]))
+            elif isinstance(block, str):
+                parts.append(block)
+            else:
+                t = getattr(block, "text", None)
+                if t:
+                    parts.append(str(t))
+        content = "\n".join(parts)
+    content = (content or "").strip() if isinstance(content, str) else ""
+    reasoning = _llm_field_text(msg, "reasoning_content", "reasoning")
+
+    if content and "{" in content:
+        return content
+    if reasoning and "{" in reasoning:
+        if content:
+            safe_print("[LLM Log] content 无 JSON 花括号，改用同一次响应的 reasoning_content（不重发）")
+        else:
+            safe_print("[LLM Log] content 为空，使用同一次响应的 reasoning_content（不重发）")
+        return reasoning
+    return content or reasoning
+
+
+def parse_llm_json_object(text: str) -> dict:
+    """从模型输出中解析 JSON 对象（本地解析，不调用 LLM）。"""
+    raw = clean_thinking(text or "")
+    if not raw:
+        raise ValueError(
+            "LLM 未返回可解析的 JSON 结构（响应为空），安全审计拒绝静默兜底为空字典通过"
+        )
+    # 去掉 UTF-8 BOM / 全角空格
+    raw = raw.lstrip("\ufeff").strip()
+    try:
+        obj = json.loads(raw)
+        if isinstance(obj, dict):
+            return obj
+    except Exception as e:
+        safe_print(f"[LLM Log] JSON 直接解析失败: {e}. 尝试提取花括号段...")
+
+    candidates = []
+    m = re.search(r"(\{[\s\S]*\})", raw)
+    if m:
+        candidates.append(m.group(1))
+    for i, ch in enumerate(raw):
+        if ch == "{":
+            candidates.append(raw[i:])
+            if len(candidates) > 16:
+                break
+    for cand in candidates:
+        j = cand.rfind("}")
+        if j < 0:
+            continue
+        snippet = cand[: j + 1]
+        # 常见尾随逗号修复
+        fixed = re.sub(r",\s*([}\]])", r"\1", snippet)
+        for trial in (snippet, fixed):
+            try:
+                obj = json.loads(trial)
+                if isinstance(obj, dict):
+                    return obj
+            except Exception:
+                continue
+    head = raw[:180].replace("\n", " ")
+    raise ValueError(
+        "LLM 未返回可解析的 JSON 结构，安全审计拒绝静默兜底为空字典通过"
+        f" | 响应片段: {head!r}"
+    )
+
+
 # 带气作业票 HSE 标准（本系统仅支持带气作业票，已移除动火作业票）
 TICKET_STANDARDS = {
     "带气作业票": {
@@ -516,6 +613,29 @@ class SecuritySheetData(BaseModel):  # 定义包含完整作业票所有要素�
 # 2. LLM 大脑 (OpenAI 兼容 API)
 # ==========================================
 
+def normalize_api_model_name(model_name: str, base_url: str = "") -> str:
+    """规范化 API 模型名：DeepSeek 官方只认 deepseek-v4-flash / deepseek-v4-pro（小写连字符）。"""
+    name = (model_name or "").strip()
+    if not name:
+        return name
+    key = name.lower().replace("_", "-")
+    # 常见误写：DeepSeek-V4-Flash / deepseek-v4.flash 等
+    aliases = {
+        "deepseek-v4-flash": "deepseek-v4-flash",
+        "deepseek-v4-pro": "deepseek-v4-pro",
+        "deepseek-v4.flash": "deepseek-v4-flash",
+        "deepseek-v4.pro": "deepseek-v4-pro",
+        "deepseek/v4-flash": "deepseek-v4-flash",
+        "deepseek/v4-pro": "deepseek-v4-pro",
+    }
+    if key in aliases:
+        return aliases[key]
+    # DeepSeek 官方域名：统一成小写连字符，避免大小写 400
+    if "deepseek.com" in (base_url or "").lower() and "deepseek" in key:
+        return key
+    return name
+
+
 class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及启发式数据规整校验工作
     """通过 OpenAI 兼容协议调用线上大模型"""
 
@@ -529,11 +649,10 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
                 proxy_str = f"http://{proxy_str}"
             kwargs["http_client"] = httpx.Client(proxy=proxy_str, timeout=120.0)  # 使用 httpx 自带代理构造同步客户端实例
         self.client = OpenAI(**kwargs)  # 实例化并缓存 OpenAI 协议客户端
-        self.model_name = model_name  # 记录大模型名称，如 qwen-2.5
+        self.base_url = (base_url or "").strip()
+        self.model_name = normalize_api_model_name(model_name, base_url)  # DeepSeek 等要求精确 model id
         self._last_extract_prompt = ""  # 最近一次结构化提取发给 LLM 的完整提示词（供归档）
         self._extract_prompt_log = []  # 本轮推理/反思全部提取调用的提示词记录（含重试）
-        # None=未知；True=支持 json_object；False=不支持（LM Studio 等）。进程内记忆，避免每次先 400 再降级双发
-        self._json_object_supported = None
 
     def _extract_sign_columns(self, ocr_text: str) -> dict:
         """基于 OCR 坐标从签批区域精准提取5列签名姓名。
@@ -854,26 +973,28 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
 
         return raw_dict  # 返回整理后的新字典数据
 
+    def _is_deepseek_backend(self) -> bool:
+        base = (getattr(self, "base_url", None) or "").lower()
+        model = (self.model_name or "").lower()
+        return "deepseek.com" in base or model.startswith("deepseek")
+
     def _chat_completion(self, req: dict, prefer_json_object: bool = False):
-        """统一 chat.completions 调用：记忆后端是否支持 json_object，避免每次 400 后双发。"""
-        use_json = prefer_json_object and self._json_object_supported is not False
-        if use_json:
-            try:
-                resp = self.client.chat.completions.create(
-                    **req, response_format={"type": "json_object"}
-                )
-                self._json_object_supported = True
-                return resp
-            except Exception as e:
-                err = str(e)
-                if "response_format" in err or "json_object" in err or "json_schema" in err:
-                    self._json_object_supported = False
-                    safe_print(f"[LLM Log] 后端不支持 json_object，后续仅发文本模式: {e}")
-                    return self.client.chat.completions.create(**req)
-                raise
-        if prefer_json_object and self._json_object_supported is False:
-            safe_print("[LLM Log] 使用已缓存的文本模式（跳过 json_object）")
-        return self.client.chat.completions.create(**req)
+        """统一 chat.completions：全厂商文本模式，单次请求，不使用 json_object。
+
+        DeepSeek V4 默认 thinking=on，长 OCR 时易把 token 耗在 reasoning，
+        content 为空/截断；对 DeepSeek 在同一次请求中关闭 thinking。
+        prefer_json_object 保留兼容，已忽略。
+        """
+        payload = dict(req)
+        if self._is_deepseek_backend():
+            extra = dict(payload.get("extra_body") or {})
+            # 官方：extra_body={"thinking": {"type": "disabled"}}
+            extra["thinking"] = {"type": "disabled"}
+            payload["extra_body"] = extra
+            safe_print("[LLM Log] DeepSeek 关闭 thinking，单次文本输出 JSON")
+        elif prefer_json_object:
+            safe_print("[LLM Log] 统一文本模式输出 JSON（单次请求，不使用 json_object）")
+        return self.client.chat.completions.create(**payload)
 
     def extract_sheet_json(self, ocr_text: str) -> SecuritySheetData:  # 调用大模型执行核心 OCR 文字到作业票结构化数据的语义提取提取工作
         safe_print(f"[LLM Log] 调用 API [{self.model_name}] 进行语义分析...")  # 控制台打印系统 API 正在调用提示日志
@@ -908,7 +1029,7 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             "请严格按列的位置顺序一一对应提取，不要混淆列之间的姓名。\n"
             "OCR文本中签批区域的列头行格式通常为：「作业人员：  施工方现场负责人：  监理人员：  项目公司监护人：  带气现场负责人」，"
             "紧接着下一行或几行的手写文字就是各列对应的签名姓名，按从左到右的顺序依次对应上面5个字段。\n\n"
-            "直接输出 JSON 对象，不要添加任何 Markdown 标记或多余的解释。"
+            "【输出要求】只输出一个合法 JSON 对象，不要 Markdown 代码块，不要解释文字，不要输出思考过程。"
         )  # 结束提示词定义
 
         # (已按要求移除截断，让大模型读取完整文本，防止末尾追加的网格结果被切掉)
@@ -943,25 +1064,31 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             max_tokens=4000,  # 设定最大允许返回的 Token 数限制为 4000
             timeout=120,  # 设定客户端最大的网络超时响应时长为 120 秒
         )
+        # 全厂商统一：文本模式 + 本地 JSON 解析（单次请求；DeepSeek 关 thinking）
         response = self._chat_completion(_req, prefer_json_object=True)
 
         if not response.choices:
             raise ValueError(f"LLM 返回空 choices，请检查 base_url 是否含 /v1 及模型是否已加载: {getattr(response, 'error', response)}")
-        raw_content = response.choices[0].message.content  # 提取模型应答得到的文本字串
-        raw_content = clean_thinking(raw_content)  # 清洗掉大模型输出中多余的 think 标签及 markdown 后缀符号
-
-        try:  # 开启反序列化捕获
-            raw_dict = json.loads(raw_content)  # 尝试用系统 json 模块强转大模型返回的内容为 dict 词典对象
-        except Exception as e:  # 若转换直接报错（大模型输出含有不规整前缀字符等）
-            safe_print(f"[LLM Log] JSON 直接解析失败: {e}. 尝试用正则提取 JSON 结构...")  # 打印警告日志
-            m = re.search(r"(\{.*\})", raw_content, re.DOTALL)  # 使用大范围匹配提取被大括号包含的完整 JSON 段
-            if m:  # 若正则命中
-                try:  # 开启二级转换尝试
-                    raw_dict = json.loads(m.group(1))  # 转换大括号提取段
-                except Exception:  # 若二级转换也失败
-                    raise ValueError("LLM 返回的 JSON 结构非法，安全审计拒绝静默兜底为空字典通过")  # 安全审计: 禁止造假兜底，提取彻底失败即抛错拦截
-            else:  # 若正则未命中
-                raise ValueError("LLM 未返回可解析的 JSON 结构，安全审计拒绝静默兜底为空字典通过")  # 安全审计: 禁止造假兜底，提取彻底失败即抛错拦截
+        # 单次响应：content 优先，必要时用 reasoning_content（不重发 LLM）
+        raw_content = message_text_from_llm(response.choices[0].message)
+        if not (raw_content or "").strip():
+            safe_print("[LLM Log] 警告：content 与 reasoning 均为空")
+        try:
+            raw_dict = parse_llm_json_object(raw_content)
+        except ValueError:
+            # 再试一次：把 content 与 reasoning 拼接后本地解析（仍不重发 LLM）
+            msg = response.choices[0].message
+            combo = "\n".join(
+                x for x in (
+                    (getattr(msg, "content", None) or ""),
+                    _llm_field_text(msg, "reasoning_content", "reasoning"),
+                ) if x and str(x).strip()
+            )
+            if combo and combo != raw_content:
+                safe_print("[LLM Log] 拼接 content+reasoning 再解析（不重发请求）")
+                raw_dict = parse_llm_json_object(combo)
+            else:
+                raise
 
         sanitized = self._sanitize_sheet_data(raw_dict, ocr_text)  # 调用 _sanitize_sheet_data 使用 Python + OCR 规则进行全面的重构重构和校验
         return SecuritySheetData(**sanitized)  # 将校验规整后的字典转换为安全 Pydantic 模型 SecuritySheetData 并返回结果
@@ -2528,6 +2655,9 @@ def load_config() -> dict:
         cfg["base_url"] = os.environ.get("ONLINE_BASE_URL", "http://localhost:11434/v1")
     if not cfg.get("model_name"):
         cfg["model_name"] = os.environ.get("ONLINE_MODEL", "qwen3.5:0.8b")
+    # dingtalk：优先环境变量（管理页侧栏 publish_runtime_config 会写入），便于用户页即时同步
+    if os.environ.get("DINGTALK_MCP_URL"):
+        cfg["dingtalk_mcp_url"] = os.environ["DINGTALK_MCP_URL"]
     # dingtalk_mcp_url: no default — user must configure, or push fails
 
     return cfg

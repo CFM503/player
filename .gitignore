@@ -34,3 +34,17 @@ ocr_mark_workspace/runs/
 # 注意：不要用 _*.json 通配，以免误伤业务配置；仅忽略明确临时文件
 *_final*.json
 *去表格化.png
+
+# Node（宣传 PPT 生成脚本可选依赖）
+node_modules/
+# Office 打开 PPT 时的锁文件
+~$*
+
+# 宣传素材中间产物（保留脚本与成品 pptx）
+promo_assets/frames/
+promo_assets/slide_preview/
+promo_assets/grok_ad.mp4
+promo_assets/grok_thumb.jpg
+promo_assets/promo_clean.pptx
+promo_assets/_clean_promo.pptx
+

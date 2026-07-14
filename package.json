@@ -1,0 +1,13 @@
+{
+  "name": "player",
+  "version": "3.15.02",
+  "description": "数字化安全监督员 · 宣传 PPT 生成依赖 (pptxgenjs)",
+  "private": true,
+  "scripts": {
+    "promo": "node promo_assets/create_promo_ppt.js"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "pptxgenjs": "^4.0.1"
+  }
+}

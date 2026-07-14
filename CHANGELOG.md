@@ -1,6 +1,27 @@
 # 更新日志 (CHANGELOG)
 
+## [3.15.02] - 2026-07-14
+
+### 新增
+- **双路由 Web UI**：`frontend.py` 使用 Streamlit `st.navigation` 拆分 **提交作业票**（`user_ui.py`，默认 `/user`）与 **管理测试**（`admin_ui.py`，`/admin`）。
+- **用户页极简交互（PPT 第 4 页风格）**：胶囊条左侧 **+** 上传、右侧 **↑** 提交/重新提交；参数同步管理页侧栏（`process_helpers` 运行时配置 + `config.json`）；进度条 + 审批建议结果卡。
+- **宣传 PPT**：`数字化安全监督员_宣传.pptx`（及 `promo_assets/` 生成脚本）；自动翻页、不循环、末页停留；五阶段（感知→推理→反思→执行→总结）等宣传页文案。
+
+### 修复
+- **管理页审批建议「消失」**：处理完成后在左栏「查看原图」下方恢复 KPI + 审批建议；会话重绘时全宽补画，避免 `pending_files` 占用导致结果不重绘。
+- **LLM 结构化 JSON 解析失败**（DeepSeek V4 等）：全厂商统一 **文本模式**、不再使用 `response_format=json_object`；单次请求；DeepSeek 关闭 thinking；`content` 空时用同一次 `reasoning_content`；本地加强 JSON 抽取。
+- **DeepSeek 模型名**：规范为 `deepseek-v4-flash` / `deepseek-v4-pro`（避免 `DeepSeek-V4-Flash` 大小写 400）。
+
+### 改进
+- **`process_helpers.py`**：管理页侧栏参数实时发布到用户页；环境变量同步（含钉钉 MCP）。
+- **`components.render_ticket_kpis`**：审批建议始终展示（空文案时有占位，避免整块被吞）。
+- **日志面板高度**：`.hlog` 改为 `max-height: 420px`，避免挤掉左栏结果区。
+
+### 资产
+- 仓库增加宣传 PPT 与 `promo_assets/create_promo_ppt.js`、`inject_autoplay.py`（忽略 `node_modules` 与中间帧/视频缓存）。
+
 ## [3.15.01] - 2026-07-14
+
 
 ### 修复
 - **ocr5 / ocr10 最上方少取一行**：`get_y_lines` 不再只按峰条数选线；改为与 REF 贴合度评分，并以 **单调 + 约 0.4 行高** 吸附 26 条水平线，避免首行漏检后把第 2 条线错配给第 1 行（整表上移）。

@@ -100,10 +100,11 @@ section[data-testid="stSidebar"] {
     gap: 0.5rem !important; /* 限制列与列之间的横向间距 */
     align-items: flex-start !important; /* 控制子项在垂直方向上沿顶格对齐 */
 }
-/* 列容器约束子元素不溢出 */
+/* 列容器：限制横向撑破，允许纵向完整显示审批建议等长内容 */
 [data-testid="stColumn"] {
-    overflow: hidden !important; /* 溢出列宽宽度的多余元素直接做切割裁剪 */
-    min-width: 0 !important; /* 重置最小宽度，防止在弹性盒下撑开变形 */
+    overflow-x: hidden !important;
+    overflow-y: visible !important;
+    min-width: 0 !important;
 }
 
 /* 隐藏原生 chrome + Streamlit 原生菜单与页脚 */
@@ -548,8 +549,10 @@ div[data-baseweb="notification"] { border-radius: 10px !important; }
     line-height: 1.6 !important;
     overflow-x: hidden !important;
     overflow-y: auto !important;
-    height: calc(100vh - 160px) !important;
-    min-height: 350px !important;
+    /* 不再占满视口，避免把左侧/下方的审批建议「顶没」或难滚动 */
+    height: auto !important;
+    max-height: 420px !important;
+    min-height: 220px !important;
     box-shadow: inset 0 2px 8px rgba(0,0,0,0.35), 0 4px 14px rgba(15,23,42,0.1) !important;
     position: relative !important;
     margin-top: 8px !important;
@@ -827,3 +830,242 @@ div[data-baseweb="popover"] {
 }
 </style>
 """
+
+# 用户页：Grok / PPT 第 4 页极简风格（浅灰底 + 胶囊提示条）
+USER_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+html, body, [data-testid="stAppViewContainer"], .stApp {
+    background-color: #F5F5F7 !important;
+    color: #111111 !important;
+    color-scheme: light !important;
+}
+.stApp > header { background: transparent !important; }
+[data-testid="stHeader"] { background: transparent !important; }
+.block-container {
+    padding: 2.2rem 1.2rem 3rem 1.2rem !important;
+    max-width: 720px !important;
+    margin: 0 auto !important;
+}
+
+/* 侧栏导航保留，但更轻 */
+section[data-testid="stSidebar"] {
+    background: #F5F5F7 !important;
+    border-right: 1px solid #E5E5EA !important;
+}
+section[data-testid="stSidebar"] * { color: #3A3A3C !important; }
+
+.user-hero {
+    text-align: center;
+    padding: 2.4rem 0.5rem 1.2rem 0.5rem;
+}
+.user-hero-title {
+    font-family: Inter, system-ui, sans-serif;
+    font-size: 1.85rem;
+    font-weight: 700;
+    color: #111111;
+    letter-spacing: -0.02em;
+    margin: 0 0 0.55rem 0;
+    line-height: 1.25;
+}
+.user-hero-sub {
+    font-family: Inter, system-ui, sans-serif;
+    font-size: 0.95rem;
+    color: #8E8E93;
+    margin: 0;
+}
+
+.user-hint {
+    text-align: center;
+    color: #C7C7CC;
+    font-size: 0.82rem;
+    font-family: Inter, system-ui, sans-serif;
+    margin: 0.35rem 0 1.2rem 0;
+}
+
+.prompt-mid-text {
+    font-family: Inter, system-ui, sans-serif;
+    font-size: 0.95rem;
+    color: #111111;
+    line-height: 1.3;
+    padding: 0.45rem 0.15rem;
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.prompt-mid-text.muted { color: #8E8E93; }
+.prompt-brand-label {
+    font-family: Inter, system-ui, sans-serif;
+    font-size: 0.78rem;
+    color: #8E8E93;
+    text-align: right;
+    padding: 0.5rem 0.15rem;
+    margin: 0;
+    white-space: nowrap;
+}
+
+/* 胶囊条横向布局（用户页仅一条） */
+[data-testid="stMain"] [data-testid="stHorizontalBlock"]:has([class*="st-key-user_fu"]),
+[data-testid="stMain"] [data-testid="stHorizontalBlock"]:has([class*="st-key-user_submit"]) {
+    background: #FFFFFF !important;
+    border: 1px solid #EBEBEB !important;
+    border-radius: 999px !important;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.06) !important;
+    padding: 0.35rem 0.45rem 0.35rem 0.35rem !important;
+    max-width: 640px !important;
+    margin: 1.2rem auto 0.35rem auto !important;
+    gap: 0.35rem !important;
+    align-items: center !important;
+}
+
+/* + 上传按钮（按 key 定位，保留可点区域） */
+[class*="st-key-user_fu"] [data-testid="stFileUploader"],
+div[data-testid="stFileUploader"]:has(input) {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+}
+[class*="st-key-user_fu"] [data-testid="stFileUploaderDropzone"],
+[class*="st-key-user_fu"] [data-testid="stFileUploader"] section {
+    position: relative !important;
+    min-height: 2.35rem !important;
+    height: 2.35rem !important;
+    width: 2.35rem !important;
+    max-width: 2.35rem !important;
+    padding: 0 !important;
+    margin: 0 auto !important;
+    border: none !important;
+    border-radius: 999px !important;
+    background: #F2F2F7 !important;
+    overflow: hidden !important;
+    cursor: pointer !important;
+}
+[class*="st-key-user_fu"] [data-testid="stFileUploaderDropzone"]:hover,
+[class*="st-key-user_fu"] [data-testid="stFileUploader"] section:hover {
+    background: #E5E5EA !important;
+}
+/* 隐藏默认文案/图标，但保持可点（opacity:0 而非 display:none） */
+[class*="st-key-user_fu"] [data-testid="stFileUploaderDropzone"] > *,
+[class*="st-key-user_fu"] [data-testid="stFileUploader"] section > * {
+    opacity: 0 !important;
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+}
+[class*="st-key-user_fu"] [data-testid="stFileUploaderDropzone"]::after,
+[class*="st-key-user_fu"] [data-testid="stFileUploader"] section::after {
+    content: "+" !important;
+    position: absolute !important;
+    inset: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-size: 1.35rem !important;
+    font-weight: 500 !important;
+    color: #8E8E93 !important;
+    pointer-events: none !important;
+    font-family: Inter, system-ui, sans-serif !important;
+    opacity: 1 !important;
+}
+[class*="st-key-user_fu"] [data-testid="stFileUploaderFile"],
+[class*="st-key-user_fu"] [data-testid="stFileUploaderFileName"],
+[class*="st-key-user_fu"] [data-testid="stFileUploaderDeleteBtn"] {
+    display: none !important;
+}
+
+/* ↑ 提交 */
+[class*="st-key-user_submit"] button {
+    width: 2.35rem !important;
+    height: 2.35rem !important;
+    min-height: 2.35rem !important;
+    padding: 0 !important;
+    border-radius: 999px !important;
+    background: #111111 !important;
+    color: #FFFFFF !important;
+    border: none !important;
+    font-size: 1.05rem !important;
+    font-weight: 700 !important;
+    box-shadow: none !important;
+    line-height: 1 !important;
+}
+[class*="st-key-user_submit"] button:disabled {
+    background: #D1D1D6 !important;
+    color: #FFFFFF !important;
+}
+[class*="st-key-user_submit"] button:hover:not(:disabled) {
+    background: #2C2C2E !important;
+}
+
+
+
+/* 进度 */
+.stProgress > div > div > div > div {
+    background: linear-gradient(90deg, #5B8DEF, #2F6FED) !important;
+}
+
+/* 结果卡 */
+.result-card {
+    background: #FFFFFF;
+    border-radius: 18px;
+    box-shadow: 0 10px 36px rgba(0,0,0,0.07);
+    border: 1px solid #EFEFF4;
+    padding: 1.25rem 1.35rem;
+    margin-top: 1.1rem;
+}
+.result-kpis {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.6rem;
+    margin-bottom: 0.9rem;
+}
+.result-kpi {
+    background: #F8FAFC;
+    border-radius: 12px;
+    padding: 0.65rem 0.5rem;
+    text-align: center;
+}
+.result-kpi .v {
+    font-family: Inter, system-ui, sans-serif;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #111;
+    line-height: 1.3;
+}
+.result-kpi .l {
+    font-size: 0.72rem;
+    color: #8E8E93;
+    margin-top: 0.2rem;
+}
+.approval-box {
+    border-radius: 14px;
+    padding: 1rem 1.1rem;
+    font-family: Inter, system-ui, sans-serif;
+    font-size: 0.92rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+}
+.approval-ok { background: #ECFDF5; color: #065F46; border: 1px solid #A7F3D0; }
+.approval-wait { background: #EFF6FF; color: #1E3A8A; border: 1px solid #BFDBFE; }
+.approval-reject { background: #FEF2F2; color: #991B1B; border: 1px solid #FECACA; }
+.approval-title {
+    font-weight: 700;
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    opacity: 0.75;
+    margin-bottom: 0.45rem;
+}
+
+@media (max-width: 640px) {
+    .result-kpis { grid-template-columns: repeat(2, 1fr); }
+    .user-hero-title { font-size: 1.45rem; }
+    .block-container { padding-top: 1.2rem !important; }
+}
+</style>
+"""
+
