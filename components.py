@@ -34,11 +34,11 @@ APPROVAL_COLOR = {  # 定义审批流程各种状态的颜色配置字典
 APPROVAL_ICON = {  # 定义审批状态代表的 emoji 徽章字典
     "自动通过": "✅", "待审批": "⏳", "已驳回": "🚫",  # 通过显示对勾，等待显示沙漏，拒绝显示禁止符
 }  # 结束审批徽章定义
-# 审批状态 → 人工介入说明（人工介入 = MCP 推送钉钉 AI 表格）
+# 审批状态说明（本产品以手填漏项审核为主：无漏填通过，有漏填人工介入，不因漏填驳回）
 APPROVAL_HINT = {
-    "自动通过": "系统自动通过",
-    "待审批": "人工介入：经 MCP 推送钉钉 AI 表格，主管在钉钉侧处理",
-    "已驳回": "禁止放行：经 MCP 推送钉钉 AI 表格，主管在钉钉侧处理",
+    "自动通过": "漏填 0 项，系统自动通过",
+    "待审批": "发现漏填，需人工介入审核（钉钉）；不驳回",
+    "已驳回": "经 MCP 推送钉钉 AI 表格（系统链路异常等）",
 }
 
 
@@ -78,8 +78,8 @@ def render_kpi_row(items: list) -> None:  # 定义一整行分栏展示多个 KP
 def render_ticket_kpis(d) -> None:  # 定义单张作业票的完整摘要信息展示函数
     # 提取作业票属性生成指标栏
     rl = d.risk_level or "-"  # 提取获取风险等级，若不存在则使用 "-" 占位
-    status_color = "#d6131c" if d.has_abnormal else "#059669"  # 根据是否存在隐患判定状态卡的颜色，异常为红，正常为绿
-    status_text = f"{len(d.issues)}项" if d.has_abnormal else "正常"  # 判断状态文本：有隐患时显示隐患条数，无隐患显示正常
+    status_color = "#d6131c" if d.has_abnormal else "#059669"  # 根据是否存在异常判定状态卡的颜色，异常为红，正常为绿
+    status_text = f"{len(d.issues)}项" if d.has_abnormal else "正常"  # 判断状态文本：有异常时显示问题条数，无异常显示正常
     ap_status = d.approval_status or "-"  # 提取审批状态值，不存在默认为 "-"
     ap_color = APPROVAL_COLOR.get(ap_status, "#0052CC")  # 根据状态从颜色字典中提取对应的色值
     

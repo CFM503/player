@@ -28,84 +28,42 @@ _ver = open(os.path.join(os.path.dirname(__file__), "VERSION"), encoding="utf-8"
 # ---- 自定义主题 ----
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)  # 注入全局自定义的 CSS 样式代码到本页面以获得顶级科技白底风外观
 
-# ---- 强制展开侧边栏：清除 localStorage + 自动点击展开按钮 ----
+# ---- 侧栏展开 + 日志贴底 ----
+# 注意：不要再移动 stSidebarHeader，否则会把 frontend 的 st.logo 顶到 HSE 标题下面
 st.html("""
 <script>
 (function() {
-    // 1. 清除所有侧边栏相关 localStorage 缓存防止原生记忆
     try {
         Object.keys(localStorage).forEach(function(k) {
-            if (k.toLowerCase().indexOf('sidebar') !== -1) {
-                localStorage.removeItem(k);
-            }
+            if (k.toLowerCase().indexOf('sidebar') !== -1) localStorage.removeItem(k);
         });
     } catch(e) {}
 
-    // 2. 如果侧边栏仍处于折叠态，找到悬浮的展开按钮并点击
     function tryExpand() {
         var root = window.parent.document;
         var btn = root.querySelector('[data-testid="stExpandSidebarButton"]');
-        if (btn) {
-            btn.click();
-            return true;
-        }
+        if (btn) { btn.click(); return true; }
         return false;
     }
-    // 延迟 300 毫秒等 Streamlit DOM 全部渲染完成后执行 JavaScript 模拟展开点击
     setTimeout(function() {
         if (!tryExpand()) setTimeout(tryExpand, 500);
     }, 300);
 
-    // 3. 将 stSidebarHeader 移动到 stCaptionContainer (副标题) 的下方
-    function moveHeader() {
-        var root = window.parent.document;
-        var header = root.querySelector('[data-testid="stSidebarHeader"]');
-        var sidebar = root.querySelector('[data-testid="stSidebar"]');
-        if (!sidebar || !header) return;
-        
-        var captions = sidebar.querySelectorAll('[data-testid="stCaptionContainer"]');
-        var targetCaption = null;
-        for (var i = 0; i < captions.length; i++) {
-            if (captions[i].textContent.indexOf('HSE') !== -1) {
-                targetCaption = captions[i];
-                break;
-            }
-        }
-        
-        if (targetCaption) {
-            var container = targetCaption;
-            while (container && container.parentNode && container.parentNode.getAttribute('data-testid') !== 'stVerticalBlock') {
-                container = container.parentNode;
-            }
-            if (container && container.parentNode && header.previousSibling !== container) {
-                container.parentNode.insertBefore(header, container.nextSibling);
-            }
-        }
-    }
-    // 每 300 毫秒执行一次，保持稳定贴合
-    setInterval(moveHeader, 300);
-
-    // 自动滚动日志终端到底部
     function scrollLogs() {
         var root = window.parent.document;
-        var logs = root.querySelectorAll('.hlog');
-        logs.forEach(function(log) {
+        root.querySelectorAll('.hlog').forEach(function(log) {
             var lastHeight = log.getAttribute('data-last-height') || 0;
             var currentHeight = log.scrollHeight;
             if (currentHeight !== parseInt(lastHeight)) {
                 log.setAttribute('data-last-height', currentHeight);
-                // 延迟 50ms 等待浏览器完成最新的 DOM 渲染和排版
-                setTimeout(function() {
-                    log.scrollTop = log.scrollHeight;
-                }, 50);
+                setTimeout(function() { log.scrollTop = log.scrollHeight; }, 50);
             }
         });
     }
-    // 每 300 毫秒执行一次，保持终端滚动到底部
     setInterval(scrollLogs, 300);
 })();
 </script>
-""", unsafe_allow_javascript=True)  # 注入页面执行脚本，并使能 JavaScript 允许机制
+""", unsafe_allow_javascript=True)
 
 # ---- Session State (全局会话状态维护) ----
 if "results" not in st.session_state: st.session_state.results = []  # 若 results 未初始化，则初始化为一个空的分析结果列表
@@ -117,11 +75,8 @@ if "uploader_key_suffix" not in st.session_state: st.session_state.uploader_key_
 if "selected_ticket_type" not in st.session_state: st.session_state.selected_ticket_type = "带气作业票"
 
 
-# ---- 侧边栏配置面板 ----
+# ---- 侧边栏配置面板（Logo 已在 frontend 最上方 st.logo）----
 with st.sidebar:  # 进入侧边栏渲染上下文本环境
-    _logo_path = os.path.join(os.path.dirname(__file__), "logo.png")
-    if os.path.exists(_logo_path):
-        st.image(_logo_path, use_container_width=False)
     st.caption(f"**🛡️ 牡丹江中燃 HSE · AI Agent** `v{_ver}`")  # 渲染侧边栏主标题及对应版本号
 
     # API 基本信息配置
@@ -626,7 +581,7 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
                         if "Tool" in l: c = "lo"  # 底层工具库及外部调用调用（如 OCR / DB / Vision API）输出渲染为蓝色 text (lo)
                         elif "FAIL" in l or "出错" in l: c = "le"  # 识别错误、流程报错、异常抛出着为红色 text (le)
                         elif "OK" in l or "通过" in l or "完成" in l: c = "lk"  # 校验通过、安全检查完毕及流程结束着为绿色 text (lk)
-                        elif "重试" in l or "未通过" in l: c = "lw"  # 重试重整及隐患检查发现着为橙黄色 text (lw)
+                        elif "重试" in l or "未通过" in l: c = "lw"  # 重试重整及异常检查发现着为橙黄色 text (lw)
                     parts.append(f'<div class="{c}">{_h.escape(l)}</div>')  # 逃逸日志文本内容后包裹带有特定 CSS 着色类名的 HTML div 标签并写入列表
                 log_ph.markdown(  # 在右侧控制台占位符渲染上面整理好的 HTML 终端面板，注入 styles.py 中定义的 .hlog 类
                     f'<div class="hlog">'  # 外层深色终端主盒子
@@ -710,7 +665,7 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
                             else:
                                 st.text(ocr_out)
                     if d.issues:
-                        with st.expander(f"⚠️ 隐患明细 ({len(d.issues)})", expanded=True):
+                        with st.expander(f"⚠️ 问题明细 ({len(d.issues)})", expanded=True):
                             unimpl = [m for m in d.safety_measures if not m.implemented]
                             if unimpl:
                                 st.markdown("**安全措施未落实：**")
@@ -732,7 +687,7 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
             st.markdown(
                 f"**📊 汇总** {len(st.session_state.results)}张 "
                 f"{badge('正常' + str(len(st.session_state.results) - abn), 'ok')} "
-                f"{badge('隐患' + str(abn), 'err' if abn else 'ok')}",
+                f"{badge('问题' + str(abn), 'err' if abn else 'ok')}",
                 unsafe_allow_html=True,
             )
 
@@ -767,7 +722,7 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
                         else:
                             st.text(ocr_out)
                 if d.issues:
-                    with st.expander(f"⚠️ 隐患明细 ({len(d.issues)})", expanded=False):
+                    with st.expander(f"⚠️ 问题明细 ({len(d.issues)})", expanded=False):
                         for issue in d.issues:
                             st.markdown(
                                 f"  ⚠️ **{issue.item_name}** — {issue.raw_text or '异常'}"
@@ -809,7 +764,7 @@ with tab2:
             # 精简 KPI：短标签，避免长文案撑歪
             render_kpi_row([
                 ("总票数", str(total), ""),
-                ("有隐患", str(abn_cnt), "#d6131c" if abn_cnt else "#059669"),
+                ("有异常", str(abn_cnt), "#d6131c" if abn_cnt else "#059669"),
                 ("自动通过", str(auto_cnt), "#059669"),
                 ("钉钉介入", str(human_cnt), "#0052CC" if human_cnt else ""),
             ])
@@ -916,13 +871,13 @@ with tab2:
                         f"| 作业人 | {worker} |\n"
                         f"| 作业等级 | {grade}"
                         f"{'（一级危险最高）' if grade == '一级' else ''} |\n"
-                        f"| 状态 | {'有隐患' if abnormal else '正常'} |\n"
+                        f"| 状态 | {'有异常' if abnormal else '正常'} |\n"
                         f"| 审批 | {ap_status} |\n"
                         f"| 路径 | "
                         + {
                             "自动通过": "系统自动通过",
                             "待审批": "钉钉人工介入",
-                            "已驳回": "钉钉禁止放行",
+                            "已驳回": "钉钉处理",
                         }.get(ap_status, "-")
                         + " |\n"
                     )

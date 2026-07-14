@@ -214,7 +214,7 @@ if res and res.get("data"):
     icon = APPROVAL_ICON.get(ap, "📋")
     hint = APPROVAL_HINT.get(ap, "")
     rl = d.risk_level or "未识别"
-    status_text = f"{len(d.issues)} 项隐患" if d.has_abnormal else "正常"
+    status_text = f"{len(d.issues)} 项问题" if d.has_abnormal else "正常"
     status_color = "#d6131c" if d.has_abnormal else "#059669"
 
     if ap == "已驳回":
@@ -248,7 +248,7 @@ if res and res.get("data"):
     )
 
     if d.issues:
-        with st.expander(f"隐患明细（{len(d.issues)}）", expanded=True):
+        with st.expander(f"问题明细（{len(d.issues)}）", expanded=True):
             for issue in d.issues:
                 reason = issue.raw_text or "OCR 识别为异常"
                 st.markdown(f"- **{issue.item_name}** — {reason}")

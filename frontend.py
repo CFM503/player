@@ -8,6 +8,7 @@
      或 python run.py / START.bat
 """
 
+import os
 import warnings
 
 warnings.filterwarnings("ignore", category=UserWarning, module="paddle")
@@ -21,6 +22,18 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Logo 固定在侧栏/应用最上方（导航页切换也保留）
+_logo = os.path.join(os.path.dirname(__file__), "logo.png")
+if os.path.exists(_logo):
+    try:
+        st.logo(_logo, size="large")
+    except TypeError:
+        st.logo(_logo)
+    except Exception:
+        # 旧版 Streamlit 无 st.logo 时，侧栏顶部仍可显示
+        with st.sidebar:
+            st.image(_logo, use_container_width=True)
 
 user_page = st.Page(
     "user_ui.py",

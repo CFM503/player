@@ -40,7 +40,7 @@ pip install pydantic openai paddleocr opencv-python numpy requests mcp httpx -i 
 """
 
 import os  # 导入系统接口模块，用于处理文件路径及环境变量
-import json  # 导入 JSON 数据解析库以序列化和反序列化配置及隐患数据
+import json  # 导入 JSON 数据解析库以序列化和反序列化配置及异常数据
 import time  # 导入时间时间戳模块，用于获取系统时间进行归档
 import asyncio  # 导入异步 IO 协程库以异步执行数据库及网关写入等操作
 import logging  # 导入日志记录模块，配置系统日志等级
@@ -296,6 +296,7 @@ STANDARD_MEASURES = {
         (22, "若涉及停、送气，则停、送气前须告知受影响的用户并做安全提示。"),
         (23, "已根据不同带气作业场景制定现场处置方案。"),
         (24, "作业现场已配备有效、适用 and 足量的灭火器材。"),
+        # 条文原文含「隐患」二字，与纸质票一致，供 OCR/条款对齐匹配，不作界面文案
         (25, "带气作业过程中，如有紧急或异常情况，应由现场负责人立即通知停止作业，应急处置并消除隐患后才能继续实施作业。")
     ]
 }
@@ -566,9 +567,9 @@ def check_measure_status_in_ocr(ocr_text: str, desc: str, ticket_type: str) -> O
     # 【禁止兜底】无匹配/无明确符号 → None（调用方必须记异常或留空，禁止默认落实）
     return None
 
-class HandWrittenIssue(BaseModel):  # 定义表示 HSE 作业票中具体手写或自动判定的隐患项模型类
-    """HSE 作业票中识别出的具体隐患项"""
-    item_name: str = Field(..., description="隐患/检查项名称")  # 定义隐患检查项的中文标题字段
+class HandWrittenIssue(BaseModel):  # 定义表示 HSE 作业票中具体手写或自动判定的问题项模型类
+    """HSE 作业票中识别出的具体问题项"""
+    item_name: str = Field(..., description="异常/检查项名称")  # 定义异常检查项的中文标题字段
     status: str = Field(..., description="状态：'异常' 或 '正常'")  # 定义该项判定的安全状态状态字，异常或正常
     raw_text: Optional[str] = Field(None, description="OCR 原文备注")  # 可选的 OCR 识别出的现场手写意见原文备注
 
@@ -592,8 +593,8 @@ class SecuritySheetData(BaseModel):  # 定义包含完整作业票所有要素�
     worker_id: str = Field(..., description="作业人员姓名及证件号/证书编号")  # 作业班组人员证件工号
     check_date: str = Field(..., description="日期 YYYY-MM-DD")  # 表单签署并自检的年月日日期
     safety_measures: List[SafetyMeasureItem] = Field(default=[], description="安全措施落实状态")  # 包含所有法定措施项的落实列表
-    has_abnormal: bool = Field(..., description="是否存在异常")  # 全票是否存在隐患或数值超标的全局判定状态
-    issues: List[HandWrittenIssue] = Field(default=[], description="隐患项明细")  # 整理出的异常隐患详细分类列表
+    has_abnormal: bool = Field(..., description="是否存在异常")  # 全票是否存在异常或数值超标的全局判定状态
+    issues: List[HandWrittenIssue] = Field(default=[], description="问题项明细")  # 整理出的异常问题详细分类列表
     completion_time: Optional[str] = Field(None, description="完工时间/完工验收时间")  # 作业票完工的物理签字时间
     approver_name: Optional[str] = Field(None, description="签批人/负责人姓名")  # 作业票终审的负责人姓名
     operators: Optional[str] = Field(None, description="作业人员")
@@ -858,7 +859,7 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
                         pass  # 跳过
 
         sanitized_measures = []  # 新建重组并校验后的防范措施大数组
-        has_abnormal = False  # 初始化作业票总隐患状态标志为 False
+        has_abnormal = False  # 初始化作业票总异常状态标志为 False
         unimplemented_ids = []  # 新建待存未落实条款编号的临时列表
         blank_measure_ids = []  # 带气：五列存在空白漏项的措施序号
 
@@ -889,9 +890,9 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
                 "implemented": impl,
                 "column_marks": column_marks,
             })
-            if not impl:  # 若该防范项为 False 未落实状态，说明现场存在安全隐患
+            if not impl:  # 若该防范项为 False 未落实状态，说明现场存在安全问题
                 has_abnormal = True  # 触发将整张作业票的 has_abnormal 标记强制强制提升为 True
-                unimplemented_ids.append(mid)  # 将当前有问题的条款 ID 号加入隐患列表
+                unimplemented_ids.append(mid)  # 将当前有问题的条款 ID 号加入问题列表
 
         if blank_measure_ids:
             safe_print(f"[Sanitize] 带气五列存在空白漏项的措施: {blank_measure_ids}")
@@ -901,9 +902,9 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
         # 7. 气体检测浓度异常判定已移除
         conc_abnormal = False
 
-        # 8. 同步并整理隐患项 (issues) 数组列表
-        existing_issues = []  # 初始化最终保留的问题隐患条目列表
-        for issue in raw_dict.get("issues", []):  # 遍历大模型自主生成的隐患条目
+        # 8. 同步并整理问题项 (issues) 数组列表
+        existing_issues = []  # 初始化最终保留的问题问题条目列表
+        for issue in raw_dict.get("issues", []):  # 遍历大模型自主生成的问题条目
             if isinstance(issue, dict):  # 确保结构为字典类型
                 item_name = issue.get("item_name", "")  # 问题项中文名称
                 status = issue.get("status", "")  # 问题项判定状态
@@ -921,11 +922,11 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
                 "raw_text": desc  # 来源条款原文
             })  # 结束追加
 
-        if existing_issues:  # 若发现当前至少收集到了一项隐患或异常
-            has_abnormal = True  # 锁定整票隐患标记为 True
+        if existing_issues:  # 若发现当前至少收集到了一项问题或异常
+            has_abnormal = True  # 锁定整票问题标记为 True
 
         raw_dict["has_abnormal"] = has_abnormal  # 更新 has_abnormal 标志
-        raw_dict["issues"] = existing_issues  # 更新 issues 隐患列表
+        raw_dict["issues"] = existing_issues  # 更新 issues 问题列表
 
         # 完工时间：LLM 结果 + 票面 OCR 原文匹配（均为真实读取，非编造）
         # 【禁止兜底】两者都没有则置空，由反思校验报漏项，禁止填假时间
@@ -1644,10 +1645,50 @@ class AgentTools:
         return result
 
     @staticmethod
+    def _select_dingtalk_bases(caches: list, risk_level: str) -> list:
+        """按名称选择写入目标：二级/其它 → 仅 test_demo_base；一级 → test_demo_base + test_demo_base2。"""
+        base1 = None
+        base2 = None
+        for c in caches or []:
+            bn = (c.get("base_name") or "").strip()
+            bn_l = bn.lower()
+            if bn == "test_demo_base" or bn_l == "test_demo_base":
+                base1 = c
+            elif bn == "test_demo_base2" or bn_l == "test_demo_base2":
+                base2 = c
+        # 兼容：名称含 test_demo 且不含 2 → base1；含 base2 / 以 2 结尾 → base2
+        if base1 is None or base2 is None:
+            for c in caches or []:
+                bn_l = (c.get("base_name") or "").lower()
+                if "test_demo" not in bn_l:
+                    continue
+                if base2 is None and ("base2" in bn_l or bn_l.endswith("2")):
+                    base2 = c
+                elif base1 is None and "base2" not in bn_l and not bn_l.endswith("2"):
+                    base1 = c
+        targets = []
+        if base1:
+            targets.append(base1)
+        elif caches:
+            # 未匹配到标准名时退回缓存首项，避免完全写不进去
+            targets.append(caches[0])
+            safe_print("[Tool]   未精确匹配 test_demo_base，使用缓存首个 base")
+        grade = (risk_level or "").strip()
+        if grade == "一级":
+            if base2:
+                targets.append(base2)
+                safe_print("[Tool]   作业等级=一级 → 双写 test_demo_base + test_demo_base2")
+            else:
+                safe_print("[Tool]   作业等级=一级，但未发现 test_demo_base2，仅写 base1")
+        else:
+            safe_print(f"[Tool]   作业等级={grade or '空'} → 仅写 test_demo_base")
+        return targets
+
+    @staticmethod
     def write_dingtalk_table(ticket_id: str, image_path: str, description: str, person_name: str, risk_level: str = "") -> bool:
-        """写入钉钉 AI 表格 test_demo 表（全自动，无需手动点击）
+        """写入钉钉 AI 表格。
         ticket_id → 编号, image_path → 图片附件, description → 问题描述, person_name → 责任人, risk_level → 等级
-        带气作业等级为「一级」时同时写入 base2（如果有）；禁止把未识别当成低风险跳过。
+        二级：仅 test_demo_base；一级：test_demo_base + test_demo_base2。
         """
         cfg = load_config()
         mcp_url = cfg.get("dingtalk_mcp_url", "")
@@ -1670,13 +1711,10 @@ class AgentTools:
             safe_print("[Tool] 钉钉 AI 表格缓存不完整。")
             return False
 
-        # 决定写入哪些 base：base1 始终写；高风险双写 base2
-        # 带气：仅明确「一级」双写；【禁止兜底】未识别/空等级不当低风险跳过，也不当一级误双写
-        is_high_risk = (risk_level == "一级") or (risk_level in ("重大", "较大"))
-        if is_high_risk:
-            safe_print(f"[Tool]   等级={risk_level} 高风险 → 双写 base1 + base2")
-        elif not risk_level or risk_level in ("未识别", "未填"):
-            safe_print(f"[Tool]   等级={risk_level or '空'} 未明确（禁止按低风险/二级假设）→ 仅写 base1")
+        targets = AgentTools._select_dingtalk_bases(caches, risk_level)
+        if not targets:
+            safe_print("[Tool] 无可用钉钉 base 可写")
+            return False
 
         async def _write_one(base_id, table_id, fields):
             cells = {}
@@ -1733,16 +1771,12 @@ class AgentTools:
                 return resp.get("status") == "success"
 
         success_count = 0
-        for i, cache in enumerate(caches):
+        for cache in targets:
             base_id = cache.get("base_id", "")
             table_id = cache.get("table_id", "")
             fields = cache.get("fields", {})
-            base_name = cache.get("base_name", f"base{i+1}")
+            base_name = cache.get("base_name", "?")
             if not base_id or not table_id or not fields:
-                continue
-            # base2 仅作业等级「一级」等高风险写入
-            if i > 0 and not is_high_risk:
-                safe_print(f"[Tool]   等级={risk_level or '非一级'}，跳过双写 {base_name}")
                 continue
             safe_print(f"[Tool]   写入 {base_name}/{cache.get('table_name', '?')}...")
             try:
@@ -1755,7 +1789,7 @@ class AgentTools:
             except Exception as e:
                 safe_print(f"[Tool]   {base_name} ❌ {e}")
 
-        safe_print(f"[Tool] 钉钉 AI 表格写入完成: {success_count}/{len(caches)}")
+        safe_print(f"[Tool] 钉钉 AI 表格写入完成: {success_count}/{len(targets)}")
         return success_count > 0
 
     @staticmethod
@@ -1922,19 +1956,19 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             safe_print(f"[Agent Reason] LLM 提取失败，标记高风险拦截: {e}")  # 打印失败原因，不造假兜底
             mem.remember("推理", "⚠️", "LLM 提取失败", f"高风险拦截: {e}", status="error")  # 记忆体记录提取失败
             sim.done()  # 停止模拟线程
-            data = SecuritySheetData(  # 构造明确的高风险失败体，has_abnormal=True 强制走暂缓/拦截分支
+            data = SecuritySheetData(  # 构造失败体，has_abnormal=True 走漏填/人工介入分支
                 ticket_type="带气作业票",
                 ticket_id="LLM提取失败",  # 占位票号，标记异常来源
                 station_name="", content="", work_time="", worker_id="",  # 关键字段一律留空，绝不编造
                 check_date="",  # 日期留空
-                safety_measures=[], has_abnormal=True,  # 强制异常，触发下游暂缓
-                issues=[{"item_name": "LLM 结构化提取失败", "status": "异常", "raw_text": str(e)}],  # 隐患明细记录失败原因
+                safety_measures=[], has_abnormal=True,  # 强制异常，触发下游人工介入
+                issues=[{"item_name": "LLM 结构化提取失败", "status": "异常", "raw_text": str(e)}],  # 问题明细记录失败原因
             )
             return data  # 直接返回失败体，跳过后续正常路径
         sim.done()  # 停止模拟线程，进度直接推进到 80%
         summary = (f"票号={data.ticket_id} | 场站={data.station_name} | "  # 汇总推理核心要素
                    f"措施={len(data.safety_measures)}项 | "  # 条款数
-                   f"异常={data.has_abnormal}")  # 隐患状态
+                   f"异常={data.has_abnormal}")  # 异常状态
         safe_print(f"[Agent Reason] {summary}")  # 终端打印推理概要日志
         mem.remember("推理", "🤔", "LLM 结构化解析", summary)  # 将推理阶段记录进记忆体
         return data  # 返回 Pydantic 数据实例
@@ -2080,7 +2114,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         safe_print("[Agent Reflect] 达到最大重试，标记高风险。")
         mem.remember("反思", "🔍", "最大重试", "标记高风险", status="error")  # 记忆体记录异常归档
 
-        # 将失败的校验项记录为异常隐患，防止空模版/无签字件自动通过
+        # 将失败的校验项记录为异常问题，防止空模版/无签字件自动通过
         failed_checks = [name for name, ok, _ in checks if not ok]
         if failed_checks:
             data.has_abnormal = True
@@ -2093,86 +2127,111 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                             status="异常",
                             raw_text=detail
                         ))
-            safe_print("[Agent Reflect] 达到最大重试，已将失败的完整性校验项强行记入隐患明细。")
+            safe_print("[Agent Reflect] 达到最大重试，已将失败的完整性校验项强行记入问题明细。")
         return data  # 返回未完全修正的数据，留待 L3 条件路由决策拦截
 
+    @staticmethod
+    def _clean_fill_field(val, placeholders: list) -> str:
+        """清洗字段：空/占位/指令泄露 → 视为漏填。"""
+        if not val:
+            return ""
+        val_str = str(val).strip()
+        leak_keywords = ["重新解析", "上次问题", "按规则", "重试", "数据完整性", "校验失败", "请严格"]
+        if any(k in val_str for k in leak_keywords):
+            return ""
+        if any(p == val_str or val_str in placeholders for p in placeholders):
+            return ""
+        return val_str
+
+    def _collect_missing_fills(self, data: SecuritySheetData) -> list:
+        """汇总手填漏项清单（仅空白/未识别/缺字段，不含「未落实×」业务整改建议）。"""
+        missing = []
+        role_count = len(GAS_MEASURE_ROLES)
+        expected_count = GAS_MEASURE_COUNT
+        std_list = STANDARD_MEASURES.get("带气作业票", [])
+        std_ids = {mid for mid, _ in std_list} if std_list else set(range(1, expected_count + 1))
+        measures = data.safety_measures or []
+        present_ids = {m.measure_id for m in measures if m.measure_id is not None}
+        for mid in sorted(std_ids - present_ids):
+            missing.append(f"安全措施第{mid}项整行缺失")
+        for m in measures:
+            marks = list(getattr(m, "column_marks", None) or [])
+            if len(marks) < role_count:
+                missing.append(f"安全措施第{m.measure_id}项五列未识别完整")
+                continue
+            for i, mk in enumerate(marks[:role_count]):
+                mk_norm = mk if mk in ("check", "cross", "slash", "blank") else _normalize_gas_cell_mark(mk)
+                if mk_norm not in GAS_MARK_FILLED:
+                    role_name = GAS_MEASURE_ROLES[i] if i < role_count else f"列{i+1}"
+                    missing.append(f"安全措施第{m.measure_id}项-{role_name}空白")
+
+        # 日期 / 签名必填（√/×/\ 均算已填格；此处只查文本空）
+        field_specs = [
+            ("日期", data.check_date, ["日期", "年", "月", "日", "YYYY-MM-DD"], 4),
+            ("作业时间", data.work_time, ["作业时间", "时间"], 4),
+            ("完工时间", data.completion_time, ["完工时间", "时间"], 4),
+            ("发起人签字", data.approver_name, ["签字", "盖章", "负责人", "手写", "发起人签字确认"], 1),
+            ("作业人员签名", data.operators, ["作业人员", "签字", "手写"], 1),
+            ("施工方现场负责人", data.construction_leader, ["施工方现场负责人", "签字", "手写"], 1),
+            ("监理人员", data.supervisor, ["监理人员", "签字", "手写"], 1),
+            ("项目公司监护人", data.company_monitor, ["项目公司监护人", "签字", "手写"], 1),
+            ("带气现场负责人", data.gas_leader, ["带气现场负责人", "签字", "手写"], 1),
+        ]
+        for label, raw_val, placeholders, min_len in field_specs:
+            cleaned = self._clean_fill_field(raw_val, placeholders)
+            if not cleaned or len(cleaned) < min_len:
+                missing.append(f"{label}漏填")
+
+        if not normalize_gas_work_grade(data.risk_level):
+            missing.append("作业等级未识别（表头一级/二级）")
+
+        # 完整性校验产生的漏项类 issue（不含「未落实」类业务异常）
+        for issue in data.issues or []:
+            name = issue.item_name or ""
+            if "未落实" in name:
+                continue
+            if any(k in name for k in ("数据完整性", "漏项", "空白", "未识别", "审批建议生成失败")):
+                detail = f"{name}" + (f"：{issue.raw_text}" if issue.raw_text else "")
+                if detail not in missing and not any(detail.startswith(m[:8]) for m in missing):
+                    missing.append(detail)
+        return missing
+
     def _generate_approval(self, data: SecuritySheetData, weather: dict = None) -> str:
-        """调用 LLM 生成专业审批建议，含天气和具体异常"""
-        issues_desc = ""
-        if data.has_abnormal:
-            items = []
-            for m in data.safety_measures:
-                if not m.implemented:
-                    items.append(f"第{m.measure_id}项「{m.description}」未落实")
-            for issue in data.issues:
-                items.append(f"{issue.item_name}（{issue.raw_text or '异常'}）")
-            issues_desc = "\n".join(f"- {item}" for item in items[:10])
+        """按漏填项生成审批建议（规则模板，不调用 LLM、不做问题整改建议）。
 
-        weather_desc = ""
-        if weather and not weather.get("ok"):
-            weather_desc = "\n天气异常：" + "；".join(weather.get("issues", []))
-
-        std_info = TICKET_STANDARDS.get(data.ticket_type, TICKET_STANDARDS["带气作业票"])
-        std_name = std_info["standard_name"]
-        std_desc = std_info["standard_desc"]
-        clear_dist = std_info["clear_dist_desc"]
-
-        # 带气：风险等级写表头作业等级（一级危险最高）；不写 重大/较大/一般/低风险
-        grade = ""
-        grade_hint = ""
-        if data.ticket_type == "带气作业票":
-            grade = normalize_gas_work_grade(data.risk_level) or ""
-            # 【禁止兜底】未识别如实写「未识别」，禁止填二级/低风险
-            grade_disp = grade if grade else "未识别（禁止兜底）"
-            grade_hint = (
-                f"作业等级：{grade_disp}"
-                + ("（一级危险程度最高）" if grade == "一级" else "")
-                + "\n"
-            )
-
-        prompt = (
-            f"你是HSE安全审计专家，生成{data.ticket_type}审批建议。\n\n"
-            "【标准依据】\n"
-            f"- {std_name} {std_desc}\n"
-            f"- 作业区域要求：{clear_dist}\n"
-            "- 五级风及以上禁止露天作业，雷雨天气禁止作业\n\n"
-            "【输出格式】\n"
-            "无异常→【同意作业】+简要确认+写明作业等级（一级/二级）\n"
-            "有异常→【暂缓作业】+逐项列出问题（简写）+写明作业等级（一级/二级，一级危险最高）\n"
-            "注意：带气作业票作业等级只能写「一级」或「二级」，禁止写重大/较大/一般/低风险\n"
-            "字数100字以内\n\n"
-            f"票号：{data.ticket_id} 场站：{data.station_name}\n"
-            f"{grade_hint}"
-            f"措施：{len(data.safety_measures)}项\n"
-            f"异常：{data.has_abnormal}\n"
-            f"{issues_desc}{weather_desc}"
+        - 漏填 0 项 → 直接通过说明
+        - 有漏填 → 写明漏填项数与明细，需人工介入（不写驳回/异常整改）
+        """
+        data.risk_level = self._assess_risk_level(data)
+        missing = self._collect_missing_fills(data)
+        grade = normalize_gas_work_grade(data.risk_level) or data.risk_level or "未识别"
+        ticket = data.ticket_id or "无"
+        n = len(missing)
+        # 归档用：记录规则依据，非 LLM prompt
+        self._last_approval_prompt = (
+            f"mode=missing_fill_check\n"
+            f"ticket={ticket}\ngrade={grade}\nmissing_count={n}\n"
+            + "\n".join(f"- {m}" for m in missing)
         )
-        self._last_approval_prompt = prompt  # 缓存发给 LLM 的提示词，供归档使用
-
-        try:
-            safe_print("[Agent Act] 调用 LLM 生成审批建议...")
-            response = self.brain.client.chat.completions.create(
-                model=self.brain.model_name,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=200,
-                timeout=120,
+        if n == 0:
+            opinion = (
+                f"【填写齐全】漏填 0 项，自动通过。"
+                f"票号{ticket}，作业等级{grade}。"
             )
-            raw_opinion = response.choices[0].message.content.strip()
-            opinion = clean_thinking(raw_opinion)
-            # 带气：保持表头作业等级；禁止被「低风险/重大」覆盖
-            data.risk_level = self._assess_risk_level(data)
-            if not opinion:
-                # 【禁止兜底】LLM 空响应/被 think 洗空 → 直接报错文案，禁止模板假通过
-                safe_print("[Agent Act] LLM 审批建议为空，禁止模板兜底，记入异常")
-                data.has_abnormal = True
-                return self._report_approval_failure(data, "LLM 审批建议为空或被 <think> 洗空")
+            safe_print(f"[Agent Act] 审批建议(规则): 漏填0项 → 自动通过")
             return opinion
-        except Exception as e:
-            # 【禁止兜底】API 失败 → 报错暴露问题，禁止模板生成「同意作业」
-            safe_print(f"[Agent Act] LLM 审批建议生成失败，禁止模板兜底: {e}")
-            data.has_abnormal = True
-            return self._report_approval_failure(data, f"LLM 审批建议生成失败: {e}")
+        # 明细最多列 12 条，避免过长
+        show = missing[:12]
+        detail = "；".join(show)
+        if n > 12:
+            detail += f"…（另有{n - 12}项）"
+        opinion = (
+            f"【发现漏填】共 {n} 项漏填，需人工介入审核（不驳回）。"
+            f"明细：{detail}。"
+            f"票号{ticket}，作业等级{grade}。"
+        )
+        safe_print(f"[Agent Act] 审批建议(规则): 漏填{n}项 → 人工介入")
+        return opinion
 
     def _assess_risk_level(self, data: SecuritySheetData) -> str:
         """风险等级：带气仅表头作业等级一级/二级；提不到返回空（禁止编造）。"""
@@ -2200,7 +2259,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         return ""
 
     def _report_approval_failure(self, data: SecuritySheetData, reason: str) -> str:
-        """审批建议链路失败时的显式报错（非同意/暂缓业务模板，禁止兜底通过）。"""
+        """审批建议链路失败时的显式报错（非通过/发现漏填业务模板，禁止兜底通过）。"""
         grade = normalize_gas_work_grade(data.risk_level) or data.risk_level or "未识别"
         exists = any("审批建议生成失败" in (i.item_name or "") for i in (data.issues or []))
         if not exists:
@@ -2212,91 +2271,59 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         return (
             f"【系统报错·禁止兜底通过】{reason}。"
             f"票号{data.ticket_id or '无'}，作业等级{grade}。"
-            f"请修复识别/模型链路后重试，勿人工当同意作业处理。"
+            f"请修复识别/模型链路后重试，勿人工当填写齐全通过处理。"
         )
 
     def _act(self, data: SecuritySheetData, ocr_text: str, mem: AgentMemory, image_path: str = ""):
-        safe_print("[Agent Act] ⚡ 执行 L3 条件路由审批...")
-        mem.remember("执行", "⚡", "L3 条件路由审批", "开始分级审核流程")
+        safe_print("[Agent Act] ⚡ 执行漏填审核路由...")
+        mem.remember("执行", "⚡", "漏填审核路由", "开始：无漏填通过 / 有漏填人工介入")
 
-        # ---- ① 天气检查 ----
-        safe_print("[Agent Act] ① 天气检查...")
+        # ---- ① 天气（仅记录，不参与驳回；本产品以手填漏项审核为主）----
+        safe_print("[Agent Act] ① 天气检查（仅留痕）...")
         weather = self.tools.check_weather_tool("牡丹江")
         weather_ok = weather.get("ok", True)
         if weather_ok:
             safe_print("[Agent Act] ① 天气检查 → 正常")
-            mem.remember("执行", "⛅", "天气检查", f"{weather.get('weather','未知')} {weather.get('temp_c','?')}℃ 风力{weather.get('wind_level','?')}级 → 正常")
+            mem.remember("执行", "⛅", "天气检查", f"{weather.get('weather','未知')} → 正常（不驱动驳回）")
         else:
             issues_str = "；".join(weather.get("issues", []))
-            safe_print(f"[Agent Act] ① 天气检查 → 异常: {issues_str}")
-            mem.remember("执行", "⛅", "天气检查", f"异常: {issues_str}", status="retry")
+            safe_print(f"[Agent Act] ① 天气检查 → 异常(仅留痕): {issues_str}")
+            mem.remember("执行", "⛅", "天气检查", f"异常仅留痕: {issues_str}", status="retry")
 
-        # ---- ② 作业等级 ----
+        # ---- ② 作业等级（展示用）----
         safe_print("[Agent Act] ② 作业等级...")
         data.risk_level = self._assess_risk_level(data)
-        unimpl_count = len([m for m in data.safety_measures if not m.implemented])
         grade = normalize_gas_work_grade(data.risk_level)
-        if grade == "一级":
-            grade_note = "一级危险最高"
-        elif grade == "二级":
-            grade_note = "二级"
-        else:
-            # 【禁止兜底】未识别不按二级处理
-            grade_note = "未识别（禁止当二级放过）"
-            safe_print("[Agent Act] ② 作业等级未识别，将按异常拦截（禁止兜底）")
-        safe_print(
-            f"[Agent Act] ② 作业等级 → {data.risk_level or '未识别'}（{grade_note}）"
-            f" | 未落实{unimpl_count}项, 隐患{len(data.issues)}条"
-        )
-        mem.remember(
-            "执行", "📊", "作业等级",
-            f"{data.risk_level or '未识别'}（{grade_note}）| 未落实{unimpl_count}项 | 隐患{len(data.issues)}条",
-        )
+        grade_note = grade if grade else "未识别"
+        safe_print(f"[Agent Act] ② 作业等级 → {data.risk_level or '未识别'}（{grade_note}）")
+        mem.remember("执行", "📊", "作业等级", f"{data.risk_level or '未识别'}（{grade_note}）")
 
-        # ---- ③ L3 路由决策 ----
-        # 人工介入 = 经 MCP 推送钉钉 AI 表格，由主管在钉钉侧处理（非系统内另设人工台）
-        safe_print("[Agent Act] ③ L3 路由决策...")
-        weather_blocked = not weather_ok and any("禁止" in i for i in weather.get("issues", []))
+        # ---- ③ 漏填路由：0 漏填→自动通过；有漏填→待审批(人工介入)，不驳回 ----
+        safe_print("[Agent Act] ③ 漏填路由决策...")
+        missing = self._collect_missing_fills(data)
+        n_miss = len(missing)
         dingtalk_human = "⏳ 人工介入：MCP 推送钉钉 AI 表格"
-        dingtalk_block = "🚫 禁止放行：MCP 推送钉钉 AI 表格"
-
-        if weather_blocked:
-            data.approval_level = "禁止作业"
-            data.approval_status = "已驳回"
-            route_desc = f"天气禁止作业 → {dingtalk_block}"
-        elif data.has_abnormal:
-            data.approval_level = "禁止作业"
-            data.approval_status = "已驳回"
-            route_desc = f"存在隐患 + 作业等级{grade or '未识别'} → {dingtalk_block}"
-        elif not grade:
-            # 【禁止兜底】表头作业等级未识别 → 禁止作业，禁止按二级自动通过
-            data.approval_level = "禁止作业"
-            data.approval_status = "已驳回"
-            data.has_abnormal = True
-            if not any("作业等级未识别" in (i.item_name or "") for i in data.issues):
-                data.issues.append(HandWrittenIssue(
-                    item_name="作业等级未识别",
-                    status="异常",
-                    raw_text="表头「作业等级：一级/二级」未识别到，禁止兜底按二级放行",
-                ))
-            route_desc = f"作业等级未识别 → {dingtalk_block}（禁止兜底为二级）"
-        elif grade == "一级" and weather_ok:
-            data.approval_level = "钉钉人工介入"
-            data.approval_status = "待审批"
-            route_desc = f"作业等级一级（危险最高）+ 天气正常 → {dingtalk_human}"
-        elif grade == "二级" and weather_ok:
+        if n_miss == 0:
             data.approval_level = "自动通过"
             data.approval_status = "自动通过"
-            route_desc = "作业等级二级 + 无隐患 + 天气正常 → ✅ 自动通过"
+            route_desc = "漏填 0 项 → ✅ 自动通过"
         else:
             data.approval_level = "钉钉人工介入"
             data.approval_status = "待审批"
-            route_desc = f"作业等级{grade} + 天气异常 → {dingtalk_human}"
-        safe_print(f"[Agent Act] ③ L3 路由决策 → {route_desc}")
-        mem.remember("执行", "🔀", "L3 路由决策", route_desc)
+            # 漏填记入 issues 便于看板，但不走「已驳回」
+            if not any("发现漏填" in (i.item_name or "") or "存在漏填" in (i.item_name or "") for i in (data.issues or [])):
+                data.issues.append(HandWrittenIssue(
+                    item_name=f"发现漏填{n_miss}项",
+                    status="待人工审核",
+                    raw_text="；".join(missing[:20]),
+                ))
+            data.has_abnormal = True  # 有待审事项
+            route_desc = f"漏填 {n_miss} 项 → {dingtalk_human}（不驳回）"
+        safe_print(f"[Agent Act] ③ 漏填路由 → {route_desc}")
+        mem.remember("执行", "🔀", "漏填路由", route_desc)
 
-        # ---- ④ 生成审批建议 ----
-        safe_print("[Agent Act] ④ 生成审批建议...")
+        # ---- ④ 生成审批建议（规则模板：漏填条数与明细）----
+        safe_print("[Agent Act] ④ 生成审批建议（漏填审核）...")
         data.approval_opinion = self._generate_approval(data, weather)
         safe_print(f"[Agent Act] ④ 审批建议: {data.approval_opinion[:80]}...")
         mem.remember("执行", "📝", "生成审批建议", data.approval_opinion[:60])
@@ -2321,7 +2348,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             ap_path = {
                 "自动通过": "系统自动通过",
                 "待审批": "人工介入：MCP 推送钉钉 AI 表格",
-                "已驳回": "禁止放行：MCP 推送钉钉 AI 表格",
+                "已驳回": "MCP 推送钉钉 AI 表格",
             }.get(ap_status, "")
             gl_line = (
                 f"作业等级：{gl}"
@@ -2347,7 +2374,11 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             info_block = "\n\n".join(info_lines)
             description = f"{ic} {data.approval_opinion or ''}\n\n---\n\n{info_block}"
             
-            self.tools.write_dingtalk_table(data.ticket_id, image_path, description, filler, data.risk_level or "")
+            # 等级字段写入表；双写路由用归一后的一级/二级
+            _grade = normalize_gas_work_grade(data.risk_level) or (data.risk_level or "")
+            self.tools.write_dingtalk_table(
+                data.ticket_id, image_path, description, filler, _grade
+            )
             path_note = "人工介入已推送" if ap_status != "自动通过" else "自动通过已推送"
             safe_print(f"[Agent Act] ⑥ 钉钉 AI 表格 → {path_note} (责任人:{filler})")
             notify_result = f"编号:{data.ticket_id} → 钉钉 AI 表格（{path_note}）责任人:{filler}"
@@ -2378,7 +2409,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                 ap_path = {
                     "自动通过": "系统自动通过",
                     "待审批": "人工介入：MCP 推送钉钉 AI 表格",
-                    "已驳回": "禁止放行：MCP 推送钉钉 AI 表格",
+                    "已驳回": "MCP 推送钉钉 AI 表格",
                 }.get(ap_status, "")
                 info_lines = [
                     f"作业票编号：{data.ticket_id or ''}",
