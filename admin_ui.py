@@ -77,8 +77,6 @@ if "selected_ticket_type" not in st.session_state: st.session_state.selected_tic
 
 # ---- 侧边栏配置面板（Logo 已在 frontend 最上方 st.logo）----
 with st.sidebar:  # 进入侧边栏渲染上下文本环境
-    st.caption(f"**🛡️ 牡丹江中燃 HSE · AI Agent** `v{_ver}`")  # 渲染侧边栏主标题及对应版本号
-
     # API 基本信息配置
     api_key = st.text_input("API Key", _cfg.get("api_key", ""), type="password")  # 渲染主大模型密钥输入框，设定为密码类型隐藏字符
     base_url = st.text_input("API URL", _cfg.get("base_url", ""))  # 渲染主大模型 API 服务域名路由基地址输入框
@@ -863,36 +861,10 @@ with tab2:
 
             render_kpi_row([
                 ("总票数", str(total), ""),
-                ("有异常", str(abn_cnt), "#d6131c" if abn_cnt else "#059669"),
+                ("发现漏填", str(abn_cnt), "#d6131c" if abn_cnt else "#059669"),
                 ("自动通过", str(auto_cnt), "#059669"),
                 ("钉钉介入", str(human_cnt), "#0052CC" if human_cnt else ""),
             ])
-
-            issue_counter = {}
-            try:
-                tables = []
-                if board_kind in ("全部", "带气作业票"):
-                    tables.append(DB_TABLE_GAS)
-                if board_kind in ("全部", "动火作业票"):
-                    tables.append(DB_TABLE_HOT)
-                for tb in tables:
-                    for (ij,) in conn.execute(
-                        f"SELECT issues_json FROM {tb} WHERE has_abnormal=1"
-                    ).fetchall():
-                        if not ij:
-                            continue
-                        for item in json.loads(ij):
-                            n = item.get("item_name") or "其他"
-                            if len(n) > 12:
-                                n = n[:12] + "…"
-                            issue_counter[n] = issue_counter.get(n, 0) + 1
-            except Exception:
-                pass
-
-            if issue_counter:
-                st.markdown("**高频问题 Top5**")
-                top5 = sorted(issue_counter.items(), key=lambda x: -x[1])[:5]
-                render_kpi_row([(name, f"{count}", "#d6131c") for name, count in top5])
         finally:
             if conn:
                 conn.close()
@@ -996,7 +968,7 @@ with tab2:
                             f"| 项目公司监护人员 | {ex.get('项目公司监护人员') or '-'} |\n"
                             f"| 动火现场负责人(项目公司) | {ex.get('动火现场负责人(项目公司)') or '-'} |\n"
                             f"| 动火现场负责人 | {ex.get('动火现场负责人') or '-'} |\n"
-                            f"| 状态 | {'有异常' if abnormal else '正常'} |\n"
+                            f"| 状态 | {'发现漏填' if abnormal else '正常'} |\n"
                             f"| 审批 | {ap_status} |\n"
                         )
                     else:
@@ -1020,7 +992,7 @@ with tab2:
                             f"| 监理人员 | {ex.get('监理人员') or '-'} |\n"
                             f"| 项目公司监护人 | {ex.get('项目公司监护人') or '-'} |\n"
                             f"| 带气现场负责人 | {ex.get('带气现场负责人') or '-'} |\n"
-                            f"| 状态 | {'有异常' if abnormal else '正常'} |\n"
+                            f"| 状态 | {'发现漏填' if abnormal else '正常'} |\n"
                             f"| 审批 | {ap_status} |\n"
                         )
                     st.markdown(md)

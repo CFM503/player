@@ -62,11 +62,9 @@ train_ocr5_page = st.Page(
     url_path="train-ocr5",
 )
 
+# 扁平导航：logo 下直接是页面项（无「业务」分组标题）
 pg = st.navigation(
-    {
-        "业务": [user_page, admin_page],
-        "模型训练": [train_ocr_page, train_ocr5_page],
-    },
+    [user_page, admin_page, train_ocr_page, train_ocr5_page],
     position="sidebar",
 )
 pg.run()
