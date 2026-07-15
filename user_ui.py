@@ -126,13 +126,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---- ↑ 提交 / 重新提交 ----
+# ---- ↑ 提交 / 重新提交：点按钮后直接执行，去掉中间空 rerun ----
 if submit and has_file and not st.session_state.user_processing:
     st.session_state.user_result = None
     st.session_state.user_processing = True
-    st.rerun()
 
-# ---- 执行 ----
 if st.session_state.user_processing and st.session_state.user_job_bytes:
     st.session_state.user_processing = False
     job_name = st.session_state.user_job_name or "ticket.jpg"

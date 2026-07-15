@@ -28,19 +28,17 @@ _ver = open(os.path.join(os.path.dirname(__file__), "VERSION"), encoding="utf-8"
 # ---- 自定义主题 ----
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)  # 注入全局自定义的 CSS 样式代码到本页面以获得顶级科技白底风外观
 
-# ---- 侧栏展开 + 日志贴底 ----
+# ---- 侧栏展开 + 日志贴底（仅注入一次，避免每次 rerun 叠加 setInterval 越点越卡）----
 # 注意：不要再移动 stSidebarHeader，否则会把 frontend 的 st.logo 顶到 HSE 标题下面
 st.html("""
 <script>
 (function() {
-    try {
-        Object.keys(localStorage).forEach(function(k) {
-            if (k.toLowerCase().indexOf('sidebar') !== -1) localStorage.removeItem(k);
-        });
-    } catch(e) {}
+    var w = window.parent || window;
+    if (w.__hseAdminSidebarInit) return;
+    w.__hseAdminSidebarInit = true;
+    var root = w.document;
 
     function tryExpand() {
-        var root = window.parent.document;
         var btn = root.querySelector('[data-testid="stExpandSidebarButton"]');
         if (btn) { btn.click(); return true; }
         return false;
@@ -50,17 +48,16 @@ st.html("""
     }, 300);
 
     function scrollLogs() {
-        var root = window.parent.document;
         root.querySelectorAll('.hlog').forEach(function(log) {
             var lastHeight = log.getAttribute('data-last-height') || 0;
             var currentHeight = log.scrollHeight;
             if (currentHeight !== parseInt(lastHeight)) {
                 log.setAttribute('data-last-height', currentHeight);
-                setTimeout(function() { log.scrollTop = log.scrollHeight; }, 50);
+                log.scrollTop = log.scrollHeight;
             }
         });
     }
-    setInterval(scrollLogs, 300);
+    setInterval(scrollLogs, 800);
 })();
 </script>
 """, unsafe_allow_javascript=True)
@@ -441,16 +438,9 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
         picked = st.file_uploader("选择图片", type=["jpg","jpeg","png","bmp"], accept_multiple_files=False, label_visibility="collapsed", key=uploader_key)  # 显示 Streamlit 原生上传面板，限制单张图片
         if picked and not st.session_state.get("upload_done"):  # 判断用户选择了图片且此图尚未触发上传流水线
             st.session_state.pending_files = [picked]  # 将上传的文件句柄存入会话状态 pending_files 列表中
-            prog_ph = st.empty()  # 创建进度条占位容器
-            status_ph = st.empty()  # 创建文字状态占位容器
-            for pct in range(0, 101, 5):  # 模拟上传百分比循环（提供顶级视觉缓动感）
-                prog_ph.progress(pct)  # 更新进度条百分比值
-                status_ph.caption(f"📤 上传中... {picked.name} — {pct}%")  # 显示已上传多少的文字提示
-                time.sleep(0.05)  # 睡眠 50 毫秒以提供极佳的动画展示时间
-            prog_ph.empty()  # 清空进度条占位符
-            status_ph.success(f"✅ 上传完成 — {picked.name}（{picked.size/1024:.0f} KB）")  # 显示绿色高亮上传成功的最终字样
             st.session_state.upload_done = True  # 设定上传完毕就绪标志为真
-            st.rerun()  # 触发 Streamlit 重绘刷新，重写刷新顶部的操作引导步骤条
+            # 不再用 time.sleep 假进度（会空等约 1s）；直接 rerun 刷新步骤条
+            st.rerun()
         elif picked and st.session_state.get("upload_done"):  # 若属于已重绘刷新重绘完毕的状态
             st.success(f"✅ {picked.name}（{picked.size/1024:.0f} KB）")  # 静态显示当前就绪的图片名称体积
 
@@ -480,13 +470,9 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
         </div>
         """, unsafe_allow_html=True)
 
-    # 触发 AI 算法核心处理段
-    if run_clicked and final_files:  # 如果用户点击了处理并且文件已上传
-        st.session_state.run_processing = True  # 设置运行中标志为真
-        st.rerun()  # 触发 Streamlit 重绘刷新进入下面的真执行主逻辑
-
-    if st.session_state.get("run_processing") and final_files:  # 捕获由重绘刷新触发的真执行阶段
-        st.session_state.run_processing = False  # 瞬间复位执行标志以防二次刷新重试
+    # 触发 AI 算法核心处理段（点「处理」后直接执行，去掉中间空 rerun，少一整轮脚本重跑）
+    if run_clicked and final_files:
+        st.session_state.run_processing = False
 
         from agent_core import SecurityAgent, LLMBrain, AgentTools  # 在执行时动态按需引入核心库，提高系统首次加载效率
         _proxy = proxy_url if proxy_enabled else ""  # 判定是否打包代理设置
@@ -526,11 +512,9 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
             with open(save_path, "wb") as fp:  # 以二进制覆写模式新建并打开物理存储文件
                 fp.write(f.getvalue())  # 将 Streamlit 临时内存中的图片字节流写入物理硬盘
             saved_paths.append(save_path)  # 将成功生成的物理物理文件路径存入列表
-            time.sleep(0.1)  # 短暂睡眠 100 毫秒让保存进度条细节能被人类眼睛看见
 
         upload_progress.progress(100)  # 进度条打满 100%
         upload_status.caption(f"✅ {len(saved_paths)} 张图片已保存，开始 Agent 处理...")  # 提示进入智能体处理阶段
-        time.sleep(0.3)  # 睡眠 300 毫秒以过渡动画
         upload_progress.empty()  # 清空并释放进度条占位容器
         upload_status.empty()  # 清空保存文字提示容器
 

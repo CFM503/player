@@ -111,7 +111,7 @@ def ensure_workspace() -> None:
 
 def default_ws_config() -> Dict[str, Any]:
     return {
-        "device": "cpu",
+        "device": "gpu",
         "text_det_box_thresh": 0.2,
         "text_det_thresh": 0.3,
         "text_rec_score_thresh": 0.1,
@@ -171,7 +171,7 @@ def _seed_ocr9_widget_defaults(ug: int, d: Dict[str, Any] | None = None) -> None
         return f"ocr9_{name}_g{ug}"
 
     st.session_state[sk("auto_live")] = True
-    st.session_state[sk("device")] = d.get("device") or "cpu"
+    st.session_state[sk("device")] = d.get("device") or "gpu"
     st.session_state[sk("box_thresh")] = float(d.get("text_det_box_thresh", 0.2))
     st.session_state[sk("det_thresh")] = float(d.get("text_det_thresh", 0.3))
     st.session_state[sk("rec_score")] = float(d.get("text_rec_score_thresh", 0.1))
@@ -528,7 +528,7 @@ def get_ocr_engine(cfg: Dict[str, Any], force_reload: bool = False):
 
     # 显式 det/rec 模型时不要传 lang/ocr_version（否则 3.x 告警并忽略）
     kwargs: Dict[str, Any] = {
-        "device": cfg.get("device") or "cpu",
+        "device": cfg.get("device") or "gpu",
         "use_doc_orientation_classify": False,
         "use_doc_unwarping": False,
         "use_textline_orientation": bool(cfg.get("use_textline_orientation", True)),
@@ -799,7 +799,7 @@ TRAIN = WS / "rec" / "train.txt"
 VAL = WS / "rec" / "val.txt"
 OUT = Path(r"{out_model}")
 EPOCHS = {epochs}
-DEVICE = "{cfg.get("device", "cpu")}"
+DEVICE = "{cfg.get("device", "gpu")}"
 
 def main():
     print("workspace:", WS)
