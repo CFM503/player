@@ -260,18 +260,56 @@ def parse_llm_json_object(text: str) -> dict:
     )
 
 
-# 带气作业票 HSE 标准（本系统仅支持带气作业票，已移除动火作业票）
+# 作业票类型（两条完全独立流水线，禁止交叉）
+TICKET_TYPE_GAS = "带气作业票"
+TICKET_TYPE_FIRE = "动火作业票"
+SUPPORTED_TICKET_TYPES = (TICKET_TYPE_GAS, TICKET_TYPE_FIRE)
+# 模板文件名 → 规范对齐尺寸（与历史硬编码坐标兼容）
+TICKET_TEMPLATE_SPEC = {
+    TICKET_TYPE_GAS: {"file": "dq.png", "size": (1052, 1487), "label": "带气"},
+    TICKET_TYPE_FIRE: {"file": "dh.png", "size": (1000, 1414), "label": "动火"},
+}
+
+# HSE 标准（按票型分离）
 TICKET_STANDARDS = {
-    "带气作业票": {
+    TICKET_TYPE_FIRE: {
+        "standard_name": "GB 30871-2022",
+        "standard_desc": "《危险化学品企业特殊作业安全规范》",
+        "clear_dist_desc": "动火点10m内清除可燃物并配备合适足量的消防器材",
+    },
+    TICKET_TYPE_GAS: {
         "standard_name": "CJJ 51-2016",
         "standard_desc": "《城镇燃气设施运行、维护和抢修安全技术规程》",
         "clear_dist_desc": "作业区域与周边做到可靠的隔离，现场设置明显标志，夜间设置警示灯",
-    }
+    },
 }
 
-# 带气作业票 25 条法定安全措施
+# 法定安全措施（按票型分离：动火 21 条单列勾选；带气 25 条×5 列网格）
 STANDARD_MEASURES = {
-    "带气作业票": [
+    TICKET_TYPE_FIRE: [
+        (1, "动火人已接受作业安全教育。"),
+        (2, "实际动火人与作业票上的动火人相符，持有效证件。"),
+        (3, "监护人已到位。"),
+        (4, "作业机具经过检验合格。"),
+        (5, "动火作业使用的脚手架、吊篮经检查合格。"),
+        (6, "所有与动火设备相连的设备、管线加盲板/堵头等有效隔断，连通作业段的阀门处于关闭状态。不得以水封或仅关闭阀门代替盲板隔断。"),
+        (7, "动火管线、设备内部清理干净，吹扫合格，达到动火条件。"),
+        (8, "动火点15米内无可燃物，下水井、地漏、地沟覆盖严密。"),
+        (9, "动火点15米内无可燃液体排放，30米内无可燃气体排放。"),
+        (10, "同一动火区域内无可燃溶剂清洗、喷漆及刷油漆作业。"),
+        (11, "五级风及以上天气，禁止露天动火作业，确需动火，应升级管理。"),
+        (12, "乙炔气瓶应立放、安装阻火器，乙炔瓶和氧气瓶无泄漏，与火源的距离大于10米，要有防晒、防倾倒措施。"),
+        (13, "特级动火作业应全过程作业影像，且作业现场使用的摄录设备为防爆型."),
+        (14, "实际动火部位、内容、时间与动火作业票相符。"),
+        (15, "已对相关人员进行安全交底。"),
+        (16, "采样检测结果符合动火条件。每日动火作业前必须进行检测，检测后超过30分钟未动火，复测合格后方可动火。特级、一级动火作业中断时间超过30分钟，二级动火作业中断时间超过60分钟，必须重新检测合格后方可动火。特级动火作业期间必须连续进行监测。"),
+        (17, "现场所有人员按规范穿戴个人防护用品。"),
+        (18, "高处动火作业应采取防火花飞溅措施。"),
+        (19, "紧急疏散通道与消防通道保持畅通。"),
+        (20, "动火点配备合适的消防器材，现场配备消防水带（0）根，灭火器（/）台，灭火毯（）块。"),
+        (21, "其他补充安全措施："),
+    ],
+    TICKET_TYPE_GAS: [
         (1, "作业人具备相应的作业资格。"),
         (2, "作业人已接受作业安全教育，包括应急处置方案学习。"),
         (3, "现场人员已穿戴好安全防护用品，如防静电工作服、鞋、空气呼吸器等"),
@@ -297,9 +335,14 @@ STANDARD_MEASURES = {
         (23, "已根据不同带气作业场景制定现场处置方案。"),
         (24, "作业现场已配备有效、适用 and 足量的灭火器材。"),
         # 条文原文含「隐患」二字，与纸质票一致，供 OCR/条款对齐匹配，不作界面文案
-        (25, "带气作业过程中，如有紧急或异常情况，应由现场负责人立即通知停止作业，应急处置并消除隐患后才能继续实施作业。")
-    ]
+        (25, "带气作业过程中，如有紧急或异常情况，应由现场负责人立即通知停止作业，应急处置并消除隐患后才能继续实施作业。"),
+    ],
 }
+
+FIRE_MEASURE_COUNT = 21
+# 动火作业等级：一级最低，二级居中，特级最高（与带气「一级最高」语义不同，禁止混用）
+FIRE_WORK_GRADES = ("一级", "二级", "特级")
+FIRE_WORK_GRADE_RANK = {"一级": 1, "二级": 2, "特级": 3}  # 数值越大等级越高
 
 
 # 带气作业票安全措施确认列（每项固定 5 格，图例：落实√ 未落实× 不适用\）
@@ -338,7 +381,7 @@ def extract_gas_work_grade(ocr_text: str) -> str:
 
 
 def normalize_gas_work_grade(val) -> str:
-    """归一作业等级为 一级/二级，无法识别则返回空串。"""
+    """归一带气作业等级为 一级/二级，无法识别则返回空串。"""
     if not val:
         return ""
     s = str(val).strip().replace(" ", "")
@@ -353,6 +396,73 @@ def normalize_gas_work_grade(val) -> str:
     if "二级" in s or s.startswith("二"):
         return "二级"
     return ""
+
+
+def extract_fire_work_grade(ocr_text: str) -> str:
+    """从动火作业票提取作业等级（一级/二级/特级）。
+
+    等级高低：特级最高，二级居中，一级最低。
+    """
+    if not ocr_text:
+        return ""
+    patterns = [
+        r"(特级|一级|二级)\s*动火",
+        r"动火\s*等级\s*[：:]\s*(特级|一级|二级)",
+        r"作业等级\s*[：:]\s*(特级|一级|二级)",
+        r"[（(]\s*(特级|一级|二级)\s*[）)]",
+        r"动火级别\s*[：:]\s*(特级|一级|二级)",
+    ]
+    for p in patterns:
+        m = re.search(p, ocr_text)
+        if m:
+            g = m.group(1).strip()
+            if g in FIRE_WORK_GRADES:
+                return g
+    return ""
+
+
+def normalize_fire_work_grade(val) -> str:
+    """归一动火作业等级为 一级/二级/特级，无法识别则返回空串。
+
+    等级高低：特级最高，二级居中，一级最低（勿与带气一级最高混淆）。
+    """
+    if not val:
+        return ""
+    s = str(val).strip().replace(" ", "")
+    if s in FIRE_WORK_GRADES:
+        return s
+    # 特级优先（避免「一级」子串误伤）
+    if "特" in s or s in ("特级动火", "0", "特级"):
+        return "特级"
+    if "二级" in s or s in ("2", "2级", "二", "Ⅱ", "II") or s.startswith("二"):
+        return "二级"
+    if "一级" in s or s in ("1", "1级", "一", "Ⅰ", "I") or s.startswith("一"):
+        return "一级"
+    return ""
+
+
+def fire_grade_note(grade: str) -> str:
+    """动火等级旁注：特级最高 / 一级最低。"""
+    g = normalize_fire_work_grade(grade) or (grade or "").strip()
+    if g == "特级":
+        return "（特级最高）"
+    if g == "一级":
+        return "（一级最低）"
+    if g == "二级":
+        return "（二级）"
+    return ""
+
+
+def normalize_ticket_type(val, default: str = TICKET_TYPE_GAS) -> str:
+    """归一用户选择的作业票类型；非法值回退 default。"""
+    s = (val or "").strip()
+    if s in SUPPORTED_TICKET_TYPES:
+        return s
+    if "动火" in s:
+        return TICKET_TYPE_FIRE
+    if "带气" in s:
+        return TICKET_TYPE_GAS
+    return default if default in SUPPORTED_TICKET_TYPES else TICKET_TYPE_GAS
 
 
 def _normalize_gas_cell_mark(token: str) -> str:
@@ -575,39 +685,53 @@ class HandWrittenIssue(BaseModel):  # 定义表示 HSE 作业票中具体手写�
 
 
 class SafetyMeasureItem(BaseModel):  # 定义安全防范措施条款单条执行状态的模型类
-    """带气安全措施逐项落实状态"""
+    """安全措施逐项落实状态（带气=五列网格；动火=单列勾选）"""
     measure_id: int = Field(..., description="措施序号")  # 法定安全措施条款对应的数字序号
     description: str = Field(..., description="措施内容原文")  # 安全防范条款的具体文字内容描述说明
     implemented: bool = Field(..., description="True=已落实, False=未落实")  # 是否成功落实并在票上打勾落实的布尔标记
-    # 带气票：每项 5 列确认格标记 check=√ / cross=× / slash=\ / blank=空白漏项
-    column_marks: List[str] = Field(default_factory=list, description="带气五列标记 check|cross|slash|blank")
+    # 带气：5 列 check|cross|slash|blank；动火：单元素列表 check|cross|blank（无 slash 网格）
+    column_marks: List[str] = Field(default_factory=list, description="勾选标记（票型语义不同，禁止混用）")
 
 
 class SecuritySheetData(BaseModel):  # 定义包含完整作业票所有要素的结构化数据主模型类
-    """牡丹江中燃 HSE 带气作业票结构化数据"""
-    ticket_type: str = Field(default="带气作业票", description="作业票类型（仅支持带气作业票）")
+    """牡丹江中燃 HSE 作业票结构化数据（带气/动火分路，字段共用模型但流水线分离）"""
+    ticket_type: str = Field(default=TICKET_TYPE_GAS, description="作业票类型：带气作业票|动火作业票")
     ticket_id: str = Field(..., description="作业票编号")  # 作业票物理编号，如 MDJ2025xxxx
-    station_name: str = Field(..., description="地点/场站")  # 作业现场场站或所属管理所名称
-    content: str = Field(..., description="作业内容")  # 作业的具体施工内容
-    work_time: str = Field(default="", description="作业时间")  # 作业执行的时段或时间范围
-    worker_id: str = Field(..., description="作业人员姓名及证件号/证书编号")  # 作业班组人员证件工号
-    check_date: str = Field(..., description="日期 YYYY-MM-DD")  # 表单签署并自检的年月日日期
-    safety_measures: List[SafetyMeasureItem] = Field(default=[], description="安全措施落实状态")  # 包含所有法定措施项的落实列表
-    has_abnormal: bool = Field(..., description="是否存在异常")  # 全票是否存在异常或数值超标的全局判定状态
-    issues: List[HandWrittenIssue] = Field(default=[], description="问题项明细")  # 整理出的异常问题详细分类列表
-    completion_time: Optional[str] = Field(None, description="完工时间/完工验收时间")  # 作业票完工的物理签字时间
-    approver_name: Optional[str] = Field(None, description="签批人/负责人姓名")  # 作业票终审的负责人姓名
-    operators: Optional[str] = Field(None, description="作业人员")
-    construction_leader: Optional[str] = Field(None, description="施工方现场负责人")
-    supervisor: Optional[str] = Field(None, description="监理人员")
-    company_monitor: Optional[str] = Field(None, description="项目公司监护人")
-    gas_leader: Optional[str] = Field(None, description="带气现场负责人")
-    approval_opinion: Optional[str] = Field(None, description="自动生成的审批建议")  # AI 智能建议意见文本
-    # 带气作业票：表头「作业等级」一级/二级（一级危险最高）
-    risk_level: Optional[str] = Field(None, description="作业等级：一级|二级")
-    # 待审批/已驳回：人工介入 = 经 MCP 推送钉钉 AI 表格
+    # 带气：作业单位；动火：兼容展示，优先用 fire_unit 回填
+    station_name: str = Field(default="", description="带气作业单位 / 动火兼容展示单位")
+    content: str = Field(default="", description="带气作业内容 / 动火内容")
+    work_time: str = Field(default="", description="带气作业时间 / 动火时间")
+    worker_id: str = Field(default="", description="带气作业人 / 动火人姓名及证书编号")
+    check_date: str = Field(default="", description="日期 YYYY-MM-DD")
+    safety_measures: List[SafetyMeasureItem] = Field(default=[], description="安全措施落实状态")
+    has_abnormal: bool = Field(..., description="是否存在异常")
+    issues: List[HandWrittenIssue] = Field(default=[], description="问题项明细")
+    completion_time: Optional[str] = Field(None, description="完工时间/完工验收时间")
+    approver_name: Optional[str] = Field(None, description="签批人/负责人姓名")
+    # ---- 带气签批五列 ----
+    operators: Optional[str] = Field(None, description="作业人员（仅带气）")
+    construction_leader: Optional[str] = Field(None, description="施工方现场负责人（带气/动火共用名）")
+    supervisor: Optional[str] = Field(None, description="监理人员（带气/动火共用名）")
+    company_monitor: Optional[str] = Field(None, description="项目公司监护人/监护人员（带气/动火共用）")
+    gas_leader: Optional[str] = Field(None, description="带气现场负责人（仅带气）")
+    # ---- 动火专用字段（与带气表字段分离）----
+    fire_unit: Optional[str] = Field(None, description="动火单位")
+    fire_location: Optional[str] = Field(None, description="动火地点")
+    fire_method: Optional[str] = Field(None, description="动火方式")
+    sampling_result: Optional[str] = Field(None, description="采样检测")
+    fire_personnel: Optional[str] = Field(None, description="动火人员")
+    fire_leader_project: Optional[str] = Field(None, description="动火现场负责人(项目公司)")
+    fire_leader: Optional[str] = Field(None, description="动火现场负责人")
+    approval_opinion: Optional[str] = Field(None, description="自动生成的审批建议")
+    # 带气：一级|二级（一级最高）；动火：一级|二级|特级（特级最高、一级最低）
+    risk_level: Optional[str] = Field(None, description="作业等级/动火等级（票型语义分离）")
     approval_status: Optional[str] = Field(None, description="审批状态：自动通过/待审批/已驳回")
     approval_level: Optional[str] = Field(None, description="审批路由：自动通过/钉钉人工介入/禁止作业")
+
+
+# ---- SQLite 表名：带气 / 动火物理分表（已废弃混用表 hse_fire_work_tickets）----
+DB_TABLE_GAS = "hse_gas_work_tickets"
+DB_TABLE_HOT = "hse_hot_work_tickets"
 
 
 # ==========================================
@@ -662,8 +786,10 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
         - 列头仅允许「整词」匹配（可带冒号），禁止 startswith，避免
           「作业人员严禁…」「带气现场负责人签字」误当成列头导致 y 窗偏移串列。
         - 签名允许 1~4 个汉字（OCR 常把监理签字识成单字如「华」）。
+        - 手写签名常与「已确认」粘连（如「已确认于华」）→ 剥离噪声后再取人名，
+          **禁止**因含噪声整段丢弃（监理列最常见漏取根因）。
         - 按「签名 x ↔ 列头 x」距离全局贪心一对一分配，防止串列。
-        - 不在此做 LLM 兜底；识别不到的列返回缺失（None 由调用方写入）。
+        - 坐标匹配缺失时，对仍空的列做表文/正则回退（仍不 LLM 编造）。
         """
         result = {}
         col_headers = [
@@ -682,7 +808,8 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
         elif "\r\n---\r\n" in ocr_text:
             coord_section = ocr_text.split("\r\n---\r\n")[-1]
         if not coord_section:
-            return result
+            # 无坐标时仍尝试纯文本回退
+            return self._extract_sign_columns_text_fallback(ocr_text, result)
 
         coord_pattern = re.compile(r"^(.+?)\s+\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\]\s*$")
         all_items = []  # [(text, x, y, w, h), ...]
@@ -695,11 +822,93 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
                 all_items.append((text, x, y, w, h))
 
         if not all_items:
-            return result
+            return self._extract_sign_columns_text_fallback(ocr_text, result)
 
         def _header_clean(text: str) -> str:
             # 去掉冒号/空白后做整词比对；「…签字」等后缀不会等于五列列头
             return text.replace("：", "").replace(":", "").strip()
+
+        def _name_from_ocr_cell(text: str) -> str:
+            """从签批单元格 OCR 中剥离套话，抽出 1~4 汉字人名。
+
+            典型：
+              已确认于华 → 于华
+              1 佛 → 佛（作业人员列手写被识成数字+字，禁止因含数字整段丢弃）
+              2225193日 / 11. → 空（纯日期/数字残片）
+              育，内容已确认。 → 空
+            """
+            if not text:
+                return ""
+            s = str(text).strip()
+            # 整段就是列头
+            if _header_clean(s) in header_kw_set:
+                return ""
+            # 印刷体表单句（作业人员列下方固定有「我已接受作业安全教育」）不是签名
+            if re.search(r"我已接受|安全教育|安全教", s) and not re.search(
+                r"已确认[\u4e00-\u9fff]{1,4}", s
+            ):
+                return ""
+
+            # 冒号后优先（「理动认：于华华」→ 于华华）
+            if "：" in s or ":" in s:
+                tail = re.split(r"[：:]", s)[-1].strip()
+                if tail and tail != s:
+                    tail_name = _name_from_ocr_cell(tail)
+                    if tail_name:
+                        return tail_name
+
+            # 剥离常见套话（顺序：长词优先）
+            noise_phrases = (
+                "我已接受作业安全教育", "我已接受作业安全教", "内容已确认",
+                "已确认。", "已确认", "确认。", "确认",
+                "项目公司", "负责人签字", "带气现场负责人签字",
+                "签批", "完工时间", "安全教", "理动认",
+            )
+            for ph in noise_phrases:
+                s = s.replace(ph, "")
+
+            # 只保留汉字：去掉数字/英文/标点（手写「1 佛」「J 张三」仍可抽出）
+            core = "".join(re.findall(r"[\u4e00-\u9fff]+", s))
+            if not core:
+                return ""
+            # 日期残片：2025年10月31日 → 抽汉字只剩「年月日」→ 必须丢弃
+            if re.fullmatch(r"[年月日时分秒~～至到]+", core):
+                return ""
+            # 混有日期字时先剥掉年月日，剩余才可能是人名
+            if re.search(r"[年月日时分秒]", core):
+                core = re.sub(r"[年月日时分秒~～至到]", "", core)
+                if not core:
+                    return ""
+            if any(
+                j in core
+                for j in (
+                    "内容", "签字", "时间", "负责人", "监护", "监理",
+                    "作业人员", "施工方", "带气", "项目公司", "完工",
+                )
+            ):
+                return ""
+            # 套话碎片拼成的伪姓名（OCR 把「内容已确认」撕成「育，内请已认」）
+            if core in ("育内", "育内请已", "内请已", "请已认", "已认", "此容已殊认") or re.search(
+                r"育内|内请|请已|已认|此容|殊认", core
+            ):
+                return ""
+            if len(core) > 6:
+                segs = re.findall(r"[\u4e00-\u9fff]{2,3}", core)
+                if not segs:
+                    return ""
+                name = segs[-1]
+            else:
+                segs = re.findall(r"[\u4e00-\u9fff]{1,4}", core)
+                if not segs:
+                    return ""
+                segs_sorted = sorted(segs, key=lambda z: (0 if 2 <= len(z) <= 3 else 1, -len(z)))
+                name = segs_sorted[0]
+            if name in (
+                "已", "确", "认", "内", "育", "容", "于", "和", "的", "是", "请",
+                "日", "月", "年", "时", "分", "秒",
+            ):
+                return ""
+            return name
 
         # 步骤1: 严格匹配5列列头（只认整词，可带冒号）
         col_positions = []  # [(field_name, header_x, header_y)]
@@ -711,8 +920,8 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
                     break
 
         if len(col_positions) < 3:
-            safe_print(f"[Sanitize] 签批列头匹配不足({len(col_positions)}列)，跳过坐标提取")
-            return result
+            safe_print(f"[Sanitize] 签批列头匹配不足({len(col_positions)}列)，尝试文本回退")
+            return self._extract_sign_columns_text_fallback(ocr_text, result)
 
         # 若同一 field 因重复 OCR 出现多次，取 y 最大的一组（票面底部签批行）
         best_by_field = {}
@@ -722,47 +931,56 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
                 best_by_field[field] = (x, y)
         col_positions = [(f, xy[0], xy[1]) for f, xy in best_by_field.items()]
 
-        # 步骤2: 签名 y 窗 = 列头下方（单字签名框可能较高，放宽到 +150）
+        # 步骤2: 签名 y 窗 = 列头下方
+        # 粘连「已确认于华」框较高；带气现场负责人真名常在底部「…签字」旁（更靠下）
         header_y = min(y for _, _, y in col_positions)
-        sign_y_min = header_y + 10
-        sign_y_max = header_y + 150
+        sign_y_min = header_y + 5
+        sign_y_max = header_y + 280
 
-        # 步骤3: 候选签名 —— 整段清洗后仅为 1~4 个汉字（保留「华」等单字）
-        _NOISE_SUB = (
-            "已确认", "确认", "项目公司", "我已接受", "安全教", "签批",
-            "内认", "完工", "时间", "负责人签字",
-        )
-        candidates = []  # [(name, x, y)]
+        # 步骤3: 候选签名 —— 剥离「已确认」等噪声后再校验 1~4 汉字
+        candidates = []  # [(name, x, y, raw)]
         for text, x, y, w, h in all_items:
             if not (sign_y_min <= y <= sign_y_max):
                 continue
-            if any(kw in text for kw in _NOISE_SUB):
-                continue
-            # 列头自身不算签名
             if _header_clean(text) in header_kw_set:
                 continue
-            core = re.sub(r"[\s：:。.，,、·\-—_（）()【】\[\]]+", "", text)
-            if not re.fullmatch(r"[\u4e00-\u9fff]{1,4}", core):
+            name = _name_from_ocr_cell(text)
+            if not name:
                 continue
-            candidates.append((core, x, y))
+            candidates.append((name, x, y, text))
 
         if not candidates:
-            safe_print("[Sanitize] 签批区域未找到候选签名，跳过坐标提取")
-            return result
+            safe_print("[Sanitize] 签批区域未找到候选签名，尝试文本回退")
+            return self._extract_sign_columns_text_fallback(ocr_text, result)
 
-        # 步骤4: 全局按距离贪心一对一匹配（先最近，列/签名各用一次）→ 单字「华」归监理列不串位
+        # 步骤4: 全局按距离贪心一对一匹配（先最近）
+        # 作业人员列下方常有印刷句「我已接受…」，真签名多在更下方 → 对 operators 偏好 y 更大
         col_x_map = {field: x for field, x, _ in col_positions}
         pairs = []
-        for name, name_x, name_y in candidates:
+        for name, name_x, name_y, raw in candidates:
             for field, hx in col_x_map.items():
                 dist = abs(name_x - hx)
-                if dist < 200:
-                    pairs.append((dist, name_y, name, field, name_x, hx))
-        pairs.sort(key=lambda t: (t[0], t[1]))  # 距离优先，其次更靠上
+                # 作业人员最左、带气现场负责人最右：x 窗宜紧，防与邻列互抢
+                if field == "operators":
+                    limit = 100
+                elif field == "gas_leader":
+                    limit = 110  # 勿用 dist=130 把监护人列「马华」抢成 gas_leader
+                elif field in ("supervisor", "construction_leader"):
+                    limit = 220
+                else:
+                    limit = 160  # company_monitor
+                if dist < limit:
+                    # 排序键：距离 → 双字优先 → 作业人员/带气负责人偏好更靠下
+                    below_boost = 0
+                    if field in ("operators", "gas_leader"):
+                        below_boost = -name_y
+                    prio = (dist, 0 if len(name) >= 2 else 1, below_boost)
+                    pairs.append((prio, name, field, name_x, hx, raw))
+        pairs.sort(key=lambda t: t[0])
 
         used_fields = set()
         used_names = set()  # (name, x) 防同一 OCR 块重复
-        for dist, name_y, name, field, name_x, hx in pairs:
+        for prio, name, field, name_x, hx, raw in pairs:
             name_key = (name, name_x)
             if field in used_fields or name_key in used_names:
                 continue
@@ -771,18 +989,197 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             result[field] = name
             safe_print(
                 f"[Sanitize] 签批坐标匹配: {field} = {name} "
-                f"(x={name_x}, 列头x={hx}, 距离={dist})"
+                f"(x={name_x}, 列头x={hx}, 距离={prio[0]}, raw={raw!r})"
             )
+
+        def _force_scan_column(field: str, max_dx: int, skip_pat: str = "") -> None:
+            if field in result or field not in col_x_map:
+                return
+            hx = col_x_map[field]
+            band = []
+            for text, x, y, w, h in all_items:
+                if not (sign_y_min <= y <= sign_y_max):
+                    continue
+                if abs(x - hx) > max_dx:
+                    continue
+                if _header_clean(text) in header_kw_set:
+                    continue
+                if "带气现场负责人签字" in text or "（项目公司）" in text or "(项目公司)" in text:
+                    continue
+                if skip_pat and re.search(skip_pat, text):
+                    continue
+                name = _name_from_ocr_cell(text)
+                if name:
+                    band.append((y, abs(x - hx), name, text))
+            band.sort(key=lambda t: (-t[0], t[1]))
+            if band:
+                result[field] = band[0][2]
+                safe_print(
+                    f"[Sanitize] {field} 列强制扫描: {field} = {band[0][2]} (raw={band[0][3]!r})"
+                )
+
+        # 步骤5a: operators 仍空 → 列 x 带强制扫描
+        _force_scan_column("operators", 120, r"我已接受|安全教")
+
+        # 步骤5b: gas_leader 仍空 → 第5列 x 带强制扫描（跳过「（项目公司）：」印刷体）
+        _force_scan_column("gas_leader", 130, r"项目公司|我已接受|安全教")
+
+        # 步骤5c: gas_leader 仍空 → 底部「带气现场负责人签字」旁人名（票面常见二次落款）
+        if "gas_leader" not in result:
+            footer_labels = [
+                (text, x, y, w, h)
+                for text, x, y, w, h in all_items
+                if "带气现场负责人签字" in text.replace(" ", "")
+            ]
+            if footer_labels:
+                # 取最靠下的签字标签
+                fl = max(footer_labels, key=lambda t: t[2])
+                _, fx, fy, fw, fh = fl
+                near = []
+                for text, x, y, w, h in all_items:
+                    if abs(y - fy) > 80:
+                        continue
+                    if "带气现场负责人" in text or "完工" in text:
+                        continue
+                    name = _name_from_ocr_cell(text)
+                    if not name:
+                        continue
+                    # 优先标签右侧/下方的人名
+                    score = abs(y - fy) * 2 + max(0, fx - x)  # 偏右更好
+                    if x + w < fx - 20:
+                        score += 50  # 明显在标签左侧降权
+                    near.append((score, name, text, x, y))
+                near.sort(key=lambda t: t[0])
+                if near:
+                    result["gas_leader"] = near[0][1]
+                    safe_print(
+                        f"[Sanitize] 带气现场负责人签字回退: gas_leader = {near[0][1]} "
+                        f"(raw={near[0][2]!r})"
+                    )
+
+        # 步骤6: 仍缺的列 → 文本回退补齐
+        missing = [f for _, f in col_headers if f not in result]
+        if missing:
+            safe_print(f"[Sanitize] 签批坐标仍缺列 {missing}，文本回退补齐")
+            fb = self._extract_sign_columns_text_fallback(ocr_text, dict(result))
+            for f in missing:
+                if fb.get(f):
+                    result[f] = fb[f]
+                    safe_print(f"[Sanitize] 签批文本回退: {f} = {fb[f]}")
 
         safe_print(f"[Sanitize] 签批坐标提取结果: {result}")
         return result
 
-    def _sanitize_sheet_data(self, raw_dict: dict, ocr_text: str) -> dict:  # 使用规则引擎启发式地校验和兜底 LLM 返回的 JSON 字典数据，规避幻觉错误
-        """用 Python + OCR 启发式规则兜底重构和校验 LLM 提取的结构化数据"""
-        # 1. 确定作业票类型
-        # 本系统仅支持带气作业票
-        ticket_type = "带气作业票"
+    def _extract_sign_columns_text_fallback(self, ocr_text: str, base: dict = None) -> dict:
+        """无坐标/坐标漏匹配时：从表格 OCR 行按列头关键字提取人名。
+
+        优先匹配：
+          监理人员：已确认于华
+          监理人员： | 已确认于华
+        不编造；抽不到则不写该键。
+        """
+        result = dict(base or {})
+        if not ocr_text:
+            return result
+
+        # 只看 --- 之前的表格/扁平文本，避免坐标行干扰
+        text_part = ocr_text
+        if "\n---\n" in ocr_text:
+            text_part = ocr_text.split("\n---\n")[0]
+        elif "\r\n---\r\n" in ocr_text:
+            text_part = ocr_text.split("\r\n---\r\n")[0]
+
+        field_patterns = [
+            ("operators", r"作业人员\s*[：:]\s*"),
+            ("construction_leader", r"施工方现场负责人\s*[：:]\s*"),
+            ("supervisor", r"监理人员\s*[：:]\s*"),
+            ("company_monitor", r"项目公司监护人\s*[：:]\s*"),
+            # 底部常见「带气现场负责人签字 | 王琳」——签字后不一定有冒号
+            ("gas_leader", r"带气现场负责人(?:签字)?\s*[：:]?\s*"),
+        ]
+
+        def _clean_name_chunk(chunk: str) -> str:
+            if not chunk:
+                return ""
+            s = chunk.strip()
+            for ph in (
+                "我已接受作业安全教育", "我已接受作业安全教", "内容已确认",
+                "已确认。", "已确认", "确认。", "确认",
+                "项目公司", "负责人签字", "（项目公司）", "(项目公司)",
+            ):
+                s = s.replace(ph, "")
+            # 截断到下一列头或日期（保留「签字」后的人名，不再被「带气现场负责人」整段吃掉）
+            s = re.split(
+                r"(?:作业人员|施工方现场负责人|监理人员|项目公司监护人|"
+                r"\d{4}\s*年|完工时间|签批)",
+                s,
+                maxsplit=1,
+            )[0]
+            # 去掉残留的「签字」二字
+            s = s.replace("签字", "")
+            s = re.sub(r"[\s：:。.，,、·\-—_（）()【】\[\]|]+", "", s)
+            if re.fullmatch(r"[年月日时分秒]+", s or ""):
+                return ""
+            if any(j in s for j in ("内容", "时间", "负责人", "监护", "监理", "带气")):
+                return ""
+            m = re.search(r"[\u4e00-\u9fff]{2,4}", s)
+            if m:
+                return m.group(0)
+            m1 = re.fullmatch(r"[\u4e00-\u9fff]", s)
+            if m1 and s not in ("已", "确", "认", "内", "育", "容"):
+                return s
+            return ""
+
+        for field, head_pat in field_patterns:
+            if result.get(field):
+                continue
+            for line in text_part.split("\n"):
+                if not re.search(head_pat, line):
+                    continue
+                after = re.split(head_pat, line, maxsplit=1)
+                if len(after) < 2:
+                    continue
+                tail = after[1]
+                for cell in re.split(r"[|｜]", tail):
+                    name = _clean_name_chunk(cell)
+                    if name:
+                        result[field] = name
+                        break
+                if result.get(field):
+                    break
+                name = _clean_name_chunk(tail[:30])
+                if name:
+                    result[field] = name
+                    break
+
+        # gas_leader 专补：全文「带气现场负责人签字 … 人名」
+        if not result.get("gas_leader"):
+            m = re.search(
+                r"带气现场负责人签字\s*[|：:\s]*([\u4e00-\u9fff]{1,4})",
+                text_part,
+            )
+            if m:
+                nm = m.group(1)
+                if nm not in ("确认", "项目", "公司", "已确"):
+                    result["gas_leader"] = nm
+
+        return result
+
+    def _sanitize_sheet_data(self, raw_dict: dict, ocr_text: str, ticket_type: str = None) -> dict:  # 使用规则引擎启发式地校验和兜底 LLM 返回的 JSON 字典数据，规避幻觉错误
+        """用 Python + OCR 启发式规则兜底重构和校验 LLM 提取的结构化数据。
+
+        ticket_type 由用户选择锁定；带气 / 动火走完全分离的措施与签批规则，禁止交叉。
+        """
+        # 1. 锁定作业票类型（用户选择优先，禁止用 OCR 在两票型间串改）
+        locked = normalize_ticket_type(
+            ticket_type
+            or getattr(self, "_locked_ticket_type", None)
+            or raw_dict.get("ticket_type"),
+            default=TICKET_TYPE_GAS,
+        )
+        ticket_type = locked
         raw_dict["ticket_type"] = ticket_type
+        safe_print(f"[Sanitize] 票型流水线锁定: {ticket_type}")
 
         # 2. 规范化票号 (ticket_id)
         ticket_id = raw_dict.get("ticket_id", "")  # 获取大模型提取出的票号字串
@@ -808,22 +1205,74 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
         # 安全审计: 禁止「未知场站/未知作业内容/未知作业人员」造假占位。OCR 抠不到则留空串，
         # 交由 _reflect 反思阶段与下游判定拦截，绝不编造内容蒙混过关。
 
-        for field in ["station_name", "content", "work_time", "worker_id"]:  # 循环迭代这四项核心基础文本字段
-            val = raw_dict.get(field, "")  # 尝试从 LLM 解析得出的字段值字典中获取该项的值
-            if not val or str(val).lower() in ["null", "none", "未知", ""]:  # 判断是否属于缺失或被 LLM 写了未知的非有效内容
-                if field == "station_name":  # 若场站地点字段缺失
-                    m = re.search(r"(?:地点|场站|部位|单位)[：:]?\s*([^\n]+)", ocr_text)  # 从 OCR 中正则搜索地点场站关键字后面的行内容
-                    val = m.group(1).strip() if m else ""  # 命中时取值，否则留空串，不填造假占位
-                elif field == "content":  # 若施工作业内容字段缺失
-                    m = re.search(r"(?:内容|作业内容)[：:]?\s*([^\n]+)", ocr_text)  # 正则获取作业内容行
-                    val = m.group(1).strip() if m else ""  # 命中时赋值，否则留空串，不填造假占位
-                elif field == "work_time":  # 若作业时间字段缺失
-                    m = re.search(r"(?:作业时间|施工时间)[：:]?\s*([^\n]+)", ocr_text)  # 正则搜索作业时间行
-                    val = m.group(1).strip() if m else ""  # 命中时取值，否则留空串，不填造假占位
-                elif field == "worker_id":  # 若作业人或证书字段缺失
-                    m = re.search(r"(?:作业人员|作业人|证书编号)[：:]?\s*([^\n]+)", ocr_text)  # 正则搜索作业人姓名
-                    val = m.group(1).strip() if m else ""  # 命中包装，否则留空串，不填造假占位
-            raw_dict[field] = str(val).strip()  # 将清洗后的文本强转为纯净的剥离空白后的字符串保存入字典
+        def _ocr_field(patterns: list) -> str:
+            for p in patterns:
+                m = re.search(p, ocr_text)
+                if m:
+                    return m.group(1).strip()
+            return ""
+
+        def _clean_val(val) -> str:
+            if val is None:
+                return ""
+            s = str(val).strip()
+            if not s or s.lower() in ("null", "none", "未知", "n/a"):
+                return ""
+            if any(k in s for k in ("重新解析", "校验失败", "请严格")):
+                return ""
+            return s
+
+        if ticket_type == TICKET_TYPE_FIRE:
+            # ---- 动火表头字段（与带气单位/内容语义分离）----
+            fire_unit = _clean_val(raw_dict.get("fire_unit")) or _ocr_field([
+                r"(?:动火单位|作业单位)[：:\s|]*([^\n|]+)",
+            ])
+            fire_location = _clean_val(raw_dict.get("fire_location")) or _ocr_field([
+                r"(?:动火地点|作业地点|地点)[：:\s|]*([^\n|]+)",
+            ])
+            content = _clean_val(raw_dict.get("content")) or _ocr_field([
+                r"(?:动火内容|作业内容|内容)[：:\s|]*([^\n|]+)",
+            ])
+            work_time = _clean_val(raw_dict.get("work_time")) or _ocr_field([
+                r"(?:动火时间|作业时间|施工时间)[：:\s|]*([^\n|]+)",
+            ])
+            fire_method = _clean_val(raw_dict.get("fire_method")) or _ocr_field([
+                r"(?:动火方式|方式)[：:\s|]*([^\n|]+)",
+            ])
+            worker_id = _clean_val(raw_dict.get("worker_id")) or _ocr_field([
+                r"(?:动火人姓名及证书编号|动火人|证书编号)[：:\s|]*([^\n|]+)",
+            ])
+            sampling = _clean_val(raw_dict.get("sampling_result")) or _ocr_field([
+                r"(?:采样检测|气体检测|检测结果)[：:\s|]*([^\n|]+)",
+            ])
+            raw_dict["fire_unit"] = fire_unit or None
+            raw_dict["fire_location"] = fire_location or None
+            raw_dict["content"] = content
+            raw_dict["work_time"] = work_time
+            raw_dict["fire_method"] = fire_method or None
+            raw_dict["worker_id"] = worker_id
+            raw_dict["sampling_result"] = sampling or None
+            # 兼容列表展示：单位优先动火单位
+            raw_dict["station_name"] = fire_unit or fire_location or _clean_val(raw_dict.get("station_name"))
+        else:
+            for field in ["station_name", "content", "work_time", "worker_id"]:
+                val = _clean_val(raw_dict.get(field, ""))
+                if not val:
+                    if field == "station_name":
+                        val = _ocr_field([r"(?:地点|场站|部位|单位)[：:]?\s*([^\n]+)"])
+                    elif field == "content":
+                        val = _ocr_field([r"(?:内容|作业内容)[：:]?\s*([^\n]+)"])
+                    elif field == "work_time":
+                        val = _ocr_field([r"(?:作业时间|施工时间)[：:]?\s*([^\n]+)"])
+                    elif field == "worker_id":
+                        val = _ocr_field([r"(?:作业人员|作业人|证书编号)[：:]?\s*([^\n]+)"])
+                raw_dict[field] = val
+            # 清空动火专用字段，禁止串写
+            for _ff in (
+                "fire_unit", "fire_location", "fire_method", "sampling_result",
+                "fire_personnel", "fire_leader_project", "fire_leader",
+            ):
+                raw_dict[_ff] = None
 
         # 4. 规范化日期 YYYY-MM-DD
         date_str = raw_dict.get("check_date", "")  # 提取日期字段
@@ -845,91 +1294,104 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
 
         # 5. 气体检测浓度处理已移除
 
-        # 6. 用 Python 规则全量重构并校验安全措施条款，阻断 LLM 的幻觉或刻意掩盖
-        std_measures = STANDARD_MEASURES.get(ticket_type, [])  # 获取该票型对应国家标准措施配置列表
-        llm_measures = {}  # 用字典暂存大模型提取所得的各条目落实状态
-        for m in raw_dict.get("safety_measures", []):  # 遍历大模型返回的措施列表
-            if isinstance(m, dict):  # 确保子元素是标准字典结构
-                mid = m.get("measure_id")  # 获取对应的措施条目 ID 号
-                impl = m.get("implemented")  # 获取其上标记的落实状态布尔值
-                if mid is not None:  # ID 必须有效
-                    try:  # 校验
-                        llm_measures[int(mid)] = bool(impl)  # 存入字典映射关系中
-                    except Exception:  # 防护
-                        pass  # 跳过
+        # 6. 安全措施：带气 / 动火完全分路
+        std_measures = STANDARD_MEASURES.get(ticket_type, [])
+        sanitized_measures = []
+        has_abnormal = False
+        unimplemented_ids = []
+        blank_measure_ids = []
 
-        sanitized_measures = []  # 新建重组并校验后的防范措施大数组
-        has_abnormal = False  # 初始化作业票总异常状态标志为 False
-        unimplemented_ids = []  # 新建待存未落实条款编号的临时列表
-        blank_measure_ids = []  # 带气：五列存在空白漏项的措施序号
+        if ticket_type == TICKET_TYPE_GAS:
+            # ---- 带气：ocr5 25×5 网格（✓/×/\ /空白）----
+            gas_grid = parse_gas_measure_grid(ocr_text)
+            safe_print(f"[Sanitize][带气] 安全措施网格解析: {len(gas_grid)}/{GAS_MEASURE_COUNT} 行")
+            for mid, desc in std_measures:
+                if mid not in gas_grid:
+                    marks = ["blank"] * 5
+                    safe_print(f"[Sanitize][带气] 第{mid}项五列网格缺失，记为漏项（禁止默认落实）")
+                else:
+                    marks = list(gas_grid[mid])
+                    if len(marks) < 5:
+                        marks = marks + ["blank"] * (5 - len(marks))
+                column_marks = marks[:5]
+                has_blank = any(mk in GAS_MARK_EMPTY or mk == "blank" for mk in column_marks)
+                has_cross = any(mk == "cross" for mk in column_marks)
+                impl = (not has_cross) and (not has_blank)
+                if has_blank:
+                    blank_measure_ids.append(mid)
+                sanitized_measures.append({
+                    "measure_id": mid,
+                    "description": desc,
+                    "implemented": impl,
+                    "column_marks": column_marks,
+                })
+                if not impl:
+                    has_abnormal = True
+                    unimplemented_ids.append(mid)
+            if blank_measure_ids:
+                safe_print(f"[Sanitize][带气] 五列空白漏项: {blank_measure_ids}")
+        else:
+            # ---- 动火：21 条单列勾选（OCR 行内 ✓/×），禁止调用 ocr5/带气网格 ----
+            safe_print(f"[Sanitize][动火] 安全措施单列解析: 共 {len(std_measures)} 条（不使用 ocr5）")
+            for mid, desc in std_measures:
+                h_status = check_measure_status_in_ocr(ocr_text, desc, ticket_type)
+                if h_status is True:
+                    mark, impl = "check", True
+                elif h_status is False:
+                    mark, impl = "cross", False
+                else:
+                    # 无法判定 = 空白漏项，禁止默认已落实
+                    mark, impl = "blank", False
+                    blank_measure_ids.append(mid)
+                    safe_print(f"[Sanitize][动火] 第{mid}项未识别勾选，记为漏项（禁止默认落实）")
+                sanitized_measures.append({
+                    "measure_id": mid,
+                    "description": desc,
+                    "implemented": impl,
+                    "column_marks": [mark],  # 动火单列语义，勿当五列使用
+                })
+                if not impl:
+                    has_abnormal = True
+                    unimplemented_ids.append(mid)
+            if blank_measure_ids:
+                safe_print(f"[Sanitize][动火] 空白漏项措施: {blank_measure_ids}")
 
-        # 带气票：优先解析 ocr5 的 25×5 网格（✓/×/\ /空白）
-        gas_grid = parse_gas_measure_grid(ocr_text)
-        safe_print(f"[Sanitize] 带气安全措施网格解析: {len(gas_grid)}/{GAS_MEASURE_COUNT} 行")
-
-        for mid, desc in std_measures:  # 逐一遍历标准要求落实的每一条条款
-            # 带气：每项 5 列，合法填写为 对号√ / 叉号× / 斜杠\；空白=漏项
-            # 【禁止兜底】网格未解析到该行时五列全 blank 并记漏项，禁止默认「已落实」
-            if mid not in gas_grid:
-                marks = ["blank"] * 5
-                safe_print(f"[Sanitize] 第{mid}项五列网格缺失，记为漏项（禁止默认落实）")
-            else:
-                marks = list(gas_grid[mid])
-                if len(marks) < 5:
-                    marks = marks + ["blank"] * (5 - len(marks))
-            column_marks = marks[:5]
-            has_blank = any(mk in GAS_MARK_EMPTY or mk == "blank" for mk in column_marks)
-            has_cross = any(mk == "cross" for mk in column_marks)
-            impl = (not has_cross) and (not has_blank)
-            if has_blank:
-                blank_measure_ids.append(mid)
-
-            sanitized_measures.append({
-                "measure_id": mid,
-                "description": desc,
-                "implemented": impl,
-                "column_marks": column_marks,
-            })
-            if not impl:  # 若该防范项为 False 未落实状态，说明现场存在安全问题
-                has_abnormal = True  # 触发将整张作业票的 has_abnormal 标记强制强制提升为 True
-                unimplemented_ids.append(mid)  # 将当前有问题的条款 ID 号加入问题列表
-
-        if blank_measure_ids:
-            safe_print(f"[Sanitize] 带气五列存在空白漏项的措施: {blank_measure_ids}")
-
-        raw_dict["safety_measures"] = sanitized_measures  # 将校验过的安全条款列表覆盖进大模型原始字典中
+        raw_dict["safety_measures"] = sanitized_measures
 
         # 7. 气体检测浓度异常判定已移除
-        conc_abnormal = False
 
         # 8. 同步并整理问题项 (issues) 数组列表
-        existing_issues = []  # 初始化最终保留的问题问题条目列表
-        for issue in raw_dict.get("issues", []):  # 遍历大模型自主生成的问题条目
-            if isinstance(issue, dict):  # 确保结构为字典类型
-                item_name = issue.get("item_name", "")  # 问题项中文名称
-                status = issue.get("status", "")  # 问题项判定状态
-                raw_t = issue.get("raw_text", "")  # 问题项的来源原文备注
-                # 排除自动生成的措施（下面会通过 Python 重构统一写入规范名称）
-                if "安全措施第" in item_name:  # 若含有这些特征关键字
-                    continue  # 跳过不录入以防数据行重复
-                existing_issues.append(issue)  # 加入最终问题容器
+        existing_issues = []
+        for issue in raw_dict.get("issues", []):
+            if isinstance(issue, dict):
+                item_name = issue.get("item_name", "")
+                if "安全措施第" in item_name:
+                    continue
+                existing_issues.append(issue)
 
-        for mid in unimplemented_ids:  # 将检测出的未落实条款以规范的 JSON 数据格式打包追加到问题列表中
-            desc = next(d for m_id, d in std_measures if m_id == mid)  # 根据 ID 提取标准条款描述
-            existing_issues.append({  # 打包加入列表
-                "item_name": f"安全措施第{mid}项未落实",  # 精准定位的未落实说明
-                "status": "异常",  # 标为异常状态
-                "raw_text": desc  # 来源条款原文
-            })  # 结束追加
+        for mid in unimplemented_ids:
+            desc = next(d for m_id, d in std_measures if m_id == mid)
+            # 空白漏项与「叉号未落实」区分：漏填审核以 blank 为准
+            if mid in blank_measure_ids:
+                existing_issues.append({
+                    "item_name": f"安全措施第{mid}项漏填",
+                    "status": "漏填",
+                    "raw_text": desc,
+                })
+            else:
+                existing_issues.append({
+                    "item_name": f"安全措施第{mid}项未落实",
+                    "status": "异常",
+                    "raw_text": desc,
+                })
 
-        if existing_issues:  # 若发现当前至少收集到了一项问题或异常
-            has_abnormal = True  # 锁定整票问题标记为 True
+        if existing_issues:
+            has_abnormal = True
 
-        raw_dict["has_abnormal"] = has_abnormal  # 更新 has_abnormal 标志
-        raw_dict["issues"] = existing_issues  # 更新 issues 问题列表
+        raw_dict["has_abnormal"] = has_abnormal
+        raw_dict["issues"] = existing_issues
 
-        # 完工时间：LLM 结果 + 票面 OCR 原文匹配（均为真实读取，非编造）
-        # 【禁止兜底】两者都没有则置空，由反思校验报漏项，禁止填假时间
+        # 完工时间
         completion = raw_dict.get("completion_time") or ""
         if not completion or str(completion).lower() in ["null", "none", "未知", ""]:
             m = re.search(r"完工时间[：:\s|]*([^\n|]+)", ocr_text)
@@ -940,37 +1402,94 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             completion = ""
         raw_dict["completion_time"] = str(completion).strip() or None
 
-        # 发起人签字：仅第二阶段裁剪 OCR；【禁止兜底】失败置空，禁止再用 LLM 全文猜名
+        # 发起人/批准人签字：裁剪 OCR；失败置空
         approver = None
         try:
-            approver = AgentTools.extract_filler_name(670, 230, 280, 170)  # 1052px 对齐图签字区
+            # 带气 1052 宽坐标；动火 1000 宽近似同一区域比例
+            if ticket_type == TICKET_TYPE_FIRE:
+                approver = AgentTools.extract_filler_name(640, 220, 270, 160)
+            else:
+                approver = AgentTools.extract_filler_name(670, 230, 280, 170)
         except Exception as e:
             safe_print(f"[Sanitize] 提取签字人失败（禁止 LLM 兜底）: {e}")
         if not approver or str(approver).lower() in ["null", "none", "未知", ""]:
-            # 【禁止兜底】此处曾用 raw_dict["approver_name"](LLM) 回填；现禁止，漏项交反思报错
             safe_print("[Sanitize] 发起人签字未识别到，置空（禁止 LLM 姓名兜底）")
             approver = None
+        # 动火：允许 LLM 提取的批准人作补充（仅当裁剪为空时仍禁止编造，保持空）
         raw_dict["approver_name"] = approver or None
-        
-        # ---- 签批区域5列签名：仅坐标提取；【禁止 LLM 兜底】识别不到则空，交反思报漏项 ----
-        sign_fields = self._extract_sign_columns(ocr_text)
-        for _sf in (
-            "operators",
-            "construction_leader",
-            "supervisor",
-            "company_monitor",
-            "gas_leader",
-        ):
-            raw_dict[_sf] = sign_fields.get(_sf) or None
-        
-        # 作业等级 = 表头 OCR「作业等级」一级/二级（一级危险最高）
-        # 【禁止兜底】禁止用 LLM 猜测；提不到就空，交路由/完整性报错
-        grade = extract_gas_work_grade(ocr_text)
-        raw_dict["risk_level"] = grade or None
-        if grade:
-            safe_print(f"[Sanitize] 带气作业等级: {grade}（一级危险最高）")
+
+        if ticket_type == TICKET_TYPE_GAS:
+            # ---- 仅带气：五列签批 + 作业等级一级/二级 ----
+            sign_fields = self._extract_sign_columns(ocr_text)
+            for _sf in (
+                "operators",
+                "construction_leader",
+                "supervisor",
+                "company_monitor",
+                "gas_leader",
+            ):
+                raw_dict[_sf] = sign_fields.get(_sf) or None
+            # 动火签批字段保持空
+            raw_dict["fire_personnel"] = None
+            raw_dict["fire_leader_project"] = None
+            raw_dict["fire_leader"] = None
+            grade = extract_gas_work_grade(ocr_text)
+            raw_dict["risk_level"] = grade or None
+            if grade:
+                safe_print(f"[Sanitize][带气] 作业等级: {grade}（一级危险最高）")
+            else:
+                safe_print("[Sanitize][带气] 作业等级未识别到，置空（禁止编造一级/二级）")
         else:
-            safe_print("[Sanitize] 带气作业等级未识别到，置空（禁止编造一级/二级）")
+            # ---- 仅动火：签批列（与带气 gas_leader/operators 分离）----
+            raw_dict["operators"] = None
+            raw_dict["gas_leader"] = None
+
+            def _pick_sign(llm_key: str, *patterns: str):
+                v = _clean_val(raw_dict.get(llm_key))
+                if v:
+                    return v
+                for p in patterns:
+                    v = _ocr_field([p])
+                    if v:
+                        return v
+                return None
+
+            raw_dict["fire_personnel"] = _pick_sign(
+                "fire_personnel", r"(?:动火人员)[：:\s|]*([^\n|]+)",
+            )
+            raw_dict["construction_leader"] = _pick_sign(
+                "construction_leader", r"(?:施工方现场负责人)[：:\s|]*([^\n|]+)",
+            )
+            raw_dict["supervisor"] = _pick_sign(
+                "supervisor", r"(?:监理人员)[：:\s|]*([^\n|]+)",
+            )
+            raw_dict["company_monitor"] = _pick_sign(
+                "company_monitor",
+                r"(?:项目公司监护人员|项目公司监护人)[：:\s|]*([^\n|]+)",
+            )
+            raw_dict["fire_leader_project"] = _pick_sign(
+                "fire_leader_project",
+                r"动火现场负责人\s*[（(]项目公司[）)]\s*[：:\s|]*([^\n|]+)",
+            )
+            raw_dict["fire_leader"] = _pick_sign(
+                "fire_leader",
+                r"动火现场负责人(?!\s*[（(]项目公司)\s*[：:\s|]*([^\n|]+)",
+            )
+
+            grade = extract_fire_work_grade(ocr_text)
+            if not grade:
+                grade = normalize_fire_work_grade(raw_dict.get("risk_level"))
+            raw_dict["risk_level"] = grade or None
+            if grade:
+                safe_print(f"[Sanitize][动火] 作业等级: {grade}{fire_grade_note(grade)}（特级最高·一级最低）")
+            else:
+                safe_print("[Sanitize][动火] 作业等级未识别到，置空（禁止编造）")
+            safe_print(
+                f"[Sanitize][动火] 单位={raw_dict.get('fire_unit') or '-'} "
+                f"地点={raw_dict.get('fire_location') or '-'} "
+                f"方式={raw_dict.get('fire_method') or '-'} "
+                f"采样={raw_dict.get('sampling_result') or '-'}"
+            )
 
         return raw_dict  # 返回整理后的新字典数据
 
@@ -997,41 +1516,77 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             safe_print("[LLM Log] 统一文本模式输出 JSON（单次请求，不使用 json_object）")
         return self.client.chat.completions.create(**payload)
 
-    def extract_sheet_json(self, ocr_text: str) -> SecuritySheetData:  # 调用大模型执行核心 OCR 文字到作业票结构化数据的语义提取提取工作
+    def extract_sheet_json(self, ocr_text: str, ticket_type: str = None) -> SecuritySheetData:  # 调用大模型执行核心 OCR 文字到作业票结构化数据的语义提取提取工作
         safe_print(f"[LLM Log] 调用 API [{self.model_name}] 进行语义分析...")  # 控制台打印系统 API 正在调用提示日志
+        ticket_type = normalize_ticket_type(
+            ticket_type or getattr(self, "_locked_ticket_type", None),
+            default=TICKET_TYPE_GAS,
+        )
+        self._locked_ticket_type = ticket_type
+        safe_print(f"[LLM Log] 提取流水线: {ticket_type}（与另一票型提示词完全分离）")
 
-        system_prompt = (  # 组织结构化大模型的 System 系统级提示词，强制规范提取的键名和返回值结构
-            "你是牡丹江中燃 HSE 管理体系的专职安全审计专家。将经 OCR 识别后的文本，"
-            "精准解析并提取为以下 JSON 结构：\n"
-            "{\n"
-            '  "ticket_type": "作业票类型，固定填“带气作业票”",\n'
-            '  "ticket_id": "作业票编号（如 MDJZR2025011007 或 MDJZR2026004001）",\n'
-            '  "station_name": "作业单位",\n'
-            '  "content": "作业内容",\n'
-            '  "work_time": "作业时间",\n'
-            '  "worker_id": "作业人员姓名及证件号/证书编号",\n'
-            '  "check_date": "日期 YYYY-MM-DD（签批区或票面签署日期）",\n'
-            '  "completion_time": "完工时间（票面底部完工时间栏，如 2025年10月10日16时0分）",\n'
-            '  "risk_level": "带气作业票表头作业等级，只能填“一级”或“二级”（一级危险程度最高；标题如《…带气作业票》（作业等级：二级））",\n'
-            '  "operators": "签批区域第1列：作业人员的手写签名姓名",\n'
-            '  "construction_leader": "签批区域第2列：施工方现场负责人的手写签名姓名",\n'
-            '  "supervisor": "签批区域第3列：监理人员的手写签名姓名",\n'
-            '  "company_monitor": "签批区域第4列：项目公司监护人的手写签名姓名",\n'
-            '  "gas_leader": "签批区域第5列：带气现场负责人的手写签名姓名"\n'
-            "}\n\n"
-            "【重要：签批区域提取规则】\n"
-            "票面底部「签批」区域有5列，列头从左到右依次为：\n"
-            "  第1列=作业人员 -> operators\n"
-            "  第2列=施工方现场负责人 -> construction_leader\n"
-            "  第3列=监理人员 -> supervisor\n"
-            "  第4列=项目公司监护人 -> company_monitor\n"
-            "  第5列=带气现场负责人 -> gas_leader\n"
-            "列头下方紧跟的手写签名就是对应人员的姓名。"
-            "请严格按列的位置顺序一一对应提取，不要混淆列之间的姓名。\n"
-            "OCR文本中签批区域的列头行格式通常为：「作业人员：  施工方现场负责人：  监理人员：  项目公司监护人：  带气现场负责人」，"
-            "紧接着下一行或几行的手写文字就是各列对应的签名姓名，按从左到右的顺序依次对应上面5个字段。\n\n"
-            "【输出要求】只输出一个合法 JSON 对象，不要 Markdown 代码块，不要解释文字，不要输出思考过程。"
-        )  # 结束提示词定义
+        if ticket_type == TICKET_TYPE_FIRE:
+            system_prompt = (
+                "你是牡丹江中燃 HSE 管理体系的专职安全审计专家。当前任务**仅处理动火作业票**，"
+                "禁止按带气作业票字段理解。将 OCR 文本提取为以下 JSON：\n"
+                "{\n"
+                f'  "ticket_type": "固定填“{TICKET_TYPE_FIRE}”",\n'
+                '  "ticket_id": "作业票编号",\n'
+                '  "fire_unit": "动火单位",\n'
+                '  "fire_location": "动火地点",\n'
+                '  "content": "动火内容",\n'
+                '  "work_time": "动火时间",\n'
+                '  "fire_method": "动火方式",\n'
+                '  "worker_id": "动火人姓名及证书编号",\n'
+                '  "sampling_result": "采样检测结果/记录",\n'
+                '  "risk_level": "动火等级，只能填“一级”或“二级”或“特级”（特级最高，一级最低）",\n'
+                '  "fire_personnel": "动火人员（签批）",\n'
+                '  "construction_leader": "施工方现场负责人",\n'
+                '  "supervisor": "监理人员",\n'
+                '  "company_monitor": "项目公司监护人员",\n'
+                '  "fire_leader_project": "动火现场负责人(项目公司)",\n'
+                '  "fire_leader": "动火现场负责人",\n'
+                '  "check_date": "日期 YYYY-MM-DD",\n'
+                '  "completion_time": "完工时间（若有）",\n'
+                '  "approver_name": "其他批准/签字人（若有）"\n'
+                "}\n\n"
+                "【动火票规则】不要使用 gas_leader/operators 等带气字段名；"
+                "不要把动火措施当成 25×5 网格。安全措施勾选由系统本地规则解析。\n"
+                "【输出要求】只输出一个合法 JSON 对象，不要 Markdown 代码块，不要解释文字。"
+            )
+        else:
+            system_prompt = (
+                "你是牡丹江中燃 HSE 管理体系的专职安全审计专家。当前任务**仅处理带气作业票**，"
+                "禁止按动火作业票字段理解。将 OCR 文本提取为以下 JSON：\n"
+                "{\n"
+                f'  "ticket_type": "固定填“{TICKET_TYPE_GAS}”",\n'
+                '  "ticket_id": "作业票编号（如 MDJZR2025011007 或 MDJZR2026004001）",\n'
+                '  "station_name": "作业单位",\n'
+                '  "content": "作业内容",\n'
+                '  "work_time": "作业时间",\n'
+                '  "worker_id": "作业人员姓名及证件号/证书编号",\n'
+                '  "check_date": "日期 YYYY-MM-DD（签批区或票面签署日期）",\n'
+                '  "completion_time": "完工时间（票面底部完工时间栏，如 2025年10月10日16时0分）",\n'
+                '  "risk_level": "带气作业票表头作业等级，只能填“一级”或“二级”（一级危险程度最高）",\n'
+                '  "operators": "签批区域第1列：作业人员的手写签名姓名",\n'
+                '  "construction_leader": "签批区域第2列：施工方现场负责人的手写签名姓名",\n'
+                '  "supervisor": "签批区域第3列：监理人员的手写签名姓名",\n'
+                '  "company_monitor": "签批区域第4列：项目公司监护人的手写签名姓名",\n'
+                '  "gas_leader": "签批区域第5列：带气现场负责人的手写签名姓名"\n'
+                "}\n\n"
+                "【重要：签批区域提取规则】\n"
+                "票面底部「签批」区域有5列，列头从左到右依次为：\n"
+                "  第1列=作业人员 -> operators\n"
+                "  第2列=施工方现场负责人 -> construction_leader\n"
+                "  第3列=监理人员 -> supervisor\n"
+                "  第4列=项目公司监护人 -> company_monitor\n"
+                "  第5列=带气现场负责人 -> gas_leader\n"
+                "列头下方紧跟的手写签名就是对应人员的姓名。"
+                "请严格按列的位置顺序一一对应提取，不要混淆列之间的姓名。\n"
+                "OCR文本中签批区域的列头行格式通常为：「作业人员：  施工方现场负责人：  监理人员：  项目公司监护人：  带气现场负责人」，"
+                "紧接着下一行或几行的手写文字就是各列对应的签名姓名，按从左到右的顺序依次对应上面5个字段。\n\n"
+                "【输出要求】只输出一个合法 JSON 对象，不要 Markdown 代码块，不要解释文字，不要输出思考过程。"
+            )
 
         # (已按要求移除截断，让大模型读取完整文本，防止末尾追加的网格结果被切掉)
 
@@ -1091,7 +1646,8 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             else:
                 raise
 
-        sanitized = self._sanitize_sheet_data(raw_dict, ocr_text)  # 调用 _sanitize_sheet_data 使用 Python + OCR 规则进行全面的重构重构和校验
+        raw_dict["ticket_type"] = ticket_type  # 强制锁定用户选择票型，禁止 LLM 串改
+        sanitized = self._sanitize_sheet_data(raw_dict, ocr_text, ticket_type=ticket_type)
         return SecuritySheetData(**sanitized)  # 将校验规整后的字典转换为安全 Pydantic 模型 SecuritySheetData 并返回结果
 
 
@@ -1186,18 +1742,24 @@ class AgentTools:
                 progress_callback(pct, msg)  # 执行进度通知更新
 
         # 尝试进行模板对齐 (无论是 PaddleOCR 还是视觉大模型，优先对齐能确保裁剪坐标一致且读图质量更佳)
+        # 票型由用户选择锁定：只匹配对应模板，禁止带气/动火交叉试配
+        locked_type = normalize_ticket_type(ticket_type, default=TICKET_TYPE_GAS)
+        spec = TICKET_TEMPLATE_SPEC[locked_type]
+        want_file = spec["file"]
+        target_size = spec["size"]
+        type_label = spec["label"]
+        safe_print(f"[OCR] 票型锁定={locked_type} → 仅匹配模板 {want_file}（{target_size[0]}x{target_size[1]}）")
+
         template_dir = os.path.join(os.path.dirname(__file__), "template")
-        # 过滤掉 aligned_result.png 和 match_debug.png 等调试输出文件，只使用真正的模板（如 dq.png, gc.png）
         templates = []
         if os.path.exists(template_dir):
             for f in os.listdir(template_dir):
                 if f.lower().endswith(".png") and not f.startswith("aligned") and not f.startswith("match"):
-                    # 仅带气模板 dq.png
-                    if f != "dq.png":
+                    # 忽略「去表格化」派生图；仅精确匹配票型模板
+                    if "去表格" in f or f != want_file:
                         continue
                     templates.append(f)
-        
-        matched_template_type = None
+
         matched_template_type = None
         if templates:
             import subprocess
@@ -1243,9 +1805,7 @@ class AgentTools:
                             np.fromfile(aligned_path, dtype=np.uint8), cv2.IMREAD_COLOR
                         )
                         if aligned_img is not None:
-                            # 规范尺寸：带气票 1052x1487（ocr5/签字坐标兼容）
-                            # 模板 dq 本身已是该尺寸时跳过 resize，避免二次插值发虚
-                            target_size = (1052, 1487)
+                            # 按票型规范尺寸缩放（带气 1052x1487 / 动火 1000x1414）
                             if (
                                 aligned_img.shape[1] != target_size[0]
                                 or aligned_img.shape[0] != target_size[1]
@@ -1273,19 +1833,27 @@ class AgentTools:
                             except Exception as e:
                                 safe_print(f"[OCR] ⚠️ 去表格化处理异常: {e}")
 
-                            safe_print(f"[OCR] 模板匹配对齐完成：使用 {t_file}（带气）→ {aligned_img.shape[1]}x{aligned_img.shape[0]}")
+                            safe_print(
+                                f"[OCR] 模板匹配对齐完成：使用 {t_file}（{type_label}）"
+                                f"→ {aligned_img.shape[1]}x{aligned_img.shape[0]}"
+                            )
                             image_path = aligned_path
                             AgentTools._last_image_path = aligned_path
                             matched = True
-                            matched_template_type = "带气作业票"
+                            matched_template_type = locked_type
                             break
                 except Exception as e:
                     safe_print(f"[OCR] 对齐异常 {t_file}: {e}")
-                    # 对齐失败，继续尝试下一个模板                    safe_print(f"[OCR] 调用 align_to_template.py 失败或不匹配 {t_file}: {e}")
             
             if not matched:
-                # 所有模板都无法匹配，可能是完全不同的图片
-                raise RuntimeError("上传的照片无法匹配到任何已注册的作业票模板（如带气作业票），请确保照片拍摄端正且清晰无遮挡，并重新上传正确的照片！")
+                raise RuntimeError(
+                    f"上传的照片无法匹配【{locked_type}】模板（{want_file}）。"
+                    f"请确认所选票型与照片一致，且拍摄端正清晰无遮挡后重试。"
+                )
+        else:
+            raise RuntimeError(
+                f"未找到【{locked_type}】模板文件 template/{want_file}，请检查 template 目录。"
+            )
 
         # ---- 视觉大模型（无坐标） ----
         if engine == "vision":  # 如果用户指定使用视觉大模型引擎
@@ -1332,34 +1900,49 @@ class AgentTools:
             flat_text = ocr_result  # 直接全部视作纯文本结果
         AgentTools._last_ocr_raw = flat_text  # 将提取的纯文本写入智能体临时 OCR 原文缓存中
 
-        # 首次感知全图扫描分类检测：从识别文本中提取 3 种作业票类型并标出绝对坐标打印在日志窗口
+        # 票型文字检测：仅日志/校验，不跨票型改写用户锁定类型
         import re  # 导入正则表达式模块
-        
+
         ocr_type = None
         ocr_coords = None
-        for line in flat_text.split("\n"):  # 遍历扁平 OCR 文本的每一行
-            line_str = line.strip()  # 去除首尾空格
-            m = re.match(r"(.+?)\s+\[(\d+),(\d+),(\d+),(\d+)\]", line_str)  # 正则匹配提取文本和坐标数值
+        for line in flat_text.split("\n"):
+            line_str = line.strip()
+            m = re.match(r"(.+?)\s+\[(\d+),(\d+),(\d+),(\d+)\]", line_str)
             if m:
                 text_part = m.group(1).strip()
                 coords_val = (int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5)))
-                clean_txt = re.sub(r"[^\u4e00-\u9fa5a-zA-Z0-9]", "", text_part)  # 清洗文本，只保留中文、英文字母及数字
-                
-                if "带气作业票" in clean_txt or "带气" in clean_txt:
-                    ocr_type = "带气作业票"
+                clean_txt = re.sub(r"[^\u4e00-\u9fa5a-zA-Z0-9]", "", text_part)
+                if "带气作业票" in clean_txt or ("带气" in clean_txt and "动火" not in clean_txt):
+                    ocr_type = TICKET_TYPE_GAS
+                    ocr_coords = coords_val
+                    break
+                if "动火作业票" in clean_txt or "动火" in clean_txt:
+                    ocr_type = TICKET_TYPE_FIRE
                     ocr_coords = coords_val
                     break
 
-        detected_type = ocr_type or matched_template_type  # 优先使用 OCR 文字识别的票型进行纠偏，避免模板误匹配
-        
-        if detected_type:  # 若成功匹配
-            coords_str = f" | 坐标: x={ocr_coords[0]}, y={ocr_coords[1]}, w={ocr_coords[2]}, h={ocr_coords[3]}" if ocr_coords else ""
-            safe_print(f"[OCR 检测] 首次扫描识别到作业票类型: 【{detected_type}】{coords_str}")  # 标出坐标输出到运行日志中
+        # 流水线票型 = 用户锁定；OCR 仅作一致性警告
+        pipeline_type = locked_type
+        if ocr_type and ocr_type != locked_type:
+            coords_str = (
+                f" | 坐标: x={ocr_coords[0]}, y={ocr_coords[1]}, w={ocr_coords[2]}, h={ocr_coords[3]}"
+                if ocr_coords else ""
+            )
+            safe_print(
+                f"[OCR 检测] ⚠ 票面文字像【{ocr_type}】但用户选择【{locked_type}】"
+                f"{coords_str} — 仍按用户选择流水线处理（不交叉切换）"
+            )
+        elif ocr_type or matched_template_type:
+            detected = ocr_type or matched_template_type
+            coords_str = (
+                f" | 坐标: x={ocr_coords[0]}, y={ocr_coords[1]}, w={ocr_coords[2]}, h={ocr_coords[3]}"
+                if ocr_coords else ""
+            )
+            safe_print(f"[OCR 检测] 流水线票型【{pipeline_type}】文字/模板一致【{detected}】{coords_str}")
 
-        # 纯本地 OpenCV 网格符号检测（仅带气作业票 + 对齐成功时触发）
-        # 【禁止兜底】ocr5 失败必须暴露问题：抛错中断，禁止静默跳过导致 25×5 全 blank 仍继续“像正常票”
-        if detected_type == "带气作业票" and "aligned_" in os.path.basename(image_path):
-            safe_print("[OpenCV] 启用 ocr5.py 进行 25×5 符号识别（失败即报错，禁止静默跳过）...")
+        # ---- 仅带气：ocr5 25×5；动火禁止调用 ocr5 ----
+        if pipeline_type == TICKET_TYPE_GAS and "aligned_" in os.path.basename(image_path):
+            safe_print("[OpenCV][带气] 启用 ocr5.py 进行 25×5 符号识别（失败即报错，禁止静默跳过）...")
             cmd = [
                 sys.executable,
                 os.path.join(os.path.dirname(__file__), "ocr5.py"),
@@ -1379,7 +1962,9 @@ class AgentTools:
             flat_text = append_text + "\n" + flat_text
             ocr_result = append_text + "\n" + ocr_result
             AgentTools._last_ocr_raw = flat_text
-            safe_print("[OpenCV] ocr5.py 25×5 结果前插融合完成")
+            safe_print("[OpenCV][带气] ocr5.py 25×5 结果前插融合完成")
+        elif pipeline_type == TICKET_TYPE_FIRE:
+            safe_print("[OpenCV][动火] 跳过 ocr5（动火为 21 条单列勾选，与带气 25×5 完全分离）")
 
         return ocr_result
 
@@ -1435,14 +2020,14 @@ class AgentTools:
             desc = current.get("lang_zh", [{}])[0].get("value", current.get("weatherDesc", [{}])[0].get("value", ""))
             weather_code = int(current.get("weather_code", 0))
 
-            # 判断是否符合带气作业条件
+            # 天气仅留痕；文案中性，不绑定单一票型（动火/带气各自业务规则在流水线内处理）
             issues = []
             if temp_c <= -5:
                 issues.append(f"气温{temp_c}℃(≤-5℃)，低温警告，需加强防冻防滑措施")
             if wind_level >= 5:
-                issues.append(f"风力{wind_level}级(≥5级)，禁止露天带气作业")
+                issues.append(f"风力{wind_level}级(≥5级)，禁止露天特种作业")
             if weather_code in [386, 389, 392, 395, 200]:  # 雷雨/暴雨
-                issues.append(f"天气{desc}，禁止带气作业")
+                issues.append(f"天气{desc}，禁止露天特种作业")
             if temp_c >= 40:
                 issues.append(f"气温{temp_c}℃(≥40℃)，需加强防暑")
             if wind_level >= 4:
@@ -1463,54 +2048,253 @@ class AgentTools:
             return {"city": city, "ok": True, "issues": [], "error": str(e)}
 
     @staticmethod
+    def ensure_ticket_tables(conn) -> None:
+        """确保带气 / 动火分表存在。
+
+        带气表字段与业务变量一一对应：
+          ticket_id 作业票编号 | station_name 作业单位 | content 作业内容
+          work_time 作业时间 | worker_id 作业人姓名及证书编号 | check_date 日期
+          completion_time 完工时间 | risk_level 作业等级(一级/二级)
+          approver_name 发起人签字确认
+          operators 作业人员 | construction_leader 施工方现场负责人
+          supervisor 监理人员 | company_monitor 项目公司监护人
+          gas_leader 带气现场负责人
+          safety_measures_json / issues_json / 审批与归档字段
+
+        已废弃的混用表 hse_fire_work_tickets 在此直接删除，不再迁移历史。
+        """
+        # 废弃旧混用表（用户重新录入，不需要历史）
+        conn.execute("DROP TABLE IF EXISTS hse_fire_work_tickets")
+
+        # ---- 带气分表（完整业务列）----
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS {DB_TABLE_GAS} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id TEXT NOT NULL DEFAULT '',
+                station_name TEXT NOT NULL DEFAULT '',
+                content TEXT NOT NULL DEFAULT '',
+                work_time TEXT,
+                worker_id TEXT NOT NULL DEFAULT '',
+                check_date TEXT NOT NULL DEFAULT '',
+                completion_time TEXT,
+                risk_level TEXT,
+                approver_name TEXT,
+                operators TEXT,
+                construction_leader TEXT,
+                supervisor TEXT,
+                company_monitor TEXT,
+                gas_leader TEXT,
+                safety_measures_json TEXT,
+                has_abnormal INTEGER NOT NULL DEFAULT 0,
+                issues_json TEXT,
+                approval_opinion TEXT,
+                approval_status TEXT,
+                approval_level TEXT,
+                raw_ocr_text TEXT,
+                image_path TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # ---- 动火分表 ----
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS {DB_TABLE_HOT} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id TEXT NOT NULL DEFAULT '',
+                fire_unit TEXT,
+                fire_location TEXT,
+                content TEXT NOT NULL DEFAULT '',
+                work_time TEXT,
+                fire_method TEXT,
+                worker_id TEXT NOT NULL DEFAULT '',
+                sampling_result TEXT,
+                risk_level TEXT,
+                fire_personnel TEXT,
+                construction_leader TEXT,
+                supervisor TEXT,
+                company_monitor TEXT,
+                fire_leader_project TEXT,
+                fire_leader TEXT,
+                check_date TEXT NOT NULL DEFAULT '',
+                safety_measures_json TEXT,
+                has_abnormal INTEGER NOT NULL DEFAULT 0,
+                issues_json TEXT,
+                completion_time TEXT,
+                approver_name TEXT,
+                approval_opinion TEXT,
+                approval_status TEXT,
+                approval_level TEXT,
+                raw_ocr_text TEXT,
+                image_path TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        def _ensure_cols(table: str, cols: list) -> None:
+            existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            for col, typ in cols:
+                if col not in existing:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+                    safe_print(f"[Tool] 表 {table} 迁移：新增列 {col}")
+
+        # 带气：补齐业务列（含历史库升级）
+        _ensure_cols(DB_TABLE_GAS, [
+            ("ticket_id", "TEXT"),
+            ("station_name", "TEXT"),
+            ("content", "TEXT"),
+            ("work_time", "TEXT"),
+            ("worker_id", "TEXT"),
+            ("check_date", "TEXT"),
+            ("completion_time", "TEXT"),
+            ("risk_level", "TEXT"),
+            ("approver_name", "TEXT"),
+            ("operators", "TEXT"),
+            ("construction_leader", "TEXT"),
+            ("supervisor", "TEXT"),
+            ("company_monitor", "TEXT"),
+            ("gas_leader", "TEXT"),
+            ("safety_measures_json", "TEXT"),
+            ("has_abnormal", "INTEGER"),
+            ("issues_json", "TEXT"),
+            ("approval_opinion", "TEXT"),
+            ("approval_status", "TEXT"),
+            ("approval_level", "TEXT"),
+            ("raw_ocr_text", "TEXT"),
+            ("image_path", "TEXT"),
+            # 兼容极旧数据中的浓度 JSON 列（新写入不再使用）
+            ("gas_concentration_json", "TEXT"),
+        ])
+        # 动火：补齐业务列
+        _ensure_cols(DB_TABLE_HOT, [
+            ("ticket_id", "TEXT"),
+            ("fire_unit", "TEXT"),
+            ("fire_location", "TEXT"),
+            ("content", "TEXT"),
+            ("work_time", "TEXT"),
+            ("fire_method", "TEXT"),
+            ("worker_id", "TEXT"),
+            ("sampling_result", "TEXT"),
+            ("risk_level", "TEXT"),
+            ("fire_personnel", "TEXT"),
+            ("construction_leader", "TEXT"),
+            ("supervisor", "TEXT"),
+            ("company_monitor", "TEXT"),
+            ("fire_leader_project", "TEXT"),
+            ("fire_leader", "TEXT"),
+            ("check_date", "TEXT"),
+            ("safety_measures_json", "TEXT"),
+            ("has_abnormal", "INTEGER"),
+            ("issues_json", "TEXT"),
+            ("completion_time", "TEXT"),
+            ("approver_name", "TEXT"),
+            ("approval_opinion", "TEXT"),
+            ("approval_status", "TEXT"),
+            ("approval_level", "TEXT"),
+            ("raw_ocr_text", "TEXT"),
+            ("image_path", "TEXT"),
+        ])
+
+    @staticmethod
     def save_to_db(data: SecuritySheetData, raw_ocr: str = "", image_path: str = "") -> bool:
-        """写入 SQLite，自动迁移旧表"""
+        """按票型写入分表：带气 → hse_gas_work_tickets；动火 → hse_hot_work_tickets。"""
         import sqlite3
         db_path = os.path.join(os.path.dirname(__file__), "security_data.db")
         safe_print(f"[Tool] 写入 SQLite: {db_path}")
 
         conn = sqlite3.connect(db_path)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS hse_fire_work_tickets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ticket_id TEXT NOT NULL, station_name TEXT NOT NULL,
-                content TEXT NOT NULL, work_time TEXT, worker_id TEXT NOT NULL,
-                check_date TEXT NOT NULL, gas_concentration_json TEXT,
-                safety_measures_json TEXT, has_abnormal INTEGER NOT NULL,
-                issues_json TEXT, completion_time TEXT, approver_name TEXT,
-                approval_opinion TEXT, risk_level TEXT, raw_ocr_text TEXT,
-                image_path TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        try:
+            AgentTools.ensure_ticket_tables(conn)
+            tt = normalize_ticket_type(data.ticket_type, default=TICKET_TYPE_GAS)
+            measures_json = json.dumps(
+                [m.model_dump() for m in data.safety_measures], ensure_ascii=False
             )
-        """)
+            issues_json = json.dumps(
+                [i.model_dump() for i in data.issues], ensure_ascii=False
+            )
 
-        # 自动迁移：给旧表补列
-        existing = {row[1] for row in conn.execute("PRAGMA table_info(hse_fire_work_tickets)").fetchall()}
-        for col, typ in [("approval_opinion", "TEXT"), ("risk_level", "TEXT"), ("image_path", "TEXT"),
-                         ("approval_status", "TEXT"), ("approval_level", "TEXT"), ("work_time", "TEXT")]:
-            if col not in existing:
-                conn.execute(f"ALTER TABLE hse_fire_work_tickets ADD COLUMN {col} {typ}")
-                safe_print(f"[Tool] 旧表迁移：新增列 {col}")
+            if tt == TICKET_TYPE_FIRE:
+                conn.execute(
+                    f"INSERT INTO {DB_TABLE_HOT} ("
+                    "ticket_id,fire_unit,fire_location,content,work_time,fire_method,"
+                    "worker_id,sampling_result,risk_level,fire_personnel,"
+                    "construction_leader,supervisor,company_monitor,"
+                    "fire_leader_project,fire_leader,check_date,"
+                    "safety_measures_json,has_abnormal,issues_json,completion_time,"
+                    "approver_name,approval_opinion,approval_status,approval_level,"
+                    "raw_ocr_text,image_path"
+                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        data.ticket_id or "",
+                        data.fire_unit,
+                        data.fire_location,
+                        data.content or "",
+                        data.work_time,
+                        data.fire_method,
+                        data.worker_id or "",
+                        data.sampling_result,
+                        data.risk_level,
+                        data.fire_personnel,
+                        data.construction_leader,
+                        data.supervisor,
+                        data.company_monitor,
+                        data.fire_leader_project,
+                        data.fire_leader,
+                        data.check_date or "",
+                        measures_json,
+                        int(data.has_abnormal),
+                        issues_json,
+                        data.completion_time,
+                        data.approver_name,
+                        data.approval_opinion,
+                        data.approval_status,
+                        data.approval_level,
+                        raw_ocr,
+                        image_path,
+                    ),
+                )
+                table_name = DB_TABLE_HOT
+            else:
+                # 带气：业务变量与列一一对应写入（不再写空浓度 JSON）
+                conn.execute(
+                    f"INSERT INTO {DB_TABLE_GAS} ("
+                    "ticket_id,station_name,content,work_time,worker_id,check_date,"
+                    "completion_time,risk_level,approver_name,"
+                    "operators,construction_leader,supervisor,company_monitor,gas_leader,"
+                    "safety_measures_json,has_abnormal,issues_json,"
+                    "approval_opinion,approval_status,approval_level,"
+                    "raw_ocr_text,image_path"
+                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        data.ticket_id or "",                    # 作业票编号
+                        data.station_name or "",                 # 作业单位
+                        data.content or "",                      # 作业内容
+                        data.work_time or None,                  # 作业时间
+                        data.worker_id or "",                    # 作业人姓名及证书编号
+                        data.check_date or "",                   # 日期
+                        data.completion_time or None,            # 完工时间
+                        data.risk_level or None,                 # 作业等级 一级/二级
+                        data.approver_name or None,              # 发起人签字确认
+                        data.operators or None,                  # 作业人员
+                        data.construction_leader or None,        # 施工方现场负责人
+                        data.supervisor or None,                 # 监理人员
+                        data.company_monitor or None,            # 项目公司监护人
+                        data.gas_leader or None,                 # 带气现场负责人
+                        measures_json,                           # 25×5 安全措施
+                        int(data.has_abnormal),
+                        issues_json,
+                        data.approval_opinion or None,
+                        data.approval_status or None,
+                        data.approval_level or None,
+                        raw_ocr or None,
+                        image_path or None,
+                    ),
+                )
+                table_name = DB_TABLE_GAS
 
-        conn.execute(
-            "INSERT INTO hse_fire_work_tickets "
-            "(ticket_id,station_name,content,work_time,worker_id,check_date,"
-            "gas_concentration_json,safety_measures_json,has_abnormal,"
-            "issues_json,completion_time,approver_name,approval_opinion,risk_level,"
-            "approval_status,approval_level,raw_ocr_text,image_path) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (data.ticket_id, data.station_name, data.content, data.work_time, data.worker_id,
-             data.check_date, json.dumps([], ensure_ascii=False),
-             json.dumps([m.model_dump() for m in data.safety_measures], ensure_ascii=False),
-             int(data.has_abnormal),
-             json.dumps([i.model_dump() for i in data.issues], ensure_ascii=False),
-             data.completion_time, data.approver_name, data.approval_opinion,
-             data.risk_level, data.approval_status, data.approval_level,
-             raw_ocr, image_path),
-        )
-        conn.commit()
-        conn.close()
-        safe_print(f"[Tool] 作业票 {data.ticket_id} 已存入数据库。")
-        return True
+            conn.commit()
+            safe_print(f"[Tool] {tt} 票号 {data.ticket_id} 已存入表 {table_name}")
+            return True
+        finally:
+            conn.close()
 
     @staticmethod
     def _dingtalk_field_cache_path() -> str:
@@ -1944,20 +2728,22 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         return text  # 返回提取出的文字
 
     def _reason(self, ocr_text: str, mem: AgentMemory) -> SecuritySheetData:  # 推理阶段：调用大模型进行实体识别和关系分类，填充为 Pydantic 字典
-        safe_print("[Agent Reason] LLM 语义分析...")  # 打印推理阶段日志
+        tt = normalize_ticket_type(getattr(self, "_ticket_type", None), default=TICKET_TYPE_GAS)
+        safe_print(f"[Agent Reason] LLM 语义分析（{tt}）...")  # 打印推理阶段日志
         # 开启新一轮推理前清空提示词日志，避免与历史票据混档
         self.brain._extract_prompt_log = []
         self.brain._last_extract_prompt = ""
+        self.brain._locked_ticket_type = tt
         sim = _ProgressSim(self._progress, 55, 80, "LLM 语义分析中", 2, 1.0)  # 实例化推理进度模拟器线程，进度从 55% 到 80%
         sim.start()  # 开启平滑更新进度线程
         try:  # 安全审计: 提取彻底失败不再静默造假，捕获并转成明确的高风险失败体交由反思/执行拦截
-            data = self.brain.extract_sheet_json(ocr_text)  # 调用大模型执行 JSON 语义结构化提取
+            data = self.brain.extract_sheet_json(ocr_text, ticket_type=tt)
         except Exception as e:  # LLM 返回无法解析或网络异常
             safe_print(f"[Agent Reason] LLM 提取失败，标记高风险拦截: {e}")  # 打印失败原因，不造假兜底
             mem.remember("推理", "⚠️", "LLM 提取失败", f"高风险拦截: {e}", status="error")  # 记忆体记录提取失败
             sim.done()  # 停止模拟线程
             data = SecuritySheetData(  # 构造失败体，has_abnormal=True 走漏填/人工介入分支
-                ticket_type="带气作业票",
+                ticket_type=tt,
                 ticket_id="LLM提取失败",  # 占位票号，标记异常来源
                 station_name="", content="", work_time="", worker_id="",  # 关键字段一律留空，绝不编造
                 check_date="",  # 日期留空
@@ -1966,9 +2752,9 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             )
             return data  # 直接返回失败体，跳过后续正常路径
         sim.done()  # 停止模拟线程，进度直接推进到 80%
-        summary = (f"票号={data.ticket_id} | 场站={data.station_name} | "  # 汇总推理核心要素
-                   f"措施={len(data.safety_measures)}项 | "  # 条款数
-                   f"异常={data.has_abnormal}")  # 异常状态
+        summary = (f"票型={data.ticket_type} | 票号={data.ticket_id} | 场站={data.station_name} | "
+                   f"措施={len(data.safety_measures)}项 | "
+                   f"异常={data.has_abnormal}")
         safe_print(f"[Agent Reason] {summary}")  # 终端打印推理概要日志
         mem.remember("推理", "🤔", "LLM 结构化解析", summary)  # 将推理阶段记录进记忆体
         return data  # 返回 Pydantic 数据实例
@@ -1992,124 +2778,209 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                     return ""
                 return val_str
 
-            # ========== 带气作业票数据完整性校验 ==========
-            # 规则1：25 项安全措施 × 每项 5 列确认格；每格须填 对号√ / 叉号× / 斜杠\ 之一，空白=漏项
-            # 图例：确认（落实√ 未落实× 不适用\）
-            expected_count = GAS_MEASURE_COUNT  # 25
-            role_count = len(GAS_MEASURE_ROLES)  # 5
-            std_list = STANDARD_MEASURES.get("带气作业票", [])
-            std_ids = {mid for mid, _ in std_list} if std_list else set(range(1, expected_count + 1))
-            measures = data.safety_measures or []
-            present_ids = {m.measure_id for m in measures if m.measure_id is not None}
-            missing_ids = sorted(std_ids - present_ids)
-
-            # 逐项检查五列：✓/×/\ 均算已填写；blank 或列数不足算漏项
-            blank_cells = []  # e.g. "第3项-监理"
-            incomplete_rows = []  # 无 column_marks 或不足 5 列
-            for m in measures:
-                marks = list(getattr(m, "column_marks", None) or [])
-                if len(marks) < role_count:
-                    # 尝试从 ocr 网格补解析（反思重试后 data 可能已有 marks）
-                    incomplete_rows.append(m.measure_id)
-                    continue
-                for i, mk in enumerate(marks[:role_count]):
-                    mk_norm = mk if mk in ("check", "cross", "slash", "blank") else _normalize_gas_cell_mark(mk)
-                    if mk_norm not in GAS_MARK_FILLED:
-                        role_name = GAS_MEASURE_ROLES[i] if i < role_count else f"列{i+1}"
-                        blank_cells.append(f"第{m.measure_id}项-{role_name}")
-
-            measures_ok = (
-                len(missing_ids) == 0
-                and len(blank_cells) == 0
-                and len(incomplete_rows) == 0
-                and len(present_ids) >= expected_count
+            tt = normalize_ticket_type(
+                data.ticket_type or getattr(self, "_ticket_type", None),
+                default=TICKET_TYPE_GAS,
             )
-            if measures_ok:
-                checks.append((
-                    "安全措施",
-                    True,
-                    f"{expected_count}项×{role_count}列全部填写(√/×/\\)、无漏项 OK",
-                ))
+            data.ticket_type = tt  # 锁定，禁止反思过程串票型
+
+            if tt == TICKET_TYPE_GAS:
+                # ========== 带气专用：25×5 网格 + 五列签批 + 一级/二级 ==========
+                expected_count = GAS_MEASURE_COUNT
+                role_count = len(GAS_MEASURE_ROLES)
+                std_list = STANDARD_MEASURES.get(TICKET_TYPE_GAS, [])
+                std_ids = {mid for mid, _ in std_list} if std_list else set(range(1, expected_count + 1))
+                measures = data.safety_measures or []
+                present_ids = {m.measure_id for m in measures if m.measure_id is not None}
+                missing_ids = sorted(std_ids - present_ids)
+
+                blank_cells = []
+                incomplete_rows = []
+                for m in measures:
+                    marks = list(getattr(m, "column_marks", None) or [])
+                    if len(marks) < role_count:
+                        incomplete_rows.append(m.measure_id)
+                        continue
+                    for i, mk in enumerate(marks[:role_count]):
+                        mk_norm = mk if mk in ("check", "cross", "slash", "blank") else _normalize_gas_cell_mark(mk)
+                        if mk_norm not in GAS_MARK_FILLED:
+                            role_name = GAS_MEASURE_ROLES[i] if i < role_count else f"列{i+1}"
+                            blank_cells.append(f"第{m.measure_id}项-{role_name}")
+
+                measures_ok = (
+                    len(missing_ids) == 0
+                    and len(blank_cells) == 0
+                    and len(incomplete_rows) == 0
+                    and len(present_ids) >= expected_count
+                )
+                if measures_ok:
+                    checks.append((
+                        "安全措施", True,
+                        f"{expected_count}项×{role_count}列全部填写(√/×/\\)、无漏项 OK",
+                    ))
+                else:
+                    detail_parts = []
+                    if missing_ids:
+                        detail_parts.append(f"缺项{missing_ids}")
+                    if incomplete_rows:
+                        uniq = sorted(set(incomplete_rows))
+                        detail_parts.append(f"五列未识别完整{uniq[:8]}{'…' if len(uniq) > 8 else ''}")
+                    if blank_cells:
+                        detail_parts.append(
+                            f"空白格{blank_cells[:10]}{'…' if len(blank_cells) > 10 else ''}"
+                            f"（共{len(blank_cells)}格）"
+                        )
+                    if len(present_ids) < expected_count:
+                        detail_parts.append(f"仅{len(present_ids)}/{expected_count}项")
+                    checks.append(("安全措施", False, "；".join(detail_parts) if detail_parts else "未填写完整"))
+
+                date_specs = [
+                    ("日期", data.check_date, ["日期", "年", "月", "日", "YYYY-MM-DD"]),
+                    ("作业时间", data.work_time, ["作业时间", "时间"]),
+                    ("完工时间", data.completion_time, ["完工时间", "时间"]),
+                ]
+                sig_specs = [
+                    ("发起人签字", data.approver_name, ["签字", "盖章", "负责人", "手写", "发起人签字确认"]),
+                    ("作业人员签名", data.operators, ["作业人员", "签字", "手写"]),
+                    ("施工方现场负责人", data.construction_leader, ["施工方现场负责人", "签字", "手写"]),
+                    ("监理人员", data.supervisor, ["监理人员", "签字", "手写"]),
+                    ("项目公司监护人", data.company_monitor, ["项目公司监护人", "签字", "手写"]),
+                    ("带气现场负责人", data.gas_leader, ["带气现场负责人", "签字", "手写"]),
+                ]
+                missing_date_sig = []
+                for label, raw_val, placeholders in date_specs + sig_specs:
+                    cleaned = clean_field(raw_val, placeholders)
+                    min_len = 4 if label in ("日期", "作业时间", "完工时间") else 1
+                    if not cleaned or len(cleaned) < min_len:
+                        missing_date_sig.append(label)
+                if not missing_date_sig:
+                    checks.append(("日期和签名", True, "全部填写、无漏项 OK"))
+                else:
+                    checks.append(("日期和签名", False, f"漏项: {', '.join(missing_date_sig)}"))
+
+                grade = normalize_gas_work_grade(data.risk_level)
+                if grade:
+                    checks.append(("作业等级", True, f"{grade}" + ("（一级危险最高）" if grade == "一级" else "")))
+                else:
+                    checks.append(("作业等级", False, "表头「作业等级：一级/二级」未识别（禁止编造）"))
+
+                pass_msg = "25×5无漏项 + 日期签名齐全 + 作业等级已识别，全部通过"
+                hint = (
+                    f"上次问题：{{failed}}。"
+                    f"请严格校验：1) 带气安全措施共{expected_count}项，每项5列确认格"
+                    f"（作业人/施工方现场负责人/监理/监护人/带气现场负责人）"
+                    f"均须填写对号√、叉号×或斜杠\\之一，禁止空白漏项；"
+                    f"2) 所有日期与签名均须填写、无漏项；"
+                    f"3) 表头作业等级须为一级或二级（一级危险最高）。请重新解析。"
+                )
             else:
-                detail_parts = []
-                if missing_ids:
-                    detail_parts.append(f"缺项{missing_ids}")
-                if incomplete_rows:
-                    uniq = sorted(set(incomplete_rows))
-                    detail_parts.append(f"五列未识别完整{uniq[:8]}{'…' if len(uniq) > 8 else ''}")
-                if blank_cells:
-                    detail_parts.append(
-                        f"空白格{blank_cells[:10]}{'…' if len(blank_cells) > 10 else ''}"
-                        f"（共{len(blank_cells)}格）"
-                    )
-                if len(present_ids) < expected_count:
-                    detail_parts.append(f"仅{len(present_ids)}/{expected_count}项")
-                checks.append(("安全措施", False, "；".join(detail_parts) if detail_parts else "未填写完整"))
+                # ========== 动火专用：21 条单列勾选 + 核心字段（与带气五列/ocr5 完全分离）==========
+                expected_count = FIRE_MEASURE_COUNT
+                std_list = STANDARD_MEASURES.get(TICKET_TYPE_FIRE, [])
+                std_ids = {mid for mid, _ in std_list} if std_list else set(range(1, expected_count + 1))
+                measures = data.safety_measures or []
+                present_ids = {m.measure_id for m in measures if m.measure_id is not None}
+                missing_ids = sorted(std_ids - present_ids)
 
-            # 规则2：所有日期和签名都有填写，没有漏项（带气签批五列 + 发起人 + 日期类）
-            date_specs = [
-                ("日期", data.check_date, ["日期", "年", "月", "日", "YYYY-MM-DD"]),
-                ("作业时间", data.work_time, ["作业时间", "时间"]),
-                ("完工时间", data.completion_time, ["完工时间", "时间"]),
-            ]
-            sig_specs = [
-                ("发起人签字", data.approver_name, ["签字", "盖章", "负责人", "手写", "发起人签字确认"]),
-                ("作业人员签名", data.operators, ["作业人员", "签字", "手写"]),
-                ("施工方现场负责人", data.construction_leader, ["施工方现场负责人", "签字", "手写"]),
-                ("监理人员", data.supervisor, ["监理人员", "签字", "手写"]),
-                ("项目公司监护人", data.company_monitor, ["项目公司监护人", "签字", "手写"]),
-                ("带气现场负责人", data.gas_leader, ["带气现场负责人", "签字", "手写"]),
-            ]
+                blank_items = []
+                for m in measures:
+                    marks = list(getattr(m, "column_marks", None) or [])
+                    if not marks:
+                        blank_items.append(m.measure_id)
+                        continue
+                    mk = marks[0]
+                    mk_norm = mk if mk in ("check", "cross", "slash", "blank") else _normalize_gas_cell_mark(mk)
+                    # 动火：√ 或 × 算已填；blank 算漏项（slash 在动火单列也视作已标注）
+                    if mk_norm == "blank":
+                        blank_items.append(m.measure_id)
 
-            missing_date_sig = []
-            for label, raw_val, placeholders in date_specs + sig_specs:
-                cleaned = clean_field(raw_val, placeholders)
-                # 日期/时间至少 4 字符（如 2025…）；签名至少 1 个汉字/字符（允许 OCR 单字）
-                min_len = 4 if label in ("日期", "作业时间", "完工时间") else 1
-                if not cleaned or len(cleaned) < min_len:
-                    missing_date_sig.append(label)
+                measures_ok = (
+                    len(missing_ids) == 0
+                    and len(blank_items) == 0
+                    and len(present_ids) >= expected_count
+                )
+                if measures_ok:
+                    checks.append((
+                        "安全措施", True,
+                        f"{expected_count}条单列全部勾选(√/×)、无漏项 OK",
+                    ))
+                else:
+                    detail_parts = []
+                    if missing_ids:
+                        detail_parts.append(f"缺项{missing_ids}")
+                    if blank_items:
+                        uniq = sorted(set(blank_items))
+                        detail_parts.append(f"空白未勾选{uniq[:10]}{'…' if len(uniq) > 10 else ''}")
+                    if len(present_ids) < expected_count:
+                        detail_parts.append(f"仅{len(present_ids)}/{expected_count}项")
+                    checks.append(("安全措施", False, "；".join(detail_parts) if detail_parts else "未填写完整"))
 
-            date_sig_ok = (len(missing_date_sig) == 0)
-            if date_sig_ok:
-                checks.append(("日期和签名", True, "全部填写、无漏项 OK"))
-            else:
-                checks.append(("日期和签名", False, f"漏项: {', '.join(missing_date_sig)}"))
+                # 动火核心字段（表头 + 签批，与带气字段分离）
+                field_specs = [
+                    ("作业票编号", data.ticket_id, ["编号", "NO", "No"], 3),
+                    ("动火单位", data.fire_unit, ["动火单位", "单位"], 1),
+                    ("动火地点", data.fire_location, ["动火地点", "地点"], 1),
+                    ("动火内容", data.content, ["动火内容", "内容"], 1),
+                    ("动火时间", data.work_time, ["动火时间", "作业时间", "时间"], 4),
+                    ("动火方式", data.fire_method, ["动火方式", "方式"], 1),
+                    ("动火人姓名及证书编号", data.worker_id, ["动火人", "证书编号", "手写"], 1),
+                    ("采样检测", data.sampling_result, ["采样检测", "检测"], 1),
+                    ("动火人员", data.fire_personnel, ["动火人员", "签字", "手写"], 1),
+                    ("施工方现场负责人", data.construction_leader, ["施工方现场负责人", "签字", "手写"], 1),
+                    ("监理人员", data.supervisor, ["监理人员", "签字", "手写"], 1),
+                    ("项目公司监护人员", data.company_monitor, ["项目公司监护人员", "监护人", "签字", "手写"], 1),
+                    ("动火现场负责人(项目公司)", data.fire_leader_project, ["动火现场负责人", "项目公司", "签字", "手写"], 1),
+                    ("动火现场负责人", data.fire_leader, ["动火现场负责人", "签字", "手写"], 1),
+                ]
+                missing_core = []
+                for label, raw_val, placeholders, min_len in field_specs:
+                    cleaned = clean_field(raw_val, placeholders)
+                    if not cleaned or len(cleaned) < min_len:
+                        missing_core.append(label)
+                if not missing_core:
+                    checks.append(("表头与签批", True, "动火核心字段齐全 OK"))
+                else:
+                    checks.append(("表头与签批", False, f"漏项: {', '.join(missing_core)}"))
 
-            # 规则3：表头作业等级一级/二级必须识别到（禁止空等级兜底放行）
-            grade = normalize_gas_work_grade(data.risk_level)
-            if grade:
-                checks.append(("作业等级", True, f"{grade}" + ("（一级危险最高）" if grade == "一级" else "")))
-            else:
-                # 【禁止兜底】未识别记失败，暴露问题
-                checks.append(("作业等级", False, "表头「作业等级：一级/二级」未识别（禁止编造）"))
+                grade = normalize_fire_work_grade(data.risk_level)
+                if grade:
+                    checks.append((
+                        "动火等级", True,
+                        f"{grade}{fire_grade_note(grade)}",
+                    ))
+                else:
+                    checks.append(("动火等级", False, "动火等级「一级/二级/特级」未识别（禁止编造；特级最高、一级最低）"))
+
+                pass_msg = "21条单列无漏项 + 动火表头签批齐全 + 动火等级已识别，全部通过"
+                hint = (
+                    f"上次问题：{{failed}}。"
+                    f"请严格按**动火作业票**解析：1) 安全措施共{expected_count}条，每条须有√或×勾选；"
+                    f"2) 须提取：作业票编号、动火单位、动火地点、动火内容、动火时间、动火方式、"
+                    f"动火人姓名及证书编号、采样检测、动火人员、施工方现场负责人、监理人员、"
+                    f"项目公司监护人员、动火现场负责人(项目公司)、动火现场负责人；"
+                    f"3) 动火等级须为一级/二级/特级（特级最高、一级最低）。禁止按带气字段理解。请重新解析。"
+                )
 
             # 完整性任一项漏项 → 触发重试；禁止用默认值假装通过
             integrity_failed = [name for name, ok, _ in checks if not ok]
             all_pass = (len(integrity_failed) == 0)
 
             for name, ok, detail in checks:  # 迭代校验项
-                safe_print(f"[Agent Reflect]   {'OK' if ok else '!!'} {name}: {detail}")  # 控制台打印校验详情条目
+                safe_print(f"[Agent Reflect][{tt}]   {'OK' if ok else '!!'} {name}: {detail}")
 
-            if all_pass:  # 安全措施齐全 + 日期签名齐全 → 完整性通过
-                safe_print("[Agent Reflect] 校验通过。")
-                mem.remember(
-                    "反思", "🔍", "校验数据完整性",
-                    "25×5无漏项 + 日期签名齐全 + 作业等级已识别，全部通过",
-                )
+            if all_pass:
+                safe_print(f"[Agent Reflect][{tt}] 校验通过。")
+                mem.remember("反思", "🔍", "校验数据完整性", pass_msg)
                 return data
 
-            failed = integrity_failed  # 提取本次校验失败的规则项名称
-            safe_print(f"[Agent Reflect] 未通过({', '.join(failed)})，第{attempt}次重试...")  # 打印失败警告日志及重试计数
-            mem.remember("反思", "🔍", f"第{attempt}次重试", f"未通过: {', '.join(failed)}", status="retry")  # 记忆体记录重试事件
-            hint = (
-                f"上次问题：{', '.join(failed)}。"
-                f"请严格校验：1) 带气安全措施共{expected_count}项，每项5列确认格"
-                f"（作业人/施工方现场负责人/监理/监护人/带气现场负责人）"
-                f"均须填写对号√、叉号×或斜杠\\之一，禁止空白漏项；"
-                f"2) 所有日期与签名均须填写、无漏项；"
-                f"3) 表头作业等级须为一级或二级（一级危险最高）。请重新解析。"
+            failed = integrity_failed
+            safe_print(f"[Agent Reflect][{tt}] 未通过({', '.join(failed)})，第{attempt}次重试...")
+            mem.remember("反思", "🔍", f"第{attempt}次重试", f"未通过: {', '.join(failed)}", status="retry")
+            retry_hint = hint.format(failed=", ".join(failed))
+            data = self.brain.extract_sheet_json(
+                f"[重试] {retry_hint}\n\n原文:\n{ocr_text}",
+                ticket_type=tt,
             )
-            data = self.brain.extract_sheet_json(f"[重试] {hint}\n\n原文:\n{ocr_text}")
 
         safe_print("[Agent Reflect] 达到最大重试，标记高风险。")
         mem.remember("反思", "🔍", "最大重试", "标记高风险", status="error")  # 记忆体记录异常归档
@@ -2144,53 +3015,96 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         return val_str
 
     def _collect_missing_fills(self, data: SecuritySheetData) -> list:
-        """汇总手填漏项清单（仅空白/未识别/缺字段，不含「未落实×」业务整改建议）。"""
+        """汇总手填漏项清单（仅空白/未识别/缺字段，不含「未落实×」业务整改建议）。
+
+        带气 / 动火规则完全分离。
+        """
         missing = []
-        role_count = len(GAS_MEASURE_ROLES)
-        expected_count = GAS_MEASURE_COUNT
-        std_list = STANDARD_MEASURES.get("带气作业票", [])
-        std_ids = {mid for mid, _ in std_list} if std_list else set(range(1, expected_count + 1))
+        tt = normalize_ticket_type(data.ticket_type, default=TICKET_TYPE_GAS)
         measures = data.safety_measures or []
-        present_ids = {m.measure_id for m in measures if m.measure_id is not None}
-        for mid in sorted(std_ids - present_ids):
-            missing.append(f"安全措施第{mid}项整行缺失")
-        for m in measures:
-            marks = list(getattr(m, "column_marks", None) or [])
-            if len(marks) < role_count:
-                missing.append(f"安全措施第{m.measure_id}项五列未识别完整")
-                continue
-            for i, mk in enumerate(marks[:role_count]):
+
+        if tt == TICKET_TYPE_GAS:
+            role_count = len(GAS_MEASURE_ROLES)
+            expected_count = GAS_MEASURE_COUNT
+            std_list = STANDARD_MEASURES.get(TICKET_TYPE_GAS, [])
+            std_ids = {mid for mid, _ in std_list} if std_list else set(range(1, expected_count + 1))
+            present_ids = {m.measure_id for m in measures if m.measure_id is not None}
+            for mid in sorted(std_ids - present_ids):
+                missing.append(f"安全措施第{mid}项整行缺失")
+            for m in measures:
+                marks = list(getattr(m, "column_marks", None) or [])
+                if len(marks) < role_count:
+                    missing.append(f"安全措施第{m.measure_id}项五列未识别完整")
+                    continue
+                for i, mk in enumerate(marks[:role_count]):
+                    mk_norm = mk if mk in ("check", "cross", "slash", "blank") else _normalize_gas_cell_mark(mk)
+                    if mk_norm not in GAS_MARK_FILLED:
+                        role_name = GAS_MEASURE_ROLES[i] if i < role_count else f"列{i+1}"
+                        missing.append(f"安全措施第{m.measure_id}项-{role_name}空白")
+
+            field_specs = [
+                ("日期", data.check_date, ["日期", "年", "月", "日", "YYYY-MM-DD"], 4),
+                ("作业时间", data.work_time, ["作业时间", "时间"], 4),
+                ("完工时间", data.completion_time, ["完工时间", "时间"], 4),
+                ("发起人签字", data.approver_name, ["签字", "盖章", "负责人", "手写", "发起人签字确认"], 1),
+                ("作业人员签名", data.operators, ["作业人员", "签字", "手写"], 1),
+                ("施工方现场负责人", data.construction_leader, ["施工方现场负责人", "签字", "手写"], 1),
+                ("监理人员", data.supervisor, ["监理人员", "签字", "手写"], 1),
+                ("项目公司监护人", data.company_monitor, ["项目公司监护人", "签字", "手写"], 1),
+                ("带气现场负责人", data.gas_leader, ["带气现场负责人", "签字", "手写"], 1),
+            ]
+            for label, raw_val, placeholders, min_len in field_specs:
+                cleaned = self._clean_fill_field(raw_val, placeholders)
+                if not cleaned or len(cleaned) < min_len:
+                    missing.append(f"{label}漏填")
+            if not normalize_gas_work_grade(data.risk_level):
+                missing.append("作业等级未识别（表头一级/二级）")
+        else:
+            # 动火：21 条单列；√/× 已填，blank 漏填
+            expected_count = FIRE_MEASURE_COUNT
+            std_list = STANDARD_MEASURES.get(TICKET_TYPE_FIRE, [])
+            std_ids = {mid for mid, _ in std_list} if std_list else set(range(1, expected_count + 1))
+            present_ids = {m.measure_id for m in measures if m.measure_id is not None}
+            for mid in sorted(std_ids - present_ids):
+                missing.append(f"动火安全措施第{mid}项缺失")
+            for m in measures:
+                marks = list(getattr(m, "column_marks", None) or [])
+                if not marks:
+                    missing.append(f"动火安全措施第{m.measure_id}项未勾选")
+                    continue
+                mk = marks[0]
                 mk_norm = mk if mk in ("check", "cross", "slash", "blank") else _normalize_gas_cell_mark(mk)
-                if mk_norm not in GAS_MARK_FILLED:
-                    role_name = GAS_MEASURE_ROLES[i] if i < role_count else f"列{i+1}"
-                    missing.append(f"安全措施第{m.measure_id}项-{role_name}空白")
+                if mk_norm == "blank":
+                    missing.append(f"动火安全措施第{m.measure_id}项空白")
 
-        # 日期 / 签名必填（√/×/\ 均算已填格；此处只查文本空）
-        field_specs = [
-            ("日期", data.check_date, ["日期", "年", "月", "日", "YYYY-MM-DD"], 4),
-            ("作业时间", data.work_time, ["作业时间", "时间"], 4),
-            ("完工时间", data.completion_time, ["完工时间", "时间"], 4),
-            ("发起人签字", data.approver_name, ["签字", "盖章", "负责人", "手写", "发起人签字确认"], 1),
-            ("作业人员签名", data.operators, ["作业人员", "签字", "手写"], 1),
-            ("施工方现场负责人", data.construction_leader, ["施工方现场负责人", "签字", "手写"], 1),
-            ("监理人员", data.supervisor, ["监理人员", "签字", "手写"], 1),
-            ("项目公司监护人", data.company_monitor, ["项目公司监护人", "签字", "手写"], 1),
-            ("带气现场负责人", data.gas_leader, ["带气现场负责人", "签字", "手写"], 1),
-        ]
-        for label, raw_val, placeholders, min_len in field_specs:
-            cleaned = self._clean_fill_field(raw_val, placeholders)
-            if not cleaned or len(cleaned) < min_len:
-                missing.append(f"{label}漏填")
+            field_specs = [
+                ("作业票编号", data.ticket_id, ["编号", "NO", "No"], 3),
+                ("动火单位", data.fire_unit, ["动火单位", "单位"], 1),
+                ("动火地点", data.fire_location, ["动火地点", "地点"], 1),
+                ("动火内容", data.content, ["动火内容", "内容"], 1),
+                ("动火时间", data.work_time, ["动火时间", "作业时间", "时间"], 4),
+                ("动火方式", data.fire_method, ["动火方式", "方式"], 1),
+                ("动火人姓名及证书编号", data.worker_id, ["动火人", "证书编号", "手写"], 1),
+                ("采样检测", data.sampling_result, ["采样检测", "检测"], 1),
+                ("动火人员", data.fire_personnel, ["动火人员", "签字", "手写"], 1),
+                ("施工方现场负责人", data.construction_leader, ["施工方现场负责人", "签字", "手写"], 1),
+                ("监理人员", data.supervisor, ["监理人员", "签字", "手写"], 1),
+                ("项目公司监护人员", data.company_monitor, ["项目公司监护人员", "监护人", "签字", "手写"], 1),
+                ("动火现场负责人(项目公司)", data.fire_leader_project, ["动火现场负责人", "项目公司", "签字", "手写"], 1),
+                ("动火现场负责人", data.fire_leader, ["动火现场负责人", "签字", "手写"], 1),
+            ]
+            for label, raw_val, placeholders, min_len in field_specs:
+                cleaned = self._clean_fill_field(raw_val, placeholders)
+                if not cleaned or len(cleaned) < min_len:
+                    missing.append(f"{label}漏填")
+            if not normalize_fire_work_grade(data.risk_level):
+                missing.append("动火等级未识别（一级/二级/特级；特级最高、一级最低）")
 
-        if not normalize_gas_work_grade(data.risk_level):
-            missing.append("作业等级未识别（表头一级/二级）")
-
-        # 完整性校验产生的漏项类 issue（不含「未落实」类业务异常）
         for issue in data.issues or []:
             name = issue.item_name or ""
             if "未落实" in name:
                 continue
-            if any(k in name for k in ("数据完整性", "漏项", "空白", "未识别", "审批建议生成失败")):
+            if any(k in name for k in ("数据完整性", "漏项", "漏填", "空白", "未识别", "审批建议生成失败")):
                 detail = f"{name}" + (f"：{issue.raw_text}" if issue.raw_text else "")
                 if detail not in missing and not any(detail.startswith(m[:8]) for m in missing):
                     missing.append(detail)
@@ -2204,23 +3118,26 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         """
         data.risk_level = self._assess_risk_level(data)
         missing = self._collect_missing_fills(data)
-        grade = normalize_gas_work_grade(data.risk_level) or data.risk_level or "未识别"
+        tt = normalize_ticket_type(data.ticket_type, default=TICKET_TYPE_GAS)
+        if tt == TICKET_TYPE_GAS:
+            grade = normalize_gas_work_grade(data.risk_level) or data.risk_level or "未识别"
+        else:
+            grade = normalize_fire_work_grade(data.risk_level) or data.risk_level or "未识别"
         ticket = data.ticket_id or "无"
         n = len(missing)
-        # 归档用：记录规则依据，非 LLM prompt
         self._last_approval_prompt = (
             f"mode=missing_fill_check\n"
+            f"ticket_type={tt}\n"
             f"ticket={ticket}\ngrade={grade}\nmissing_count={n}\n"
             + "\n".join(f"- {m}" for m in missing)
         )
         if n == 0:
             opinion = (
                 f"【填写齐全】漏填 0 项，自动通过。"
-                f"票号{ticket}，作业等级{grade}。"
+                f"{tt} 票号{ticket}，作业等级{grade}。"
             )
-            safe_print(f"[Agent Act] 审批建议(规则): 漏填0项 → 自动通过")
+            safe_print(f"[Agent Act][{tt}] 审批建议(规则): 漏填0项 → 自动通过")
             return opinion
-        # 明细最多列 12 条，避免过长
         show = missing[:12]
         detail = "；".join(show)
         if n > 12:
@@ -2228,35 +3145,18 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         opinion = (
             f"【发现漏填】共 {n} 项漏填，需人工介入审核（不驳回）。"
             f"明细：{detail}。"
-            f"票号{ticket}，作业等级{grade}。"
+            f"{tt} 票号{ticket}，作业等级{grade}。"
         )
-        safe_print(f"[Agent Act] 审批建议(规则): 漏填{n}项 → 人工介入")
+        safe_print(f"[Agent Act][{tt}] 审批建议(规则): 漏填{n}项 → 人工介入")
         return opinion
 
     def _assess_risk_level(self, data: SecuritySheetData) -> str:
-        """风险等级：带气仅表头作业等级一级/二级；提不到返回空（禁止编造）。"""
-        if data.ticket_type == "带气作业票":
-            grade = normalize_gas_work_grade(data.risk_level)
-            # 【禁止兜底】识别不到不写「未填」冒充等级，返回空串由路由按异常处理
-            return grade or ""
-
-        # 非带气：本流水线不交叉；保留评分仅作兼容，禁止默认「低风险」放行
-        score = 0
-        unimpl = [m for m in data.safety_measures if not m.implemented]
-        score += min(len(unimpl), 3)
-        biz_issues = [i for i in data.issues if "数据完整性校验失败" not in i.item_name]
-        score += min(len(biz_issues), 2)
-        for issue in data.issues:
-            if "数据完整性校验失败" in issue.item_name:
-                score += 2
-        if score >= 5:
-            return "重大"
-        if score >= 3:
-            return "较大"
-        if score >= 1:
-            return "一般"
-        # 【禁止兜底】无计分也不返回「低风险」放行标签；空表示未评估
-        return ""
+        """作业等级：带气=一级/二级（一级最高）；动火=一级/二级/特级（特级最高、一级最低）。禁止跨票型编造。"""
+        tt = normalize_ticket_type(data.ticket_type, default=TICKET_TYPE_GAS)
+        if tt == TICKET_TYPE_GAS:
+            return normalize_gas_work_grade(data.risk_level) or ""
+        # 动火：仅采纳表头一级/二级/特级
+        return normalize_fire_work_grade(data.risk_level) or ""
 
     def _report_approval_failure(self, data: SecuritySheetData, reason: str) -> str:
         """审批建议链路失败时的显式报错（非通过/发现漏填业务模板，禁止兜底通过）。"""
@@ -2290,13 +3190,17 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             safe_print(f"[Agent Act] ① 天气检查 → 异常(仅留痕): {issues_str}")
             mem.remember("执行", "⛅", "天气检查", f"异常仅留痕: {issues_str}", status="retry")
 
-        # ---- ② 作业等级（展示用）----
+        # ---- ② 作业等级（展示用；带气/动火等级体系分离）----
         safe_print("[Agent Act] ② 作业等级...")
         data.risk_level = self._assess_risk_level(data)
-        grade = normalize_gas_work_grade(data.risk_level)
+        tt_act = normalize_ticket_type(data.ticket_type, default=TICKET_TYPE_GAS)
+        if tt_act == TICKET_TYPE_GAS:
+            grade = normalize_gas_work_grade(data.risk_level)
+        else:
+            grade = normalize_fire_work_grade(data.risk_level)
         grade_note = grade if grade else "未识别"
-        safe_print(f"[Agent Act] ② 作业等级 → {data.risk_level or '未识别'}（{grade_note}）")
-        mem.remember("执行", "📊", "作业等级", f"{data.risk_level or '未识别'}（{grade_note}）")
+        safe_print(f"[Agent Act][{tt_act}] ② 作业等级 → {data.risk_level or '未识别'}（{grade_note}）")
+        mem.remember("执行", "📊", "作业等级", f"{tt_act} {data.risk_level or '未识别'}（{grade_note}）")
 
         # ---- ③ 漏填路由：0 漏填→自动通过；有漏填→待审批(人工介入)，不驳回 ----
         safe_print("[Agent Act] ③ 漏填路由决策...")
@@ -2350,32 +3254,62 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                 "待审批": "人工介入：MCP 推送钉钉 AI 表格",
                 "已驳回": "MCP 推送钉钉 AI 表格",
             }.get(ap_status, "")
-            gl_line = (
-                f"作业等级：{gl}"
-                + ("（一级危险最高）" if gl == "一级" else "")
-                + ("（识别失败·禁止兜底）" if not data.risk_level else "")
-                + " [risk_level]"
-            )
-            info_lines = [
-                f"作业票编号：{data.ticket_id or ''} [ticket_id]",
-                f"作业单位：{data.station_name or ''} [station_name]",
-                f"作业内容：{data.content or ''} [content]",
-                f"作业时间：{data.work_time or ''} [work_time]",
-                f"作业人姓名及证书编号：{data.worker_id or ''} [worker_id]",
-                gl_line,
-                f"审批路径：{ap_path}" if ap_path else "审批路径：-",
-                f"发起人签字确认：{data.approver_name or ''} [approver_name]",
-                f"作业人员：{data.operators or ''} [operators]",
-                f"施工方现场负责人：{data.construction_leader or ''} [construction_leader]",
-                f"监理人员：{data.supervisor or ''} [supervisor]",
-                f"项目公司监护人：{data.company_monitor or ''} [company_monitor]",
-                f"带气现场负责人：{data.gas_leader or ''} [gas_leader]",
-            ]
+            _tt = normalize_ticket_type(data.ticket_type, default=TICKET_TYPE_GAS)
+            if _tt == TICKET_TYPE_FIRE:
+                info_lines = [
+                    f"作业票类型：{_tt} [ticket_type]",
+                    f"作业票编号：{data.ticket_id or ''} [ticket_id]",
+                    f"动火单位：{data.fire_unit or ''} [fire_unit]",
+                    f"动火地点：{data.fire_location or ''} [fire_location]",
+                    f"动火内容：{data.content or ''} [content]",
+                    f"动火时间：{data.work_time or ''} [work_time]",
+                    f"动火方式：{data.fire_method or ''} [fire_method]",
+                    f"动火人姓名及证书编号：{data.worker_id or ''} [worker_id]",
+                    f"采样检测：{data.sampling_result or ''} [sampling_result]",
+                    f"动火等级：{gl}{fire_grade_note(gl)}"
+                    + ("（识别失败·禁止兜底）" if not data.risk_level else "")
+                    + " [risk_level]",
+                    f"动火人员：{data.fire_personnel or ''} [fire_personnel]",
+                    f"施工方现场负责人：{data.construction_leader or ''} [construction_leader]",
+                    f"监理人员：{data.supervisor or ''} [supervisor]",
+                    f"项目公司监护人员：{data.company_monitor or ''} [company_monitor]",
+                    f"动火现场负责人(项目公司)：{data.fire_leader_project or ''} [fire_leader_project]",
+                    f"动火现场负责人：{data.fire_leader or ''} [fire_leader]",
+                    f"审批路径：{ap_path}" if ap_path else "审批路径：-",
+                ]
+            else:
+                gl_line = (
+                    f"作业等级：{gl}"
+                    + ("（一级危险最高）" if gl == "一级" else "")
+                    + ("（识别失败·禁止兜底）" if not data.risk_level else "")
+                    + " [risk_level]"
+                )
+                info_lines = [
+                    f"作业票类型：{_tt} [ticket_type]",
+                    f"作业票编号：{data.ticket_id or ''} [ticket_id]",
+                    f"作业单位：{data.station_name or ''} [station_name]",
+                    f"作业内容：{data.content or ''} [content]",
+                    f"作业时间：{data.work_time or ''} [work_time]",
+                    f"作业人姓名及证书编号：{data.worker_id or ''} [worker_id]",
+                    gl_line,
+                    f"审批路径：{ap_path}" if ap_path else "审批路径：-",
+                    f"发起人签字确认：{data.approver_name or ''} [approver_name]",
+                    f"作业人员：{data.operators or ''} [operators]",
+                    f"施工方现场负责人：{data.construction_leader or ''} [construction_leader]",
+                    f"监理人员：{data.supervisor or ''} [supervisor]",
+                    f"项目公司监护人：{data.company_monitor or ''} [company_monitor]",
+                    f"带气现场负责人：{data.gas_leader or ''} [gas_leader]",
+                ]
             info_block = "\n\n".join(info_lines)
             description = f"{ic} {data.approval_opinion or ''}\n\n---\n\n{info_block}"
             
-            # 等级字段写入表；双写路由用归一后的一级/二级
-            _grade = normalize_gas_work_grade(data.risk_level) or (data.risk_level or "")
+            # 钉钉双写路由：带气「一级最高」→双写；动火仅「特级最高」映射为双写，一级最低/二级→单写
+            if _tt == TICKET_TYPE_GAS:
+                _grade = normalize_gas_work_grade(data.risk_level) or (data.risk_level or "")
+            else:
+                _fg = normalize_fire_work_grade(data.risk_level)
+                # 钉钉内部仍以 gas 的「一级」键触发双写；动火仅特级映射过去
+                _grade = "一级" if _fg == "特级" else "二级"
             self.tools.write_dingtalk_table(
                 data.ticket_id, image_path, description, filler, _grade
             )
@@ -2406,29 +3340,55 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                 ic = "✅" if ap_status == "自动通过" else ("🚫" if ap_status == "已驳回" else "⏳")
                 # 组装完整的审批建议归档内容
                 gl = data.risk_level or "未识别"
+                _tt_arc = normalize_ticket_type(data.ticket_type, default=TICKET_TYPE_GAS)
                 ap_path = {
                     "自动通过": "系统自动通过",
                     "待审批": "人工介入：MCP 推送钉钉 AI 表格",
                     "已驳回": "MCP 推送钉钉 AI 表格",
                 }.get(ap_status, "")
-                info_lines = [
-                    f"作业票编号：{data.ticket_id or ''}",
-                    f"作业单位：{data.station_name or ''}",
-                    f"作业内容：{data.content or ''}",
-                    f"作业时间：{data.work_time or ''}",
-                    f"作业人姓名及证书编号：{data.worker_id or ''}",
-                    f"作业等级：{gl}"
-                    + ("（一级危险最高）" if gl == "一级" else "")
-                    + ("（识别失败·禁止兜底）" if not data.risk_level else ""),
-                    f"审批状态：{ap_status}",
-                    f"审批路径：{ap_path}" if ap_path else "审批路径：-",
-                    f"发起人签字确认：{data.approver_name or ''}",
-                    f"作业人员：{data.operators or ''}",
-                    f"施工方现场负责人：{data.construction_leader or ''}",
-                    f"监理人员：{data.supervisor or ''}",
-                    f"项目公司监护人：{data.company_monitor or ''}",
-                    f"带气现场负责人：{data.gas_leader or ''}",
-                ]
+                if _tt_arc == TICKET_TYPE_FIRE:
+                    info_lines = [
+                        f"作业票类型：{_tt_arc}",
+                        f"作业票编号：{data.ticket_id or ''}",
+                        f"动火单位：{data.fire_unit or ''}",
+                        f"动火地点：{data.fire_location or ''}",
+                        f"动火内容：{data.content or ''}",
+                        f"动火时间：{data.work_time or ''}",
+                        f"动火方式：{data.fire_method or ''}",
+                        f"动火人姓名及证书编号：{data.worker_id or ''}",
+                        f"采样检测：{data.sampling_result or ''}",
+                        f"动火等级：{gl}{fire_grade_note(gl)}"
+                        + ("（识别失败·禁止兜底）" if not data.risk_level else ""),
+                        f"动火人员：{data.fire_personnel or ''}",
+                        f"施工方现场负责人：{data.construction_leader or ''}",
+                        f"监理人员：{data.supervisor or ''}",
+                        f"项目公司监护人员：{data.company_monitor or ''}",
+                        f"动火现场负责人(项目公司)：{data.fire_leader_project or ''}",
+                        f"动火现场负责人：{data.fire_leader or ''}",
+                        f"审批状态：{ap_status}",
+                        f"审批路径：{ap_path}" if ap_path else "审批路径：-",
+                    ]
+                else:
+                    _gnote = "（一级危险最高）" if gl == "一级" else ""
+                    info_lines = [
+                        f"作业票类型：{_tt_arc}",
+                        f"作业票编号：{data.ticket_id or ''}",
+                        f"作业单位：{data.station_name or ''}",
+                        f"作业内容：{data.content or ''}",
+                        f"作业时间：{data.work_time or ''}",
+                        f"作业人姓名及证书编号：{data.worker_id or ''}",
+                        f"作业等级：{gl}"
+                        + _gnote
+                        + ("（识别失败·禁止兜底）" if not data.risk_level else ""),
+                        f"审批状态：{ap_status}",
+                        f"审批路径：{ap_path}" if ap_path else "审批路径：-",
+                        f"发起人签字确认：{data.approver_name or ''}",
+                        f"作业人员：{data.operators or ''}",
+                        f"施工方现场负责人：{data.construction_leader or ''}",
+                        f"监理人员：{data.supervisor or ''}",
+                        f"项目公司监护人：{data.company_monitor or ''}",
+                        f"带气现场负责人：{data.gas_leader or ''}",
+                    ]
                 # 读取本轮缓存的全部 LLM 提示词（结构化提取 + 审批建议）
                 approval_prompt = getattr(self, "_last_approval_prompt", "") or ""
                 extract_log = getattr(self.brain, "_extract_prompt_log", None) or []
@@ -2442,10 +3402,16 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                         parts.append(f"----- 提取调用 #{i} / 共{len(extract_log)} 次 -----\n\n{p}")
                     extract_prompt_block = "\n\n".join(parts)
 
+                _header_gnote = (
+                    fire_grade_note(data.risk_level or "")
+                    if _tt_arc == TICKET_TYPE_FIRE
+                    else ("（一级危险最高）" if data.risk_level == "一级" else "")
+                )
                 content = (
                     f"{ic} 审批状态：{ap_status}（{data.approval_level or ''}）\n"
+                    f"票型：{_tt_arc}\n"
                     f"作业等级：{data.risk_level or '未识别'}"
-                    f"{'（一级危险最高）' if data.risk_level == '一级' else ''}\n"
+                    f"{_header_gnote}\n"
                     f"审批路径：{ap_path or '-'}\n"
                     f"归档时间：{time.strftime('%Y-%m-%d %H:%M:%S')}\n"
                     f"\n{'='*50}\n"
@@ -2638,17 +3604,24 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         return ocr_path
 
     def run(self, image_path: str, ocr_mode: str = None, progress_callback=None, ticket_type: str = None):
-        """运行完整 ReAct 循环，返回 (ocr_text, structured_data)"""
+        """运行完整 ReAct 循环，返回 (ocr_text, structured_data)。
+
+        ticket_type 由 UI 选择锁定，带气 / 动火走完全独立流水线。
+        """
         if ocr_mode:
             self.ocr_mode = ocr_mode
         prog = progress_callback or self._progress
         mem = AgentMemory()
         t0 = time.time()
+        self._ticket_type = normalize_ticket_type(ticket_type, default=TICKET_TYPE_GAS)
+        if getattr(self, "brain", None) is not None:
+            self.brain._locked_ticket_type = self._ticket_type
+        safe_print(f"[Agent] 启动流水线: {self._ticket_type}（与另一票型完全分离）")
 
-        if prog: prog(0, "开始处理")
+        if prog: prog(0, f"开始处理·{self._ticket_type}")
         self._plan(image_path, mem)
         if prog: prog(3, "感知阶段")
-        ocr_text = self._perceive(image_path, mem, ticket_type=ticket_type)
+        ocr_text = self._perceive(image_path, mem, ticket_type=self._ticket_type)
         if prog: prog(55, "推理阶段")
         data = self._reason(ocr_text, mem)
         if prog: prog(80, "反思阶段")
@@ -2658,7 +3631,7 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
         if prog: prog(96, "生成报告")
 
         elapsed = time.time() - t0
-        safe_print(f"[Agent] 全流程耗时: {elapsed:.1f}s")
+        safe_print(f"[Agent] 全流程耗时: {elapsed:.1f}s | 票型={self._ticket_type}")
         self._report(mem, data)
         if prog: prog(100, "完成")
         return ocr_text, data

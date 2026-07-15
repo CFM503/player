@@ -39,6 +39,7 @@ for _k, _v in {
     "user_uploader_key": 0,
     "user_job_name": None,
     "user_job_bytes": None,
+    "user_ticket_type": "带气作业票",
 }.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
@@ -67,6 +68,15 @@ if not ready:
     st.warning("尚未配置 API Key。请到左侧 **管理测试** 填写并保存，本页会自动同步参数。")
     st.stop()
 
+# ---- 票型（与管理页一致：带气 / 动火完全分路）----
+st.radio(
+    "作业票类型",
+    options=["带气作业票", "动火作业票"],
+    horizontal=True,
+    key="user_ticket_type",
+    help="带气与动火使用不同模板与校验规则，互不交叉。",
+)
+
 # ---- 胶囊条：+ 上传 | 文案 | 安全监督员 | ↑ 提交 ----
 c_plus, c_text, c_brand, c_send = st.columns([0.9, 4.0, 1.7, 0.95], gap="small")
 
@@ -85,7 +95,8 @@ if picked is not None:
     st.session_state.user_job_bytes = picked.getvalue()
 
 has_file = bool(st.session_state.user_job_bytes)
-mid_label = st.session_state.user_job_name if has_file else "选一张带气作业票"
+_tt_lbl = st.session_state.get("user_ticket_type") or "带气作业票"
+mid_label = st.session_state.user_job_name if has_file else f"选一张{_tt_lbl}"
 mid_cls = "prompt-mid-text" if has_file else "prompt-mid-text muted"
 
 with c_text:
@@ -183,7 +194,7 @@ if st.session_state.user_processing and st.session_state.user_job_bytes:
                 agent,
                 path,
                 progress_callback=prog_cb,
-                ticket_type="带气作业票",
+                ticket_type=st.session_state.get("user_ticket_type") or "带气作业票",
             )
         finally:
             sys.stdout = _orig

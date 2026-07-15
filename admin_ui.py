@@ -430,8 +430,14 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
 
     # ---- 文件拖拽选择器 ----
     if st.session_state.get("show_uploader"):  # 判断如果控制显示上传面板的标志为真
-        st.caption("作业票类型：**带气作业票**（本系统仅支持带气）")
-        st.session_state.selected_ticket_type = "带气作业票"
+        st.caption("请先选择票型（**带气 / 动火流水线完全分离**，模板与措施不交叉）")
+        st.radio(
+            "作业票类型",
+            options=["带气作业票", "动火作业票"],
+            horizontal=True,
+            key="selected_ticket_type",
+            help="带气→dq.png + ocr5 25×5；动火→dh.png + 21 条单列勾选，互不混用。",
+        )
         # 动态传入后缀 key 强制在点击“重新上传”后复位组件
         uploader_key = f"fu_main_{st.session_state.uploader_key_suffix}"
         picked = st.file_uploader("选择图片", type=["jpg","jpeg","png","bmp"], accept_multiple_files=False, label_visibility="collapsed", key=uploader_key)  # 显示 Streamlit 原生上传面板，限制单张图片
@@ -471,7 +477,7 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
         <div class="empty-state">
             <div class="empty-icon">🛡️</div>
             <div class="empty-title">上传作业票照片，AI 自动完成全部分析</div>
-            <div class="empty-desc">当前主流程：带气作业票（对齐拍照上传后点「处理」）</div>
+            <div class="empty-desc">支持带气 / 动火作业票（分路处理；先选票型再上传，点「处理」）</div>
             <div class="empty-action">点击上方 <b>📤 上传</b> 选择照片开始分析</div>
         </div>
         """, unsafe_allow_html=True)
@@ -736,10 +742,21 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
 # ==================== Tab 2: 数据看板（精简） ====================
 with tab2:
     import sqlite3
+    from agent_core import AgentTools, DB_TABLE_GAS, DB_TABLE_HOT
+
     db_path = os.path.join(os.path.dirname(__file__), "security_data.db")
     _del_pwd = _cfg.get("delete_password", "123")
 
-    st.caption("历史带气作业票 · 作业等级一级/二级 · 审批：自动通过 / 待审批(钉钉人工) / 已驳回")
+    st.caption("历史作业票 · 带气表 / 动火表分库 · 审批：自动通过 / 待审批(钉钉人工) / 已驳回")
+    board_kind = st.radio(
+        "看板票型",
+        options=["全部", "带气作业票", "动火作业票"],
+        horizontal=True,
+        key="board_ticket_kind",
+    )
+
+    # 统一展示行：dict，含 kind / table / id 等
+    rows_db = []
 
     if not os.path.exists(db_path):
         st.caption("📭 暂无数据，在「处理作业票」中处理后自动入库。")
@@ -747,21 +764,103 @@ with tab2:
         conn = None
         try:
             conn = sqlite3.connect(db_path)
-            try:
-                rows_db = conn.execute(
-                    "SELECT id,ticket_id,station_name,content,work_time,worker_id,check_date,"
-                    "has_abnormal,approval_opinion,risk_level,approval_status,approval_level,"
-                    "created_at,image_path FROM hse_fire_work_tickets ORDER BY id DESC"
-                ).fetchall()
-            except Exception:
-                rows_db = []
+            AgentTools.ensure_ticket_tables(conn)
+            conn.row_factory = sqlite3.Row
+
+            def _load_gas():
+                out = []
+                try:
+                    for r in conn.execute(
+                        f"SELECT id,ticket_id,station_name,content,work_time,worker_id,"
+                        f"check_date,completion_time,risk_level,approver_name,"
+                        f"operators,construction_leader,supervisor,company_monitor,gas_leader,"
+                        f"has_abnormal,approval_opinion,approval_status,approval_level,"
+                        f"created_at,image_path FROM {DB_TABLE_GAS} ORDER BY id DESC"
+                    ):
+                        out.append({
+                            "kind": "带气", "table": DB_TABLE_GAS, "id": r["id"],
+                            "ticket_id": r["ticket_id"], "unit": r["station_name"],
+                            "content": r["content"], "work_time": r["work_time"],
+                            "worker": r["worker_id"], "check_date": r["check_date"],
+                            "has_abnormal": r["has_abnormal"],
+                            "approval_opinion": r["approval_opinion"],
+                            "risk_level": r["risk_level"],
+                            "approval_status": r["approval_status"],
+                            "approval_level": r["approval_level"],
+                            "created_at": r["created_at"], "image_path": r["image_path"],
+                            "extra": {
+                                "作业单位": r["station_name"],
+                                "作业内容": r["content"],
+                                "作业时间": r["work_time"],
+                                "作业人姓名及证书编号": r["worker_id"],
+                                "日期": r["check_date"],
+                                "完工时间": r["completion_time"],
+                                "作业等级": r["risk_level"],
+                                "发起人签字确认": r["approver_name"],
+                                "作业人员": r["operators"],
+                                "施工方现场负责人": r["construction_leader"],
+                                "监理人员": r["supervisor"],
+                                "项目公司监护人": r["company_monitor"],
+                                "带气现场负责人": r["gas_leader"],
+                            },
+                        })
+                except Exception:
+                    pass
+                return out
+
+            def _load_hot():
+                out = []
+                try:
+                    for r in conn.execute(
+                        f"SELECT id,ticket_id,fire_unit,fire_location,content,work_time,"
+                        f"fire_method,worker_id,sampling_result,risk_level,"
+                        f"fire_personnel,construction_leader,supervisor,company_monitor,"
+                        f"fire_leader_project,fire_leader,check_date,"
+                        f"has_abnormal,approval_opinion,approval_status,approval_level,"
+                        f"created_at,image_path FROM {DB_TABLE_HOT} ORDER BY id DESC"
+                    ):
+                        out.append({
+                            "kind": "动火", "table": DB_TABLE_HOT, "id": r["id"],
+                            "ticket_id": r["ticket_id"],
+                            "unit": r["fire_unit"] or r["fire_location"] or "-",
+                            "content": r["content"], "work_time": r["work_time"],
+                            "worker": r["worker_id"], "check_date": r["check_date"],
+                            "has_abnormal": r["has_abnormal"],
+                            "approval_opinion": r["approval_opinion"],
+                            "risk_level": r["risk_level"],
+                            "approval_status": r["approval_status"],
+                            "approval_level": r["approval_level"],
+                            "created_at": r["created_at"], "image_path": r["image_path"],
+                            "extra": {
+                                "动火单位": r["fire_unit"],
+                                "动火地点": r["fire_location"],
+                                "动火方式": r["fire_method"],
+                                "采样检测": r["sampling_result"],
+                                "动火人员": r["fire_personnel"],
+                                "施工方现场负责人": r["construction_leader"],
+                                "监理人员": r["supervisor"],
+                                "项目公司监护人员": r["company_monitor"],
+                                "动火现场负责人(项目公司)": r["fire_leader_project"],
+                                "动火现场负责人": r["fire_leader"],
+                            },
+                        })
+                except Exception:
+                    pass
+                return out
+
+            if board_kind == "带气作业票":
+                rows_db = _load_gas()
+            elif board_kind == "动火作业票":
+                rows_db = _load_hot()
+            else:
+                rows_db = _load_gas() + _load_hot()
+                rows_db.sort(key=lambda x: x.get("created_at") or "", reverse=True)
 
             total = len(rows_db)
-            abn_cnt = sum(1 for r in rows_db if r[7])
-            auto_cnt = sum(1 for r in rows_db if (r[10] or "") == "自动通过")
-            human_cnt = sum(1 for r in rows_db if (r[10] or "") in ("待审批", "已驳回"))
+            abn_cnt = sum(1 for r in rows_db if r.get("has_abnormal"))
+            auto_cnt = sum(1 for r in rows_db if (r.get("approval_status") or "") == "自动通过")
+            human_cnt = sum(1 for r in rows_db if (r.get("approval_status") or "") in ("待审批", "已驳回"))
 
-            # 精简 KPI：短标签，避免长文案撑歪
             render_kpi_row([
                 ("总票数", str(total), ""),
                 ("有异常", str(abn_cnt), "#d6131c" if abn_cnt else "#059669"),
@@ -769,20 +868,24 @@ with tab2:
                 ("钉钉介入", str(human_cnt), "#0052CC" if human_cnt else ""),
             ])
 
-            # 高频问题 Top5：标题缩短，名称过长截断
             issue_counter = {}
             try:
-                for (ij,) in conn.execute(
-                    "SELECT issues_json FROM hse_fire_work_tickets WHERE has_abnormal=1"
-                ).fetchall():
-                    if not ij:
-                        continue
-                    for item in json.loads(ij):
-                        n = item.get("item_name") or "其他"
-                        # 看板展示用短名
-                        if len(n) > 12:
-                            n = n[:12] + "…"
-                        issue_counter[n] = issue_counter.get(n, 0) + 1
+                tables = []
+                if board_kind in ("全部", "带气作业票"):
+                    tables.append(DB_TABLE_GAS)
+                if board_kind in ("全部", "动火作业票"):
+                    tables.append(DB_TABLE_HOT)
+                for tb in tables:
+                    for (ij,) in conn.execute(
+                        f"SELECT issues_json FROM {tb} WHERE has_abnormal=1"
+                    ).fetchall():
+                        if not ij:
+                            continue
+                        for item in json.loads(ij):
+                            n = item.get("item_name") or "其他"
+                            if len(n) > 12:
+                                n = n[:12] + "…"
+                            issue_counter[n] = issue_counter.get(n, 0) + 1
             except Exception:
                 pass
 
@@ -798,7 +901,13 @@ with tab2:
         if st.session_state.delete_id:
             @st.dialog("确认删除", width="small")
             def confirm_delete():
-                st.warning(f"删除记录 #{st.session_state.delete_id}？不可恢复。")
+                did = st.session_state.delete_id
+                # delete_id 可能是 (table, id) 或 纯 id
+                if isinstance(did, (list, tuple)) and len(did) == 2:
+                    del_table, del_id = did
+                else:
+                    del_table, del_id = DB_TABLE_GAS, did
+                st.warning(f"删除 {del_table} 记录 #{del_id}？不可恢复。")
                 pwd = st.text_input("删除验证码", type="password")
                 fc1, fc2 = st.columns(2)
                 with fc1:
@@ -806,9 +915,11 @@ with tab2:
                         if pwd == _del_pwd:
                             try:
                                 c2 = sqlite3.connect(db_path)
+                                if del_table not in (DB_TABLE_GAS, DB_TABLE_HOT):
+                                    raise ValueError(f"非法表名: {del_table}")
                                 c2.execute(
-                                    "DELETE FROM hse_fire_work_tickets WHERE id=?",
-                                    (st.session_state.delete_id,),
+                                    f"DELETE FROM {del_table} WHERE id=?",
+                                    (del_id,),
                                 )
                                 c2.commit()
                             except Exception as e:
@@ -835,60 +946,92 @@ with tab2:
                 st.form_submit_button("搜索", use_container_width=True)
 
         for row in rows_db:
-            rid = row[0]
-            ticket = row[1] or "-"
-            station = row[2] or "-"
-            content = row[3] or ""
-            work_time = row[4] or ""
-            worker = row[5] or ""
-            date = row[6] or ""
-            abnormal = row[7]
-            opinion = row[8] or ""
-            grade = row[9] or "-"  # 作业等级 一级/二级
-            ap_status = row[10] or "-"
-            created = row[12] or ""
-            img_path = row[13]
+            rid = row["id"]
+            kind = row["kind"]
+            table = row["table"]
+            ticket = row.get("ticket_id") or "-"
+            station = row.get("unit") or "-"
+            content = row.get("content") or ""
+            work_time = row.get("work_time") or ""
+            worker = row.get("worker") or ""
+            date = row.get("check_date") or ""
+            abnormal = row.get("has_abnormal")
+            opinion = row.get("approval_opinion") or ""
+            grade = row.get("risk_level") or "-"
+            ap_status = row.get("approval_status") or "-"
+            created = row.get("created_at") or ""
+            img_path = row.get("image_path")
 
             if search and search.lower() not in (ticket or "").lower():
                 continue
 
             icon = "🚨" if abnormal else "✅"
             badge_md = render_record_badge(grade, abnormal)
-            # 标题精简：票号 | 单位 | 等级 | 审批
-            title = f"{icon} {ticket} · {station} · {grade} · {ap_status}{badge_md}"
+            title = f"{icon} [{kind}] {ticket} · {station} · {grade} · {ap_status}{badge_md}"
 
             cm, cd = st.columns([9, 1])
             with cm:
                 with st.expander(title, expanded=False):
-                    # 单列短标签，避免左右栏文字对不齐
-                    st.markdown(
-                        f"| 项目 | 内容 |\n"
-                        f"|---|---|\n"
-                        f"| 票号 | {ticket} |\n"
-                        f"| 单位 | {station} |\n"
-                        f"| 内容 | {content[:40]}{'…' if len(content) > 40 else ''} |\n"
-                        f"| 时间 | {work_time or date} |\n"
-                        f"| 作业人 | {worker} |\n"
-                        f"| 作业等级 | {grade}"
-                        f"{'（一级危险最高）' if grade == '一级' else ''} |\n"
-                        f"| 状态 | {'有异常' if abnormal else '正常'} |\n"
-                        f"| 审批 | {ap_status} |\n"
-                        f"| 路径 | "
-                        + {
-                            "自动通过": "系统自动通过",
-                            "待审批": "钉钉人工介入",
-                            "已驳回": "钉钉处理",
-                        }.get(ap_status, "-")
-                        + " |\n"
-                    )
+                    if kind == "动火":
+                        ex = row.get("extra") or {}
+                        grade_note = (
+                            "（特级最高）" if grade == "特级"
+                            else ("（一级最低）" if grade == "一级" else "")
+                        )
+                        md = (
+                            f"| 项目 | 内容 |\n|---|---|\n"
+                            f"| 票型 | 动火作业票 |\n"
+                            f"| 票号 | {ticket} |\n"
+                            f"| 动火单位 | {ex.get('动火单位') or station} |\n"
+                            f"| 动火地点 | {ex.get('动火地点') or '-'} |\n"
+                            f"| 动火内容 | {content[:40]}{'…' if len(content) > 40 else ''} |\n"
+                            f"| 动火时间 | {work_time or date} |\n"
+                            f"| 动火方式 | {ex.get('动火方式') or '-'} |\n"
+                            f"| 动火人 | {worker} |\n"
+                            f"| 采样检测 | {ex.get('采样检测') or '-'} |\n"
+                            f"| 动火等级 | {grade}{grade_note} |\n"
+                            f"| 动火人员 | {ex.get('动火人员') or '-'} |\n"
+                            f"| 施工方现场负责人 | {ex.get('施工方现场负责人') or '-'} |\n"
+                            f"| 监理人员 | {ex.get('监理人员') or '-'} |\n"
+                            f"| 项目公司监护人员 | {ex.get('项目公司监护人员') or '-'} |\n"
+                            f"| 动火现场负责人(项目公司) | {ex.get('动火现场负责人(项目公司)') or '-'} |\n"
+                            f"| 动火现场负责人 | {ex.get('动火现场负责人') or '-'} |\n"
+                            f"| 状态 | {'有异常' if abnormal else '正常'} |\n"
+                            f"| 审批 | {ap_status} |\n"
+                        )
+                    else:
+                        ex = row.get("extra") or {}
+                        grade_note = "（一级危险最高）" if grade == "一级" else ""
+                        _c = content or ex.get("作业内容") or ""
+                        md = (
+                            f"| 项目 | 内容 |\n|---|---|\n"
+                            f"| 票型 | 带气作业票 |\n"
+                            f"| 作业票编号 | {ticket} |\n"
+                            f"| 作业单位 | {ex.get('作业单位') or station} |\n"
+                            f"| 作业内容 | {_c[:40]}{'…' if len(_c) > 40 else ''} |\n"
+                            f"| 作业时间 | {ex.get('作业时间') or work_time or date} |\n"
+                            f"| 作业人姓名及证书编号 | {ex.get('作业人姓名及证书编号') or worker} |\n"
+                            f"| 日期 | {ex.get('日期') or date or '-'} |\n"
+                            f"| 完工时间 | {ex.get('完工时间') or '-'} |\n"
+                            f"| 作业等级 | {grade}{grade_note} |\n"
+                            f"| 发起人签字确认 | {ex.get('发起人签字确认') or '-'} |\n"
+                            f"| 作业人员 | {ex.get('作业人员') or '-'} |\n"
+                            f"| 施工方现场负责人 | {ex.get('施工方现场负责人') or '-'} |\n"
+                            f"| 监理人员 | {ex.get('监理人员') or '-'} |\n"
+                            f"| 项目公司监护人 | {ex.get('项目公司监护人') or '-'} |\n"
+                            f"| 带气现场负责人 | {ex.get('带气现场负责人') or '-'} |\n"
+                            f"| 状态 | {'有异常' if abnormal else '正常'} |\n"
+                            f"| 审批 | {ap_status} |\n"
+                        )
+                    st.markdown(md)
                     if opinion:
                         st.caption(f"建议：{opinion[:120]}{'…' if len(opinion) > 120 else ''}")
-                    st.caption(f"入库：{created}")
+                    st.caption(f"入库：{created} · 表 {table}")
 
                     if img_path and os.path.exists(img_path):
                         dc1, dc2 = st.columns(2)
                         with dc1:
-                            if st.button("查看原图", key=f"img_{rid}", use_container_width=True):
+                            if st.button("查看原图", key=f"img_{table}_{rid}", use_container_width=True):
                                 @st.dialog("原图", width="large")
                                 def show_orig_img(_path=img_path, _name=ticket):
                                     st.image(_path, caption=_name, use_container_width=True)
@@ -900,12 +1043,12 @@ with tab2:
                                 img_bytes = f.read()
                             st.download_button(
                                 "下载原图", data=img_bytes, file_name=dl_name,
-                                mime="image/png", key=f"dl_{rid}", use_container_width=True,
+                                mime="image/png", key=f"dl_{table}_{rid}", use_container_width=True,
                             )
                     else:
                         st.caption("原图不可用")
             with cd:
-                st.markdown("<div style='padding-top:18px'></div>", unsafe_allow_html=True)  # 注入空的 CSS padding 高度以对齐左侧大折叠卡片的垂直居中高度
-                if st.button("🗑️", key=f"del_{rid}", help=f"删除 #{rid}"):  # 渲染垃圾桶按钮，悬停提示删除该 rid 条目
-                    st.session_state.delete_id = rid  # 设置删除状态标志为当前行 rid
-                    st.rerun()  # 触发 Streamlit 重绘刷新，在顶部直接呼出安全删除验证 dialog 模态弹框
+                st.markdown("<div style='padding-top:18px'></div>", unsafe_allow_html=True)
+                if st.button("🗑️", key=f"del_{table}_{rid}", help=f"删除 {table} #{rid}"):
+                    st.session_state.delete_id = (table, rid)
+                    st.rerun()
