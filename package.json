@@ -1,6 +1,6 @@
 {
   "name": "player",
-  "version": "3.15.06",
+  "version": "3.15.07",
   "description": "数字化安全监督员 · 宣传 PPT 生成依赖 (pptxgenjs)",
   "private": true,
   "scripts": {

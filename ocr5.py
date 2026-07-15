@@ -1,20 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-带气作业票 25项安全措施网格对号识别工具 (OpenCV + skimage)
+作业票安全措施勾选格识别（OpenCV + skimage）
 
-每项安全措施有 5 列确认格，合法填写符号（票面图例）：
+【票型永远分离】
+  - 带气作业票：25 项 × 5 列（作业人/施工方/监理/监护人/带气现场负责人）
+  - 动火作业票：21 项 × 1 列（确认）
+  共用四分类 classify_mark（√ / × / \\ / 空白），网格几何与条款表各自独立。
+
+合法填写符号（票面图例）：
   落实 √  |  未落实 ×  |  不适用 \\
 空白格子不得记为叉号，否则完整性校验无法发现漏项。
 
-识别策略（四类）：
-  - 对号 / 对勾 (stroke 弯曲) → 输出 (✓)
-  - 斜杠 (stroke 近似直线)   → 输出 (\\)
-  - 叉号 (cross)             → 输出 (x)
-  - 空白 (blank)             → 输出 (-)
-
 用法：
-  python ocr5.py -i aligned.jpg
-  python ocr5.py -i aligned.jpg --crop 0,450,1052,800
+  # 带气（默认，兼容旧调用）
+  python ocr5.py -i aligned_gas.jpg
+  python ocr5.py -i aligned_gas.jpg --ticket-type 带气作业票
+
+  # 动火（须显式或按图宽高推断；规范画布 1000×1414）
+  python ocr5.py -i aligned_fire.jpg --ticket-type 动火作业票
 """
 import os
 import sys
@@ -276,8 +279,14 @@ def classify_mark(cell_gray, inset=4, ink_ratio_thresh=0.008, min_component_area
     return label, debug
 
 
-# 25条带气作业标准安全措施
-MEASURES = [
+# ---------------------------------------------------------------------------
+# 票型 profile（带气 / 动火永远分离）
+# ---------------------------------------------------------------------------
+TICKET_GAS = "带气作业票"
+TICKET_FIRE = "动火作业票"
+
+# 25 条带气作业标准安全措施
+GAS_MEASURES = [
     (1, "作业人具备相应的作业资格。"),
     (2, "作业人已接受作业安全教育，包括应急处置方案学习。"),
     (3, "现场人员已穿戴好安全防护用品，如防静电工作服、鞋、空气呼吸器等"),
@@ -302,31 +311,133 @@ MEASURES = [
     (22, "若涉及停、送气，则停、送气前须告知受影响的用户并做安全提示。"),
     (23, "已根据不同带气作业场景制定现场处置方案。"),
     (24, "作业现场已配备有效、适用 and 足量的灭火器材。"),
-    (25, "带气作业过程中，如有紧急或异常情况，应由现场负责人立即通知停止作业，应急处置并消除隐患后才能继续实施作业。")
+    (25, "带气作业过程中，如有紧急或异常情况，应由现场负责人立即通知停止作业，应急处置并消除隐患后才能继续实施作业。"),
 ]
 
+# 21 条动火作业标准安全措施（与 agent_core STANDARD_MEASURES 动火表一致）
+FIRE_MEASURES = [
+    (1, "动火人已接受作业安全教育。"),
+    (2, "实际动火人与作业票上的动火人相符，持有效证件。"),
+    (3, "监护人已到位。"),
+    (4, "作业机具经过检验合格。"),
+    (5, "动火作业使用的脚手架、吊篮经检查合格。"),
+    (6, "所有与动火设备相连的设备、管线加盲板/堵头等有效隔断，连通作业段的阀门处于关闭状态。不得以水封或仅关闭阀门代替盲板隔断。"),
+    (7, "动火管线、设备内部清理干净，吹扫合格，达到动火条件。"),
+    (8, "动火点15米内无可燃物，下水井、地漏、地沟覆盖严密。"),
+    (9, "动火点15米内无可燃液体排放，30米内无可燃气体排放。"),
+    (10, "同一动火区域内无可燃溶剂清洗、喷漆及刷油漆作业。"),
+    (11, "五级风及以上天气，禁止露天动火作业，确需动火，应升级管理。"),
+    (12, "乙炔气瓶应立放、安装阻火器，乙炔瓶和氧气瓶无泄漏，与火源的距离大于10米，要有防晒、防倾倒措施。"),
+    (13, "特级动火作业应全过程作业影像，且作业现场使用的摄录设备为防爆型."),
+    (14, "实际动火部位、内容、时间与动火作业票相符。"),
+    (15, "已对相关人员进行安全交底。"),
+    (16, "采样检测结果符合动火条件。每日动火作业前必须进行检测，检测后超过30分钟未动火，复测合格后方可动火。特级、一级动火作业中断时间超过30分钟，二级动火作业中断时间超过60分钟，必须重新检测合格后方可动火。特级动火作业期间必须连续进行监测。"),
+    (17, "现场所有人员按规范穿戴个人防护用品。"),
+    (18, "高处动火作业应采取防火花飞溅措施。"),
+    (19, "紧急疏散通道与消防通道保持畅通。"),
+    (20, "动火点配备合适的消防器材，现场配备消防水带（0）根，灭火器（/）台，灭火毯（）块。"),
+    (21, "其他补充安全措施："),
+]
 
-# 标准对齐图（template dq.png / align 输出）参考尺寸与勾选区几何
-REF_W, REF_H = 1052, 1487
-# 25 行安全措施区：26 条水平线（在 1052×1487 上标定）
-REF_Y_LINES = [
+# 带气：标准对齐图 dq / align 输出 1052×1487
+GAS_REF_W, GAS_REF_H = 1052, 1487
+GAS_REF_Y_LINES = [  # 26 条水平线 → 25 行
     459, 483, 507, 531, 555, 579, 603, 627, 653, 699,
     745, 775, 802, 846, 872, 899, 926, 972, 1001, 1025,
     1071, 1097, 1126, 1155, 1184, 1228,
 ]
-# 五列确认格 x 边界
-REF_X_BOUNDS = [675, 715, 791, 829, 890, 951]
+GAS_REF_X_BOUNDS = [675, 715, 791, 829, 890, 951]  # 5 列
+GAS_ROLES = ["作业人", "施工方现场负责人", "监理", "监护人", "带气现场负责人"]
+GAS_N_ROWS = 25
+GAS_N_HLINES = 26  # = N_ROWS + 1
+
+# 动火：标准对齐图 dh / align 输出 1000×1414（与当前 template/dh.png 一致）
+# 22 条水平线 → 21 行；单列「确认」在票面右侧（dh.png 投影标定）
+FIRE_REF_W, FIRE_REF_H = 1000, 1414
+FIRE_REF_Y_LINES = [
+    404, 426, 448, 470, 492, 514,
+    561, 583, 607, 630, 654, 678,
+    721, 751, 777, 804, 830, 858,
+    902, 940, 964, 988,
+]
+FIRE_REF_X_BOUNDS = [872, 954]  # 单列确认格
+FIRE_ROLES = ["确认"]
+FIRE_N_ROWS = 21
+FIRE_N_HLINES = 22
+
+# 兼容旧名
+MEASURES = GAS_MEASURES
+REF_W, REF_H = GAS_REF_W, GAS_REF_H
+REF_Y_LINES = GAS_REF_Y_LINES
+REF_X_BOUNDS = GAS_REF_X_BOUNDS
 
 
-def get_x_bounds(img_w: int):
-    """按图像宽度比例缩放五列 x 边界。"""
-    sx = float(img_w) / float(REF_W)
-    return [int(round(x * sx)) for x in REF_X_BOUNDS]
+def resolve_ticket_type(ticket_type: str | None, img_w: int = 0, img_h: int = 0) -> str:
+    """解析票型；未指定时按画布尺寸粗推断（1000×1414→动火，1052×1487→带气）。"""
+    s = (ticket_type or "").strip()
+    if s in (TICKET_GAS, TICKET_FIRE):
+        return s
+    if "动火" in s or s.lower() in ("fire", "hot", "dh"):
+        return TICKET_FIRE
+    if "带气" in s or s.lower() in ("gas", "dq"):
+        return TICKET_GAS
+    if img_w and img_h:
+        # 接近动火规范画布
+        if abs(img_w - FIRE_REF_W) <= 40 and abs(img_h - FIRE_REF_H) <= 60:
+            return TICKET_FIRE
+        if abs(img_w - GAS_REF_W) <= 40 and abs(img_h - GAS_REF_H) <= 60:
+            return TICKET_GAS
+    return TICKET_GAS
 
 
-def _scale_ref_y_lines(img_h: int):
-    sy = float(img_h) / float(REF_H)
-    return [int(round(y * sy)) for y in REF_Y_LINES]
+def get_ticket_profile(ticket_type: str) -> dict:
+    """返回票型独立几何/条款（禁止混用）。"""
+    if ticket_type == TICKET_FIRE:
+        return {
+            "ticket_type": TICKET_FIRE,
+            "label": "动火",
+            "measures": FIRE_MEASURES,
+            "roles": FIRE_ROLES,
+            "ref_w": FIRE_REF_W,
+            "ref_h": FIRE_REF_H,
+            "ref_y_lines": FIRE_REF_Y_LINES,
+            "ref_x_bounds": FIRE_REF_X_BOUNDS,
+            "n_rows": FIRE_N_ROWS,
+            "n_hlines": FIRE_N_HLINES,
+            "detect_x0_ref": 860,
+            "detect_x1_ref": 980,
+            "detect_y0_ref": 360,
+            "detect_y1_ref": 1050,
+        }
+    return {
+        "ticket_type": TICKET_GAS,
+        "label": "带气",
+        "measures": GAS_MEASURES,
+        "roles": GAS_ROLES,
+        "ref_w": GAS_REF_W,
+        "ref_h": GAS_REF_H,
+        "ref_y_lines": GAS_REF_Y_LINES,
+        "ref_x_bounds": GAS_REF_X_BOUNDS,
+        "n_rows": GAS_N_ROWS,
+        "n_hlines": GAS_N_HLINES,
+        "detect_x0_ref": 675,
+        "detect_x1_ref": 951,
+        "detect_y0_ref": 350,
+        "detect_y1_ref": 1250,
+    }
+
+
+def get_x_bounds(img_w: int, profile: dict | None = None):
+    """按图像宽度比例缩放确认格 x 边界。"""
+    prof = profile or get_ticket_profile(TICKET_GAS)
+    sx = float(img_w) / float(prof["ref_w"])
+    return [int(round(x * sx)) for x in prof["ref_x_bounds"]]
+
+
+def _scale_ref_y_lines(img_h: int, profile: dict | None = None):
+    prof = profile or get_ticket_profile(TICKET_GAS)
+    sy = float(img_h) / float(prof["ref_h"])
+    return [int(round(y * sy)) for y in prof["ref_y_lines"]]
 
 
 def _detect_h_peaks(row_sums, y0, y1, width_ref, ratio_thresh, nms=3):
@@ -369,43 +480,44 @@ def _merge_nearby_lines(lines, min_gap=6):
     return out
 
 
-def _median_ref_gap(img_h: int) -> float:
-    ref = _scale_ref_y_lines(img_h)
+def _median_ref_gap(img_h: int, profile: dict | None = None) -> float:
+    ref = _scale_ref_y_lines(img_h, profile)
     gaps = [ref[i + 1] - ref[i] for i in range(len(ref) - 1)]
     return float(np.median(gaps)) if gaps else 24.0
 
 
-def _ref_match_score(peaks, img_h: int) -> float:
+def _ref_match_score(peaks, img_h: int, profile: dict | None = None) -> float:
     """
     候选峰与 REF 网格的贴合分（越小越好）。
-    不只看数量是否=26，避免「漏掉首线只剩 25 条」被当成最优。
+    不只看数量是否=N，避免「漏掉首线」被当成最优。
     """
+    prof = profile or get_ticket_profile(TICKET_GAS)
+    n_hlines = int(prof["n_hlines"])
     if not peaks:
         return 1e12
-    ref = _scale_ref_y_lines(img_h)
+    ref = _scale_ref_y_lines(img_h, prof)
     peaks = sorted(int(y) for y in peaks)
-    med = _median_ref_gap(img_h)
+    med = _median_ref_gap(img_h, prof)
     total = 0.0
     for ry in ref:
         total += min(abs(ry - cy) for cy in peaks)
-    total += abs(len(peaks) - 26) * med * 0.35
+    total += abs(len(peaks) - n_hlines) * med * 0.35
     return total
 
 
-def _pick_26_from_candidates(cands, img_h):
+def _pick_n_from_candidates(cands, img_h, profile: dict | None = None):
     """
-    以 REF 几何为锚，在候选峰中「单调、就近」吸附为 26 条。
+    以票型 REF 几何为锚，在候选峰中「单调、就近」吸附为 n_hlines 条。
 
-    关键：旧逻辑 max_d 过大（约 0.025*H≈37px，超过一行高），
-    当首条水平线漏检时，会把第 2 条线（约 +24px）错配给第 1 行，
-    导致整表少取最上方一行（ocr5 / ocr10 共用本函数，两边一起错）。
+    关键：旧逻辑 max_d 过大，首条漏检会把第 2 条线错配给第 1 行。
     """
-    ref = _scale_ref_y_lines(img_h)
+    prof = profile or get_ticket_profile(TICKET_GAS)
+    ref = _scale_ref_y_lines(img_h, prof)
+    n_hlines = int(prof["n_hlines"])
     if not cands:
         return list(ref)
     cands = sorted(set(int(y) for y in cands))
-    med_gap = _median_ref_gap(img_h)
-    # 约 0.4 行高；典型行高 24 → max_d≈10，绝不会跨行错配
+    med_gap = _median_ref_gap(img_h, prof)
     max_d = max(8, int(round(0.4 * med_gap)))
 
     chosen = []
@@ -415,7 +527,6 @@ def _pick_26_from_candidates(cands, img_h):
         for i, cy in enumerate(cands):
             if i in used:
                 continue
-            # 严格递增，禁止两条 REF 抢同一峰 / 回退
             if chosen and cy <= chosen[-1]:
                 continue
             d = abs(cy - ry)
@@ -429,50 +540,55 @@ def _pick_26_from_candidates(cands, img_h):
             if chosen and y <= chosen[-1]:
                 y = chosen[-1] + max(1, int(round(med_gap)))
             chosen.append(y)
-    return chosen
+    # 保证条数
+    while len(chosen) < n_hlines:
+        chosen.append(chosen[-1] + max(1, int(round(med_gap))))
+    return chosen[:n_hlines]
 
 
-def get_y_lines(img_g):
+def _pick_26_from_candidates(cands, img_h):
+    """兼容旧接口：默认带气 26 条。"""
+    return _pick_n_from_candidates(cands, img_h, get_ticket_profile(TICKET_GAS))
+
+
+def get_y_lines(img_g, profile: dict | None = None):
     """
-    检测安全措施区 26 条水平网格线。
+    检测安全措施区水平网格线（条数随票型：带气 26 / 动火 22）。
 
     重要：必须在「仍含表格线」的灰度图上调用。
-    若先做 ocr7 去表格线再检测，水平线被抹掉会得到 0 条。
-
-    策略：
-      1) 按图像尺寸缩放检测窗，多阈值峰值检测（按与 REF 贴合度选最优，非只看条数）
-      2) 形态学水平线增强再检
-      3) 所有候选最终都经 REF 单调吸附成 26 条（补首行漏线、去重、防整表错行）
-      4) 仍失败且图足够大：使用按高宽比缩放的标准对齐网格（标定几何，非乱编）
     """
     if img_g is None or img_g.size == 0:
         raise RuntimeError("get_y_lines: 输入灰度图为空")
 
+    prof = profile or get_ticket_profile(TICKET_GAS)
+    n_hlines = int(prof["n_hlines"])
+    label = prof.get("label", "")
+    ref_w, ref_h = int(prof["ref_w"]), int(prof["ref_h"])
+
     h, w = img_g.shape[:2]
-    sx = w / float(REF_W)
-    sy = h / float(REF_H)
-    x0 = max(0, int(round(675 * sx)))
-    x1 = min(w, int(round(951 * sx)))
+    sx = w / float(ref_w)
+    sy = h / float(ref_h)
+    x0 = max(0, int(round(prof["detect_x0_ref"] * sx)))
+    x1 = min(w, int(round(prof["detect_x1_ref"] * sx)))
     if x1 - x0 < 20:
-        # 宽度异常时用右半幅
         x0, x1 = int(w * 0.60), w - 2
-    y0 = max(0, int(round(350 * sy)))
-    y1 = min(h - 1, int(round(1250 * sy)))
+    y0 = max(0, int(round(prof["detect_y0_ref"] * sy)))
+    y1 = min(h - 1, int(round(prof["detect_y1_ref"] * sy)))
     band_w = max(1, x1 - x0)
 
     best = []
     best_score = 1e12
+    min_peaks_for_adsorb = max(8, n_hlines // 2)
 
     def _consider(peaks, tag=""):
         nonlocal best, best_score
         if not peaks:
             return
-        score = _ref_match_score(peaks, h)
+        score = _ref_match_score(peaks, h, prof)
         if score < best_score:
             best_score = score
             best = peaks
 
-    # 方法 A：多阈值墨迹投影（含较弱阈值，利于检出淡的首行线）
     for thr_gray in (50, 70, 80, 100, 120, 140, 160):
         binary = img_g < thr_gray
         row_sums = np.sum(binary[:, x0:x1], axis=1).astype(np.float64)
@@ -481,7 +597,6 @@ def get_y_lines(img_g):
             peaks = _merge_nearby_lines(peaks, min_gap=max(4, int(8 * sy)))
             _consider(peaks)
 
-    # 方法 B：形态学提取水平线
     try:
         inv = 255 - img_g
         _, bw = cv2.threshold(inv, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -496,66 +611,153 @@ def get_y_lines(img_g):
     except Exception as e:
         logger.debug("形态学检线失败: %s", e)
 
-    # 方法 C：候选经 REF 单调吸附 → 固定 26 条（即使原先恰好 26 条也可能错位，一律吸附）
-    if len(best) >= 12:
-        picked = _pick_26_from_candidates(best, h)
-        if len(picked) == 26:
-            # 若吸附后相对 REF 仍然整体偏离过大，退回比例网格
-            ref = _scale_ref_y_lines(h)
-            med = _median_ref_gap(h)
+    if len(best) >= min_peaks_for_adsorb:
+        picked = _pick_n_from_candidates(best, h, prof)
+        if len(picked) == n_hlines:
+            ref = _scale_ref_y_lines(h, prof)
+            med = _median_ref_gap(h, prof)
             mad = float(np.mean([abs(a - b) for a, b in zip(picked, ref)]))
             if mad <= med * 0.75:
                 logger.info(
-                    "get_y_lines: 峰 %d 条 → REF 吸附 26 条 (mad=%.1f, size=%dx%d) first=%s",
-                    len(best), mad, w, h, picked[:3],
+                    "get_y_lines[%s]: 峰 %d → REF 吸附 %d 条 (mad=%.1f, size=%dx%d) first=%s",
+                    label, len(best), n_hlines, mad, w, h, picked[:3],
                 )
                 return picked
             logger.warning(
-                "get_y_lines: 吸附结果偏离 REF 过大 (mad=%.1f > %.1f)，改用比例网格",
-                mad, med * 0.75,
+                "get_y_lines[%s]: 吸附偏离 REF 过大 (mad=%.1f > %.1f)，改用比例网格",
+                label, mad, med * 0.75,
             )
 
-    # 方法 D：标准对齐几何按比例缩放（仅当图尺寸合理，说明是对齐票）
-    if w >= 700 and h >= 1000:
-        scaled = _scale_ref_y_lines(h)
+    if w >= 700 and h >= 900:
+        scaled = _scale_ref_y_lines(h, prof)
         logger.warning(
-            "get_y_lines: 动态检测失败(best=%d条, size=%dx%d)。"
-            "使用标准对齐票比例网格（REF 1052x1487 按高度缩放）。"
-            "若结果错行，请确认输入为「对齐图」且勿在去表格线之后检线。",
-            len(best), w, h,
+            "get_y_lines[%s]: 动态检测失败(best=%d, size=%dx%d)。"
+            "使用标准对齐票比例网格（REF %dx%d 按高度缩放）。",
+            label, len(best), w, h, ref_w, ref_h,
         )
         return scaled
 
     raise RuntimeError(
-        f"安全措施网格水平线数量异常: 检测到 {len(best)} 条，需要 26 条；"
-        f"图像 {w}x{h}。请使用模板对齐后的带气作业票（约 {REF_W}x{REF_H}），"
+        f"[{label}] 安全措施网格水平线异常: 检测到 {len(best)} 条，需要 {n_hlines} 条；"
+        f"图像 {w}x{h}。请使用模板对齐后的{label}作业票（约 {ref_w}x{ref_h}），"
         f"且必须在去表格线之前检测网格。"
         f" best_lines={best[:12]}{'...' if len(best) > 12 else ''}"
     )
 
 
+def run_mark_grid(img_bgr, profile: dict, image_path: str = "") -> str:
+    """
+    按票型 profile 检测网格并四分类输出。
+    带气：25×5；动火：21×1。classify_mark 共用，几何/条款分离。
+    """
+    label = profile.get("label", "")
+    measures = profile["measures"]
+    roles = profile["roles"]
+    n_cols = len(roles)
+    n_rows = int(profile["n_rows"])
+    n_hlines = int(profile["n_hlines"])
+
+    img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    # 必须在去表格线之前检水平线
+    x_bounds = get_x_bounds(img_bgr.shape[1], profile)
+    y_lines = get_y_lines(img_gray, profile)
+    logger.info(
+        "[%s] 网格线=%d (期望 %d)  x_bounds=%s  roles=%s",
+        label, len(y_lines), n_hlines, x_bounds, roles,
+    )
+    if len(y_lines) < n_hlines:
+        raise RuntimeError(
+            f"[{label}] 水平线不足: {len(y_lines)} < {n_hlines}，无法构成 {n_rows} 行"
+        )
+
+    logger.info("[%s] 开始去表格线（仅用于格内分类；ocr7 票型参数分离）...", label)
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from ocr7 import remove_table_lines, imwrite_unicode, default_output_path
+
+    img_no_lines_bgr, _ = remove_table_lines(
+        img_bgr,
+        strength=1,
+        ticket_type=profile.get("ticket_type"),
+    )
+    if image_path:
+        out_path = default_output_path(image_path)
+        if imwrite_unicode(out_path, img_no_lines_bgr):
+            logger.info("[%s] 去表格化图像已保存: %s", label, out_path)
+        else:
+            logger.error("[%s] 去表格化图像保存失败: %s", label, out_path)
+
+    img_gray = cv2.cvtColor(img_no_lines_bgr, cv2.COLOR_BGR2GRAY)
+
+    grid_md = []
+    _sym = {"stroke": "✓", "slash": "\\", "cross": "x", "blank": "-"}
+    for idx, desc in measures:
+        r = idx - 1
+        y1, y2 = y_lines[r], y_lines[r + 1]
+        row_labels = []
+        for i in range(n_cols):
+            pad_x = min(6, max(1, (x_bounds[i + 1] - x_bounds[i]) // 3))
+            pad_y = min(3, max(1, (y2 - y1) // 3))
+            cell_x1 = x_bounds[i] + pad_x
+            cell_x2 = x_bounds[i + 1] - pad_x
+            cell_y1 = y1 + pad_y
+            cell_y2 = y2 - pad_y
+            cell_gray = img_gray[cell_y1:cell_y2, cell_x1:cell_x2]
+            mark_label, _dbg = classify_mark(cell_gray, inset=0, min_component_area=12)
+            logger.debug(
+                "[%s] 第%d条 列%d [%s] %s", label, idx, i + 1, roles[i], mark_label
+            )
+            row_labels.append(mark_label)
+
+        status = [
+            f"{roles[i]}({_sym.get(row_labels[i], '-')})" for i in range(n_cols)
+        ]
+        col_str = " | ".join(status)
+        logger.info("[%s] 第%d条: %s", label, idx, col_str)
+        grid_md.append(f"第{idx}条: {desc} | " + col_str)
+
+    if not grid_md:
+        raise RuntimeError(f"[{label}] 安全措施网格结果为空，禁止兜底输出")
+    if len(grid_md) != n_rows:
+        logger.warning("[%s] 输出行数 %d ≠ 期望 %d", label, len(grid_md), n_rows)
+
+    header = (
+        f"\n\n--- 纯本地 OpenCV 像素密度提取结果 ---\n"
+        f"ticket_type={profile['ticket_type']}\n"
+    )
+    return header + "\n".join(grid_md) + "\n----------------------------------\n"
+
+
 def main():
     # 先将 stdout/stderr 设为 utf-8，防止中文乱码
-    sys.stdout.reconfigure(encoding='utf-8')
-    sys.stderr.reconfigure(encoding='utf-8')
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
 
     parser = argparse.ArgumentParser(
         description=(
-            "带气作业票 25项安全措施对号识别工具 (OpenCV + skimage)\n"
-            "四分类：对号(✓) / 叉号(x) / 斜杠(\\) / 空白(-)；空白不得记为叉号"
+            "作业票安全措施勾选识别 (OpenCV + skimage)\n"
+            "带气 25×5 / 动火 21×1 完全分离；四分类：✓ / x / \\ / -"
         ),
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "-i", "--input",
         required=True,
-        help="必填。对齐后的带气作业票图像路径 (标准尺寸 1052x1487)"
+        help="对齐后的作业票图像（带气约 1052×1487；动火约 1000×1414）",
+    )
+    parser.add_argument(
+        "--ticket-type",
+        default=None,
+        choices=[
+            TICKET_GAS, TICKET_FIRE,
+            "gas", "fire", "带气", "动火",
+        ],
+        help="票型：带气作业票 / 动火作业票（默认按图尺寸推断，优先显式指定）",
     )
     parser.add_argument(
         "--crop",
         default=None,
         metavar="X,Y,W,H",
-        help="可选。局部裁剪区域，格式为 x,y,w,h (像素坐标)，默认不裁剪。示例: --crop 0,450,1052,800"
+        help="可选局部裁剪 x,y,w,h",
     )
     args = parser.parse_args()
 
@@ -565,90 +767,45 @@ def main():
         sys.exit(1)
 
     logger.info("加载图像: %s", image_path)
-    # 支持中文文件路径
     img_bgr = cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_COLOR)
     if img_bgr is None:
         logger.error("图像解码失败: %s", image_path)
         sys.exit(1)
-    logger.info("图像尺寸: %dx%d", img_bgr.shape[1], img_bgr.shape[0])
+    h, w = img_bgr.shape[:2]
+    logger.info("图像尺寸: %dx%d", w, h)
 
-    # 可选局部裁剪（在灰度转换之前）
     if args.crop:
         try:
-            cx, cy, cw, ch = map(int, args.crop.split(','))
-            img_bgr = img_bgr[cy:cy + ch, cx:cx + cw]
+            cx, cy, cw, ch = map(int, args.crop.split(","))
+            img_bgr = img_bgr[cy : cy + ch, cx : cx + cw]
             if img_bgr.size == 0:
-                print("Error: --crop 参数导致裁剪区域为空，请检查坐标值。", file=sys.stderr)
+                print("Error: --crop 参数导致裁剪区域为空", file=sys.stderr)
                 sys.exit(1)
+            h, w = img_bgr.shape[:2]
         except ValueError:
-            print("Error: --crop 格式错误，应为 \"x,y,w,h\"，例如 --crop 0,450,1052,800", file=sys.stderr)
+            print("Error: --crop 格式错误，应为 x,y,w,h", file=sys.stderr)
             sys.exit(1)
 
-    img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-
-    # 必须在去表格线之前检水平线（线抹掉后会变成 0 条）
-    x_bounds = get_x_bounds(img_bgr.shape[1])
-    roles = ["作业人", "施工方现场负责人", "监理", "监护人", "带气现场负责人"]
-    y_lines = get_y_lines(img_gray)
-    logger.info("检测到网格线数量: %d  x_bounds=%s", len(y_lines), x_bounds)
-
-    # 去表格化：仅用于格子内像素分类，不用于检线
-    logger.info("开始对图像进行去表格线处理...")
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from ocr7 import remove_table_lines, imwrite_unicode, default_output_path
-    
-    img_no_lines_bgr, _ = remove_table_lines(img_bgr, strength=1)
-    out_path = default_output_path(image_path)
-    if imwrite_unicode(out_path, img_no_lines_bgr):
-        logger.info("去表格化图像已成功保存至: %s", out_path)
-    else:
-        logger.error("去表格化图像保存失败: %s", out_path)
-        
-    # 将去表格化后的图像灰度图作为后续特征提取的基础
-    img_gray = cv2.cvtColor(img_no_lines_bgr, cv2.COLOR_BGR2GRAY)
-
-    grid_md = []
-    for idx, desc in MEASURES:
-        r = idx - 1  # 0-based grid row index
-        y1, y2 = y_lines[r], y_lines[r + 1]
-
-        row_labels = []
-        for i in range(5):
-            pad_x = min(6, (x_bounds[i + 1] - x_bounds[i]) // 3)
-            pad_y = min(3, (y2 - y1) // 3)
-            cell_x1 = x_bounds[i] + pad_x
-            cell_x2 = x_bounds[i + 1] - pad_x
-            cell_y1 = y1 + pad_y
-            cell_y2 = y2 - pad_y
-
-            cell_gray = img_gray[cell_y1:cell_y2, cell_x1:cell_x2]
-            label, dbg = classify_mark(cell_gray, inset=0, min_component_area=12)
-            logger.debug("第%d条 列%d [%s] %s", idx, i + 1, roles[i], label)
-            row_labels.append(label)
-
-        # 四分类输出：✓ 落实 / x 未落实 / \ 不适用 / - 空白(漏项)
-        # 注意：空白必须输出 (-)，不可写成 (x)，否则下游完整性校验无法发现漏填
-        _sym = {'stroke': '✓', 'slash': '\\', 'cross': 'x', 'blank': '-'}
-        status = []
-        for i in range(5):
-            label = row_labels[i]
-            role = roles[i]
-            status.append(f"{role}({_sym.get(label, '-')})")
-
-        col_str = " | ".join(status)
-        logger.info("第%d条: %s", idx, col_str)
-        grid_md.append(f"第{idx}条: {desc} | " + col_str)
-
-    if not grid_md:
-        # 【禁止兜底】无输出行则失败退出，禁止打印空成功
-        raise RuntimeError("25 项安全措施网格结果为空，禁止兜底输出")
-    output_text = (
-        "\n\n--- 纯本地 OpenCV 像素密度提取结果 ---\n"
-        + "\n".join(grid_md)
-        + "\n----------------------------------\n"
+    tt_raw = args.ticket_type
+    if tt_raw in ("gas", "带气"):
+        tt_raw = TICKET_GAS
+    elif tt_raw in ("fire", "动火"):
+        tt_raw = TICKET_FIRE
+    ticket_type = resolve_ticket_type(tt_raw, w, h)
+    profile = get_ticket_profile(ticket_type)
+    logger.info(
+        "票型锁定=%s（%s）| 条款 %d 行 × %d 列 | REF %dx%d",
+        ticket_type,
+        profile["label"],
+        profile["n_rows"],
+        len(profile["roles"]),
+        profile["ref_w"],
+        profile["ref_h"],
     )
+
+    output_text = run_mark_grid(img_bgr, profile, image_path=image_path)
     print(output_text)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

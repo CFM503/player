@@ -523,6 +523,18 @@ def _normalize_gas_cell_mark(token: str) -> str:
     return "blank"
 
 
+def _ocr5_result_block(ocr_text: str) -> str:
+    """截取 ocr5 输出块（带气/动火共用分隔标记）。"""
+    if not ocr_text:
+        return ""
+    m_block = re.search(
+        r"---\s*纯本地 OpenCV 像素密度提取结果\s*---\s*(.*?)\s*----------------------------------",
+        ocr_text,
+        re.S,
+    )
+    return m_block.group(1) if m_block else ocr_text
+
+
 def parse_gas_measure_grid(ocr_text: str) -> Dict[int, List[str]]:
     """
     从 OCR（优先 ocr5 网格块）解析带气 25 项 × 5 列标记。
@@ -535,14 +547,7 @@ def parse_gas_measure_grid(ocr_text: str) -> Dict[int, List[str]]:
         return result
 
     # 优先截取 ocr5 结果块，避免正文噪声干扰
-    block = ocr_text
-    m_block = re.search(
-        r"---\s*纯本地 OpenCV 像素密度提取结果\s*---\s*(.*?)\s*----------------------------------",
-        ocr_text,
-        re.S,
-    )
-    if m_block:
-        block = m_block.group(1)
+    block = _ocr5_result_block(ocr_text)
 
     # 第N条: desc | 角色(符号) | ...
     row_pat = re.compile(
@@ -572,6 +577,40 @@ def parse_gas_measure_grid(ocr_text: str) -> Dict[int, List[str]]:
         marks = [by_role.get(role, "blank") for role in GAS_MEASURE_ROLES]
         result[mid] = marks
 
+    return result
+
+
+def parse_fire_measure_grid(ocr_text: str) -> Dict[int, List[str]]:
+    """
+    从 ocr5 动火块解析 21 项 × 1 列「确认」标记。
+    返回 {measure_id: [mark]}，mark ∈ check|cross|slash|blank
+    行格式：第1条: … | 确认(✓)
+    与带气 parse_gas_measure_grid 完全分离，禁止混用。
+    """
+    result: Dict[int, List[str]] = {}
+    if not ocr_text:
+        return result
+    block = _ocr5_result_block(ocr_text)
+    # 若块内声明了带气，仍允许按「确认」列解析（仅认动火角色名）
+    row_pat = re.compile(r"第\s*(\d{1,2})\s*条\s*[:：]?\s*(.*)$", re.M)
+    cell_pat = re.compile(r"(确认)\s*[\(（]\s*([^\)）]*)\s*[\)）]")
+    for m in row_pat.finditer(block):
+        try:
+            mid = int(m.group(1))
+        except ValueError:
+            continue
+        if mid < 1 or mid > FIRE_MEASURE_COUNT:
+            continue
+        rest = m.group(2)
+        cells = cell_pat.findall(rest)
+        if not cells:
+            # 兼容无角色名：| (✓) 或行末 (✓)
+            m2 = re.search(r"[\(（]\s*([✓√x×\\/\-—–]+)\s*[\)）]\s*$", rest)
+            if m2:
+                result[mid] = [_normalize_gas_cell_mark(m2.group(1))]
+            continue
+        raw_mark = cells[0][1]
+        result[mid] = [_normalize_gas_cell_mark(raw_mark)]
     return result
 
 
@@ -1359,24 +1398,39 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             if blank_measure_ids:
                 safe_print(f"[Sanitize][带气] 五列空白漏项: {blank_measure_ids}")
         else:
-            # ---- 动火：21 条单列勾选（OCR 行内 ✓/×），禁止调用 ocr5/带气网格 ----
-            safe_print(f"[Sanitize][动火] 安全措施单列解析: 共 {len(std_measures)} 条（不使用 ocr5）")
+            # ---- 动火：ocr5 21×1「确认」格（√/×/\ /空白）；与带气 25×5 完全分离 ----
+            fire_grid = parse_fire_measure_grid(ocr_text)
+            safe_print(
+                f"[Sanitize][动火] ocr5 确认格解析: {len(fire_grid)}/{FIRE_MEASURE_COUNT} 行"
+            )
             for mid, desc in std_measures:
-                h_status = check_measure_status_in_ocr(ocr_text, desc, ticket_type)
-                if h_status is True:
-                    mark, impl = "check", True
-                elif h_status is False:
-                    mark, impl = "cross", False
+                if mid in fire_grid and fire_grid[mid]:
+                    mark = fire_grid[mid][0]
+                    if mark not in ("check", "cross", "slash", "blank"):
+                        mark = _normalize_gas_cell_mark(mark)
                 else:
-                    # 无法判定 = 空白漏项，禁止默认已落实
-                    mark, impl = "blank", False
+                    # ocr5 未给出该行时，回退行内启发式（仍禁止默认落实）
+                    h_status = check_measure_status_in_ocr(ocr_text, desc, ticket_type)
+                    if h_status is True:
+                        mark = "check"
+                    elif h_status is False:
+                        mark = "cross"
+                    else:
+                        mark = "blank"
+                        safe_print(
+                            f"[Sanitize][动火] 第{mid}项确认格缺失，记为漏项（禁止默认落实）"
+                        )
+                has_blank = mark in GAS_MARK_EMPTY or mark == "blank"
+                has_cross = mark == "cross"
+                # slash=不适用视为已填；cross/blank 视为未完整落实
+                impl = (not has_cross) and (not has_blank)
+                if has_blank:
                     blank_measure_ids.append(mid)
-                    safe_print(f"[Sanitize][动火] 第{mid}项未识别勾选，记为漏项（禁止默认落实）")
                 sanitized_measures.append({
                     "measure_id": mid,
                     "description": desc,
                     "implemented": impl,
-                    "column_marks": [mark],  # 动火单列语义，勿当五列使用
+                    "column_marks": [mark],  # 动火单列，勿当带气五列
                 })
                 if not impl:
                     has_abnormal = True
@@ -1853,17 +1907,24 @@ class AgentTools:
                                     buf.tofile(aligned_path)
 
                             try:
-                                safe_print(f"[OCR] 启动 ocr7.py 对对齐图片进行去表格线处理...")
+                                safe_print(
+                                    f"[OCR][{type_label}] 启动 ocr7 去表格线"
+                                    f"（票型={locked_type}，参数与另一票型分离）..."
+                                )
                                 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
                                 from ocr7 import remove_table_lines, imwrite_unicode, default_output_path
-                                img_no_lines_bgr, _ = remove_table_lines(aligned_img, strength=1)
+                                img_no_lines_bgr, _ = remove_table_lines(
+                                    aligned_img,
+                                    strength=1,
+                                    ticket_type=locked_type,
+                                )
                                 out_path = default_output_path(aligned_path)
                                 if imwrite_unicode(out_path, img_no_lines_bgr):
-                                    safe_print(f"[OCR] 去表格化图像已成功保存至: {out_path}")
+                                    safe_print(f"[OCR][{type_label}] 去表格化已保存: {out_path}")
                                 else:
-                                    safe_print(f"[OCR] ⚠️ 去表格化图像保存失败: {out_path}")
+                                    safe_print(f"[OCR][{type_label}] ⚠️ 去表格化保存失败: {out_path}")
                             except Exception as e:
-                                safe_print(f"[OCR] ⚠️ 去表格化处理异常: {e}")
+                                safe_print(f"[OCR][{type_label}] ⚠️ 去表格化异常: {e}")
 
                             safe_print(
                                 f"[OCR] 模板匹配对齐完成：使用 {t_file}（{type_label}）"
@@ -1972,31 +2033,41 @@ class AgentTools:
             )
             safe_print(f"[OCR 检测] 流水线票型【{pipeline_type}】文字/模板一致【{detected}】{coords_str}")
 
-        # ---- 仅带气：ocr5 25×5；动火禁止调用 ocr5 ----
-        if pipeline_type == TICKET_TYPE_GAS and "aligned_" in os.path.basename(image_path):
-            safe_print("[OpenCV][带气] 启用 ocr5.py 进行 25×5 符号识别（失败即报错，禁止静默跳过）...")
+        # ---- ocr5：带气 25×5 / 动火 21×1，票型参数分离，禁止混跑 ----
+        if "aligned_" in os.path.basename(image_path) and pipeline_type in (
+            TICKET_TYPE_GAS,
+            TICKET_TYPE_FIRE,
+        ):
+            if pipeline_type == TICKET_TYPE_GAS:
+                safe_print(
+                    "[OpenCV][带气] 启用 ocr5.py 25×5 符号识别（失败即报错，禁止静默跳过）..."
+                )
+            else:
+                safe_print(
+                    "[OpenCV][动火] 启用 ocr5.py 21×1 确认格识别（√/×/\\ /空白；与带气 25×5 分离）..."
+                )
             cmd = [
                 sys.executable,
                 os.path.join(os.path.dirname(__file__), "ocr5.py"),
-                "--input", image_path
+                "--ticket-type", pipeline_type,
+                "--input", image_path,
             ]
             res = run_python_script(cmd)
             if res.returncode != 0:
                 err = (res.stderr or res.stdout or "").strip()
                 raise RuntimeError(
-                    f"ocr5 25×5 网格识别失败(exit={res.returncode})，禁止兜底跳过。详情: {err[:500]}"
+                    f"ocr5[{pipeline_type}] 失败(exit={res.returncode})，禁止兜底跳过。详情: {err[:500]}"
                 )
             append_text = (res.stdout or "").strip()
             if "--- 纯本地 OpenCV 像素密度提取结果 ---" not in append_text:
                 raise RuntimeError(
-                    "ocr5 未输出有效 25×5 结果块，禁止兜底继续。请检查对齐图尺寸与网格线检测。"
+                    f"ocr5[{pipeline_type}] 未输出有效结果块，禁止兜底继续。"
+                    f"请检查对齐图尺寸与网格线检测。"
                 )
             flat_text = append_text + "\n" + flat_text
             ocr_result = append_text + "\n" + ocr_result
             AgentTools._last_ocr_raw = flat_text
-            safe_print("[OpenCV][带气] ocr5.py 25×5 结果前插融合完成")
-        elif pipeline_type == TICKET_TYPE_FIRE:
-            safe_print("[OpenCV][动火] 跳过 ocr5（动火为 21 条单列勾选，与带气 25×5 完全分离）")
+            safe_print(f"[OpenCV][{pipeline_type}] ocr5 结果前插融合完成")
 
         return ocr_result
 
