@@ -35,6 +35,33 @@ if os.path.exists(_logo):
         with st.sidebar:
             st.image(_logo, use_container_width=True)
 
+# 四页共用：锁死侧栏 header 内 logo 布局，避免仅管理页注入 CSS 时位置跳动
+st.markdown(
+    """
+    <style>
+    section[data-testid="stSidebar"] [data-testid="stSidebarHeader"] {
+        height: auto !important;
+        min-height: 0 !important;
+        margin: 0 !important;
+        padding: 0.75rem 1rem !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        box-sizing: border-box !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stLogo"],
+    section[data-testid="stSidebar"] .stLogo {
+        flex: 0 0 auto !important;
+        margin: 0 !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
+        margin-left: auto !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 user_page = st.Page(
     "user_ui.py",
     title="提交作业票",

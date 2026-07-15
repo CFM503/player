@@ -1,5 +1,10 @@
 # 更新日志 (CHANGELOG)
 
+## [3.15.09] - 2026-07-15
+
+### 修复
+- **侧栏 Logo 切页跳动**：管理测试页 `CUSTOM_CSS` 曾把 `stSidebarHeader` 固定为 `height: 30px` 并加大 margin，导致仅进管理页时 logo 移位；改为自适应高度，并在 `frontend.py` 统一锁定四页 header/logo 布局。
+
 ## [3.15.08] - 2026-07-15
 
 ### 修复

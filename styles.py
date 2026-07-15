@@ -194,21 +194,30 @@ section[data-testid="stSidebar"] {
 * { font-family: 'Inter', sans-serif; } /* 绑定全局中英文字体为高端无衬线 Inter 字体 */
 
 /* ============== 侧边栏修饰 ============== */
+/* st.logo 渲染在 stSidebarHeader 内；禁止固定高度/外边距，否则切到管理页 logo 会跳动 */
 section[data-testid="stSidebar"] [data-testid="stSidebarHeader"] {
     position: relative !important;
-    height: 30px !important;
-    min-height: 0px !important;
-    padding: 15px !important;
-    margin: 15px 2rem !important;
+    height: auto !important;
+    min-height: 0 !important;
+    padding: 0.75rem 1rem !important;
+    margin: 0 !important;
     display: flex !important;
-    justify-content: flex-end !important; /* 让折叠按钮靠右对齐 */
+    align-items: center !important;
+    justify-content: space-between !important; /* logo 左、折叠按钮右 */
     background: transparent !important;
     border: none !important;
+    box-sizing: border-box !important;
+}
+section[data-testid="stSidebar"] [data-testid="stLogo"],
+section[data-testid="stSidebar"] .stLogo {
+    flex: 0 0 auto !important;
+    margin: 0 !important;
 }
 section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
     position: relative !important;
-    top: 0px !important;
-    right: 0px !important;
+    top: 0 !important;
+    right: 0 !important;
+    margin-left: auto !important; /* 始终靠右，不挤 logo */
     z-index: 99 !important;
 }
 section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"],
