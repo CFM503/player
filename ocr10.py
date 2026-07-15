@@ -31,6 +31,7 @@ import logging
 import os
 import pickle
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -150,6 +151,56 @@ def load_ws_config() -> Dict[str, Any]:
 def save_ws_config(cfg: Dict[str, Any]) -> None:
     WS.mkdir(parents=True, exist_ok=True)
     WS_CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _clear_ocr10_widget_keys() -> None:
+    try:
+        import streamlit as st
+    except Exception:
+        return
+    for k in list(st.session_state.keys()):
+        if isinstance(k, str) and k.startswith("ocr10_") and re.search(r"_g\d+$", k):
+            del st.session_state[k]
+
+
+def _seed_ocr10_widget_defaults(ug: int, d: Dict[str, Any] | None = None) -> None:
+    """有 key 的控件以 session_state 为准；重置时必须先写入默认再渲染。"""
+    try:
+        import streamlit as st
+    except Exception:
+        return
+    d = d or default_ws_config()
+
+    def sk(name: str) -> str:
+        return f"ocr10_{name}_g{ug}"
+
+    st.session_state[sk("auto_live")] = True
+    st.session_state[sk("ink")] = float(d.get("ink_ratio_thresh", 0.008))
+    st.session_state[sk("mca")] = int(d.get("min_component_area", 12))
+    st.session_state[sk("slash_rms")] = float(d.get("slash_line_rms", 1.2))
+    st.session_state[sk("spur")] = int(d.get("cross_min_spur_dist", 3))
+    st.session_state[sk("ep_min")] = int(d.get("cross_endpoint_min", 3))
+    st.session_state[sk("ep_max")] = int(d.get("cross_endpoint_max", 5))
+    st.session_state[sk("rm_lines")] = bool(d.get("remove_table_lines", True))
+    st.session_state[sk("auto_memory")] = bool(d.get("auto_memory_apply", True))
+
+
+def _on_reset_ocr10_defaults() -> None:
+    import streamlit as st
+
+    d = default_ws_config()
+    save_ws_config(d)
+    _clear_ocr10_widget_keys()
+    new_ug = int(st.session_state.get("ocr10_ui_gen", 0)) + 1
+    st.session_state["ocr10_ui_gen"] = new_ug
+    _seed_ocr10_widget_defaults(new_ug, d)
+    st.session_state["ocr10_force_refresh"] = True
+    st.session_state.pop("ocr10_param_sig", None)
+    st.session_state["ocr10_reset_flash"] = (
+        "已恢复默认参数："
+        f"ink={d['ink_ratio_thresh']}, mca={d['min_component_area']}, "
+        f"slash_rms={d['slash_line_rms']}, spur={d['cross_min_spur_dist']}"
+    )
 
 
 def now_iso() -> str:
@@ -866,21 +917,16 @@ def render_app() -> None:
             save_ws_config(cfg)
             st.success("已保存到工作区 config.json")
 
-        if st.button("↺ 重置为默认参数", use_container_width=True, type="secondary", key=_k("btn_reset")):
-            d = default_ws_config()
-            save_ws_config(d)
-            for k in list(st.session_state.keys()):
-                if isinstance(k, str) and k.startswith("ocr10_") and "_g" in k:
-                    del st.session_state[k]
-            st.session_state["ocr10_ui_gen"] = _ug + 1
-            st.session_state["ocr10_force_refresh"] = True
-            st.session_state.pop("ocr10_param_sig", None)
-            st.success(
-                "已恢复默认并刷新控件："
-                f"ink={d['ink_ratio_thresh']}, mca={d['min_component_area']}, "
-                f"slash_rms={d['slash_line_rms']}, spur={d['cross_min_spur_dist']}"
-            )
-            st.rerun()
+        st.button(
+            "↺ 重置为默认参数",
+            use_container_width=True,
+            type="secondary",
+            key=_k("btn_reset"),
+            on_click=_on_reset_ocr10_defaults,
+        )
+        _flash = st.session_state.pop("ocr10_reset_flash", None)
+        if _flash:
+            st.success(_flash)
 
         with st.expander("查看默认参数表"):
             st.json(_defaults)

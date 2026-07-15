@@ -148,6 +148,68 @@ def save_ws_config(cfg: Dict[str, Any]) -> None:
     WS_CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _clear_ocr9_widget_keys() -> None:
+    """删除侧栏控件 session_state（仅 ocr9_*_gN，不动 ocr9_boxes / ocr9_ui_gen 等）。"""
+    try:
+        import streamlit as st
+    except Exception:
+        return
+    for k in list(st.session_state.keys()):
+        if isinstance(k, str) and k.startswith("ocr9_") and re.search(r"_g\d+$", k):
+            del st.session_state[k]
+
+
+def _seed_ocr9_widget_defaults(ug: int, d: Dict[str, Any] | None = None) -> None:
+    """在控件创建前写入默认值。Streamlit 有 key 时以 session_state 为准，会忽略 value=/index=。"""
+    try:
+        import streamlit as st
+    except Exception:
+        return
+    d = d or default_ws_config()
+
+    def sk(name: str) -> str:
+        return f"ocr9_{name}_g{ug}"
+
+    st.session_state[sk("auto_live")] = True
+    st.session_state[sk("device")] = d.get("device") or "cpu"
+    st.session_state[sk("box_thresh")] = float(d.get("text_det_box_thresh", 0.2))
+    st.session_state[sk("det_thresh")] = float(d.get("text_det_thresh", 0.3))
+    st.session_state[sk("rec_score")] = float(d.get("text_rec_score_thresh", 0.1))
+    st.session_state[sk("hard_score")] = float(d.get("hard_score_thresh", 0.75))
+    st.session_state[sk("auto_memory")] = bool(d.get("auto_memory_apply", True))
+    st.session_state[sk("textline_ori")] = bool(d.get("use_textline_orientation", True))
+    st.session_state[sk("min_train")] = int(d.get("min_samples_for_train", 8))
+    st.session_state[sk("epochs")] = int(d.get("default_epochs", 5))
+    st.session_state[sk("val_ratio")] = float(d.get("val_ratio", 0.1))
+    st.session_state[sk("test_ratio")] = float(d.get("test_ratio", 0.1))
+    st.session_state[sk("rec_dir")] = d.get("custom_rec_model_dir") or ""
+    st.session_state[sk("det_dir")] = d.get("custom_det_model_dir") or ""
+
+
+def _on_reset_ocr9_defaults() -> None:
+    """按钮 on_click：在本轮主脚本渲染控件之前执行，确保滑标真正回到默认。"""
+    import streamlit as st
+
+    d = default_ws_config()
+    save_ws_config(d)
+    _clear_ocr9_widget_keys()
+    new_ug = int(st.session_state.get("ocr9_ui_gen", 0)) + 1
+    st.session_state["ocr9_ui_gen"] = new_ug
+    _seed_ocr9_widget_defaults(new_ug, d)
+    st.session_state["ocr9_force_refresh"] = True
+    st.session_state.pop("ocr9_param_sig", None)
+    try:
+        get_ocr_engine(d, force_reload=True)
+    except Exception:
+        pass
+    st.session_state["ocr9_reset_flash"] = (
+        "已恢复默认参数："
+        f"box_thresh={d['text_det_box_thresh']}, "
+        f"det_thresh={d['text_det_thresh']}, "
+        f"rec_score={d['text_rec_score_thresh']}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # 数据结构
 # ---------------------------------------------------------------------------
@@ -1021,27 +1083,18 @@ def render_app() -> None:
                 except Exception as e:
                     st.error(f"加载失败: {e}")
 
-        if st.button("↺ 重置为默认参数", use_container_width=True, type="secondary", key=_k("btn_reset")):
-            d = default_ws_config()
-            save_ws_config(d)
-            # 清掉本代控件缓存，并换新 gen，强制滑标用默认 value 重建
-            for k in list(st.session_state.keys()):
-                if isinstance(k, str) and (k.startswith("ocr9_") and "_g" in k):
-                    del st.session_state[k]
-            st.session_state["ocr9_ui_gen"] = _ug + 1
-            st.session_state["ocr9_force_refresh"] = True
-            st.session_state.pop("ocr9_param_sig", None)
-            try:
-                get_ocr_engine(d, force_reload=True)
-            except Exception:
-                pass
-            st.success(
-                "已恢复默认并刷新控件："
-                f"box_thresh={d['text_det_box_thresh']}, "
-                f"det_thresh={d['text_det_thresh']}, "
-                f"rec_score={d['text_rec_score_thresh']}"
-            )
-            st.rerun()
+        # on_click 在主脚本渲染控件前执行：写 config + 换 gen + 预填 session_state
+        # （仅 st.rerun + value= 不够：有 key 的滑标会忽略 value=，界面看起来「没重置」）
+        st.button(
+            "↺ 重置为默认参数",
+            use_container_width=True,
+            type="secondary",
+            key=_k("btn_reset"),
+            on_click=_on_reset_ocr9_defaults,
+        )
+        _flash = st.session_state.pop("ocr9_reset_flash", None)
+        if _flash:
+            st.success(_flash)
 
         with st.expander("查看默认参数表"):
             st.json(_defaults)
