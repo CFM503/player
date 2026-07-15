@@ -6,26 +6,108 @@ align_to_template.py
 将手填照片(手机拍摄、带透视畸变)中的表格四角，对齐到模板图片坐标系，
 输出与模板画布尺寸一致、表格尽量重叠的新图片。
 
+【票型分离】带气作业票 / 动火作业票使用独立对齐参数（取点策略、ORB、质量阈值），
+禁止混用同一套默认值。可通过 --ticket-type 显式指定，或由模板文件名自动推断：
+  template/dq.png → 带气作业票
+  template/dh.png → 动火作业票
+
 用法示例：
 
-1) 全自动：
-    python align_to_template.py --template template/dq.png --input photo.jpg --output aligned.png
+1) 带气全自动：
+    python align_to_template.py --ticket-type 带气作业票 --template template/dq.png \\
+        --input photo.jpg --output aligned.png
 
-2) 手动角点：
+2) 动火全自动：
+    python align_to_template.py --ticket-type 动火作业票 --template template/dh.png \\
+        --input photo.jpg --output aligned.png
+
+3) 手动角点：
     python align_to_template.py --template template/dq.png --input photo.jpg --output aligned.png \\
         --src-points "x1,y1 x2,y2 x3,y3 x4,y4"
 
-3) 调试角点：
-    python align_to_template.py --template template/dq.png --input photo.jpg --output aligned.png --debug
+4) 调试角点：
+    python align_to_template.py --template template/dh.png --input photo.jpg --output aligned.png --debug
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 import cv2
 import numpy as np
+
+# ---------------------------------------------------------------------------
+# 票型对齐参数（完全分离：带气 ≠ 动火）
+# ---------------------------------------------------------------------------
+# 说明：
+#   - 当前仓库模板：dq.png ≈ 1052×1487；dh.png ≈ 1000×1414（与 agent 规范画布一致）
+#   - 此处参数只影响「取点 / 透视 / ORB」；业务签字 ROI 在 agent_core.TICKET_TEMPLATE_SPEC
+#   - 带气 / 动火两套 profile 禁止混用
+TICKET_TYPE_GAS = "带气作业票"
+TICKET_TYPE_FIRE = "动火作业票"
+
+ALIGN_PROFILES = {
+    TICKET_TYPE_GAS: {
+        "label": "带气",
+        "template_files": ("dq.png",),
+        "canvas_size": (1052, 1487),  # 与 dq.png 一致
+        # 轮廓取框
+        "min_area_ratio": 0.12,
+        "quad_min_qscore": 0.50,
+        "quad_penalty": 0.15,  # 劣质四点在排序中的降权
+        # ORB
+        "orb_nfeatures": 5000,
+        "orb_src_max_side": 1400,
+        "orb_min_matches": 20,
+        "orb_min_inliers": 15,
+        "orb_ratio_test": 0.70,
+        "orb_ransac_thresh": 3.0,
+        "orb_score_bonus": 0.02,  # 同分略偏好 ORB
+        "prefer_method": "auto",  # auto | quad | orb
+    },
+    TICKET_TYPE_FIRE: {
+        "label": "动火",
+        "template_files": ("dh.png",),
+        "canvas_size": (1000, 1414),  # 与当前 dh.png 一致
+        # 动火表格布局独立：面积比 / ORB 与带气分离
+        "min_area_ratio": 0.10,
+        "quad_min_qscore": 0.45,
+        "quad_penalty": 0.18,
+        "orb_nfeatures": 5500,
+        "orb_src_max_side": 1600,
+        "orb_min_matches": 22,
+        "orb_min_inliers": 16,
+        "orb_ratio_test": 0.72,
+        "orb_ransac_thresh": 3.5,
+        "orb_score_bonus": 0.04,  # 动火歪图四点易偏，更偏好 ORB
+        "prefer_method": "auto",
+    },
+}
+
+
+def resolve_ticket_type(ticket_type: str | None, template_path: str) -> str:
+    """解析票型：显式参数优先，否则按模板文件名推断。"""
+    s = (ticket_type or "").strip()
+    if s in ALIGN_PROFILES:
+        return s
+    if "动火" in s:
+        return TICKET_TYPE_FIRE
+    if "带气" in s:
+        return TICKET_TYPE_GAS
+    # 由模板路径推断
+    base = os.path.basename(template_path or "").lower()
+    if base == "dh.png" or "dh" == os.path.splitext(base)[0]:
+        return TICKET_TYPE_FIRE
+    if base == "dq.png" or "dq" == os.path.splitext(base)[0]:
+        return TICKET_TYPE_GAS
+    # 默认带气（历史主路径）
+    return TICKET_TYPE_GAS
+
+
+def get_align_profile(ticket_type: str) -> dict:
+    return dict(ALIGN_PROFILES.get(ticket_type) or ALIGN_PROFILES[TICKET_TYPE_GAS])
 
 
 def _force_utf8_stdio() -> None:
@@ -217,12 +299,29 @@ def detect_quad(image: np.ndarray, min_area_ratio: float = 0.12,
     return order_points(best_q), float(best_ar)
 
 
-def align_by_features(template: np.ndarray, src_img: np.ndarray,
-                      min_matches: int = 25) -> tuple[np.ndarray | None, dict]:
+def align_by_features(
+    template: np.ndarray,
+    src_img: np.ndarray,
+    profile: dict | None = None,
+) -> tuple[np.ndarray | None, dict]:
     """
     ORB 特征匹配求单应矩阵。返回 (aligned, info)。
+    参数由票型 profile 控制（带气 / 动火分离）。
     """
-    info = {"method": "orb", "inliers": 0, "good": 0}
+    prof = profile or ALIGN_PROFILES[TICKET_TYPE_GAS]
+    min_matches = int(prof.get("orb_min_matches", 20))
+    min_inliers = int(prof.get("orb_min_inliers", 15))
+    nfeatures = int(prof.get("orb_nfeatures", 5000))
+    src_max_side = float(prof.get("orb_src_max_side", 1400))
+    ratio_test = float(prof.get("orb_ratio_test", 0.70))
+    ransac_thresh = float(prof.get("orb_ransac_thresh", 3.0))
+
+    info = {
+        "method": "orb",
+        "inliers": 0,
+        "good": 0,
+        "ticket": prof.get("label", ""),
+    }
     th, tw = template.shape[:2]
     g_tmpl = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
     g_src = cv2.cvtColor(src_img, cv2.COLOR_BGR2GRAY)
@@ -232,19 +331,19 @@ def align_by_features(template: np.ndarray, src_img: np.ndarray,
     g_tmpl = clahe.apply(g_tmpl)
     g_src = clahe.apply(g_src)
 
-    scale = min(1.0, 1400 / max(g_src.shape))
+    scale = min(1.0, src_max_side / max(g_src.shape))
     if scale < 1.0:
         g_src_s = cv2.resize(g_src, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
     else:
         g_src_s = g_src
         scale = 1.0
 
-    orb = cv2.ORB_create(nfeatures=5000, scaleFactor=1.2, nlevels=8)
+    orb = cv2.ORB_create(nfeatures=nfeatures, scaleFactor=1.2, nlevels=8)
     kp1, des1 = orb.detectAndCompute(g_tmpl, None)
     kp2, des2 = orb.detectAndCompute(g_src_s, None)
 
     if des1 is None or des2 is None or len(kp1) < 8 or len(kp2) < 8:
-        print("[特征匹配] 特征点不足，无法匹配", file=sys.stderr)
+        print(f"[特征匹配][{prof.get('label')}] 特征点不足，无法匹配", file=sys.stderr)
         return None, info
 
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
@@ -254,13 +353,19 @@ def align_by_features(template: np.ndarray, src_img: np.ndarray,
         if len(pair) < 2:
             continue
         m, n = pair
-        if m.distance < 0.7 * n.distance:
+        if m.distance < ratio_test * n.distance:
             good.append(m)
     info["good"] = len(good)
-    print(f"[特征匹配] 有效匹配点数: {len(good)} / {len(matches)}", file=sys.stderr)
+    print(
+        f"[特征匹配][{prof.get('label')}] 有效匹配点数: {len(good)} / {len(matches)}",
+        file=sys.stderr,
+    )
 
     if len(good) < min_matches:
-        print(f"[特征匹配] 有效匹配点数({len(good)})不足 {min_matches}", file=sys.stderr)
+        print(
+            f"[特征匹配][{prof.get('label')}] 有效匹配点数({len(good)})不足 {min_matches}",
+            file=sys.stderr,
+        )
         return None, info
 
     # 取距离最好的前 N 个，减少噪声
@@ -269,23 +374,28 @@ def align_by_features(template: np.ndarray, src_img: np.ndarray,
     pts1 = np.float32([kp1[m.queryIdx].pt for m in good])
     pts2 = np.float32([kp2[m.trainIdx].pt for m in good]) / scale
 
-    H, mask = cv2.findHomography(pts2, pts1, cv2.RANSAC, ransacReprojThreshold=3.0, maxIters=5000)
+    H, mask = cv2.findHomography(
+        pts2, pts1, cv2.RANSAC, ransacReprojThreshold=ransac_thresh, maxIters=5000
+    )
     if H is None:
-        print("[特征匹配] RANSAC 单应矩阵求解失败", file=sys.stderr)
+        print(f"[特征匹配][{prof.get('label')}] RANSAC 单应矩阵求解失败", file=sys.stderr)
         return None, info
 
     inliers = int(mask.sum()) if mask is not None else 0
     info["inliers"] = inliers
-    print(f"[特征匹配] RANSAC 内点数: {inliers} / {len(good)}", file=sys.stderr)
-    if inliers < 15:
-        print("[特征匹配] 内点数不足，结果不可靠", file=sys.stderr)
+    print(
+        f"[特征匹配][{prof.get('label')}] RANSAC 内点数: {inliers} / {len(good)}",
+        file=sys.stderr,
+    )
+    if inliers < min_inliers:
+        print(f"[特征匹配][{prof.get('label')}] 内点数不足({min_inliers})，结果不可靠", file=sys.stderr)
         return None, info
 
     # 单应矩阵病态检测：过大缩放/剪切
     try:
         det = abs(np.linalg.det(H[:2, :2]))
         if det < 0.05 or det > 20:
-            print(f"[特征匹配] 单应行列式异常 det={det:.3f}，丢弃", file=sys.stderr)
+            print(f"[特征匹配][{prof.get('label')}] 单应行列式异常 det={det:.3f}，丢弃", file=sys.stderr)
             return None, info
     except Exception:
         pass
@@ -353,19 +463,25 @@ def warp_quad(src_img: np.ndarray, src_quad: np.ndarray, dst_quad: np.ndarray,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="将手填表格照片按四角对齐到模板图片（透视变换）",
+        description="将手填表格照片按四角对齐到模板图片（透视变换；带气/动火参数分离）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--template", required=True, help="模板图片路径（如 template/dq.png）")
+    parser.add_argument("--template", required=True, help="模板图片路径（带气 dq.png / 动火 dh.png）")
     parser.add_argument("--input", required=True, help="手填照片路径")
     parser.add_argument("--output", required=True, help="输出对齐后图片路径")
+    parser.add_argument(
+        "--ticket-type",
+        default=None,
+        choices=[TICKET_TYPE_GAS, TICKET_TYPE_FIRE, "gas", "fire", "带气", "动火"],
+        help="作业票类型：带气作业票 / 动火作业票（决定取点与 ORB 参数；默认识别模板文件名）",
+    )
     parser.add_argument("--src-points", default=None,
                         help="手动指定照片四个角点 'x1,y1 x2,y2 x3,y3 x4,y4'")
     parser.add_argument("--dst-points", default=None,
                         help="手动指定模板四个角点（一般不必；模板会强制轴对齐）")
-    parser.add_argument("--min-area-ratio", type=float, default=0.12,
-                        help="轮廓面积占全图最小比例，默认 0.12")
+    parser.add_argument("--min-area-ratio", type=float, default=None,
+                        help="轮廓面积占全图最小比例（默认随票型：带气 0.12 / 动火 0.10）")
     parser.add_argument("--debug", action="store_true",
                         help="保存角点调试图")
     parser.add_argument("--overlay", default=None,
@@ -373,6 +489,25 @@ def main():
     parser.add_argument("--no-axis-align-template", action="store_true",
                         help="不对模板角点做轴对齐（默认会轴对齐，减少模板检测抖动导致的歪斜）")
     args = parser.parse_args()
+
+    # ---- 票型锁定（带气 / 动火参数完全分离）----
+    tt_raw = args.ticket_type
+    if tt_raw in ("gas", "带气"):
+        tt_raw = TICKET_TYPE_GAS
+    elif tt_raw in ("fire", "动火"):
+        tt_raw = TICKET_TYPE_FIRE
+    ticket_type = resolve_ticket_type(tt_raw, args.template)
+    profile = get_align_profile(ticket_type)
+    min_area_ratio = (
+        float(args.min_area_ratio)
+        if args.min_area_ratio is not None
+        else float(profile["min_area_ratio"])
+    )
+    print(
+        f"[票型] {ticket_type}（{profile['label']}）| "
+        f"min_area={min_area_ratio} ORB匹配≥{profile['orb_min_matches']} "
+        f"内点≥{profile['orb_min_inliers']} 源图最长边≤{profile['orb_src_max_side']}"
+    )
 
     template = _imread(args.template)
     src_img = _imread(args.input)
@@ -382,14 +517,15 @@ def main():
         sys.exit(f"错误：无法读取输入图片 {args.input}")
 
     th, tw = template.shape[:2]
-    target_aspect = tw / float(th)  # 约 0.707 for 1052x1487
+    target_aspect = tw / float(th)  # 带气约 0.707；动火 2000/2827≈0.707
+    print(f"[模板] 文件={os.path.basename(args.template)} 分辨率={tw}x{th} 宽高比={target_aspect:.3f}")
 
     # ---- 模板角点 ----
     if args.dst_points:
         dst_quad = parse_points(args.dst_points)
-        print(f"[模板] 手动角点：\n{dst_quad}")
+        print(f"[模板][{profile['label']}] 手动角点：\n{dst_quad}")
     else:
-        dst_quad, ratio = detect_quad(template, args.min_area_ratio, target_aspect=target_aspect)
+        dst_quad, ratio = detect_quad(template, min_area_ratio, target_aspect=target_aspect)
         if dst_quad is None:
             # 模板检测失败：使用整幅画布（模板本身即标准页）
             margin = 0
@@ -398,65 +534,84 @@ def main():
                  [tw - 1 - margin, th - 1 - margin], [margin, th - 1 - margin]],
                 dtype=np.float32,
             )
-            print("[模板] 未检出内框，使用整幅画布四角")
+            print(f"[模板][{profile['label']}] 未检出内框，使用整幅画布四角")
         else:
-            print(f"[模板] 自动检出边框（面积比 {ratio:.1%}）：\n{dst_quad}")
+            print(f"[模板][{profile['label']}] 自动检出边框（面积比 {ratio:.1%}）：\n{dst_quad}")
 
     # 关键：模板已是正视图，强制轴对齐外接矩形，避免检测抖动导致顶边不水平→整图歪
     if not args.no_axis_align_template:
         before = dst_quad.copy()
         dst_quad = axis_aligned_quad(dst_quad)
         if not np.allclose(before, dst_quad, atol=1.5):
-            print(f"[模板] 已轴对齐目标角点（消除检测抖动引入的歪斜）：\n{dst_quad}")
+            print(f"[模板][{profile['label']}] 已轴对齐目标角点：\n{dst_quad}")
 
-    # ---- 照片角点 / 特征对齐 ----
+    # ---- 照片角点 / 特征对齐（参数随票型）----
     candidates = []  # (name, aligned_img, meta)
+    prefer = str(profile.get("prefer_method") or "auto")
 
     src_quad = None
     if args.src_points:
         src_quad = parse_points(args.src_points)
-        print(f"[照片] 手动角点：\n{src_quad}")
+        print(f"[照片][{profile['label']}] 手动角点：\n{src_quad}")
         aligned_q = warp_quad(src_img, src_quad, dst_quad, tw, th)
         sc = edge_overlap_score(template, aligned_q)
         candidates.append(("manual_quad", aligned_q, {"score": sc, "src_quad": src_quad}))
-        print(f"[照片] 手动四点对齐 边缘重合={sc:.3f}")
+        print(f"[照片][{profile['label']}] 手动四点对齐 边缘重合={sc:.3f}")
     else:
-        src_quad, ratio = detect_quad(src_img, args.min_area_ratio, target_aspect=target_aspect)
-        if src_quad is not None:
-            qscore = _rect_score(src_quad, src_img.shape, target_aspect=target_aspect)
-            print(f"[照片] 自动检出边框（面积比 {ratio:.1%}，质量分 {qscore:.2f}）：\n{src_quad}")
-            aligned_q = warp_quad(src_img, src_quad, dst_quad, tw, th)
-            sc = edge_overlap_score(template, aligned_q)
-            candidates.append(("quad", aligned_q, {"score": sc, "qscore": qscore, "ratio": ratio}))
-            print(f"[照片] 四点透视对齐 边缘重合={sc:.3f}")
-        else:
-            print("[照片] 四边形检测失败", file=sys.stderr)
+        if prefer != "orb":
+            src_quad, ratio = detect_quad(src_img, min_area_ratio, target_aspect=target_aspect)
+            if src_quad is not None:
+                qscore = _rect_score(src_quad, src_img.shape, target_aspect=target_aspect)
+                print(
+                    f"[照片][{profile['label']}] 自动检出边框"
+                    f"（面积比 {ratio:.1%}，质量分 {qscore:.2f}）：\n{src_quad}"
+                )
+                aligned_q = warp_quad(src_img, src_quad, dst_quad, tw, th)
+                sc = edge_overlap_score(template, aligned_q)
+                candidates.append(
+                    ("quad", aligned_q, {"score": sc, "qscore": qscore, "ratio": ratio})
+                )
+                print(f"[照片][{profile['label']}] 四点透视对齐 边缘重合={sc:.3f}")
+            else:
+                print(f"[照片][{profile['label']}] 四边形检测失败", file=sys.stderr)
 
-    # 始终尝试 ORB，与四点结果比质量（很多歪图是因为四点抓错）
-    aligned_f, finfo = align_by_features(template, src_img, min_matches=20)
-    if aligned_f is not None:
-        sc = edge_overlap_score(template, aligned_f)
-        candidates.append(("orb", aligned_f, {"score": sc, **finfo}))
-        print(f"[照片] ORB 特征对齐 边缘重合={sc:.3f} 内点={finfo.get('inliers')}")
+    # ORB：与四点结果比质量（动火/带气阈值不同）
+    if prefer != "quad":
+        aligned_f, finfo = align_by_features(template, src_img, profile=profile)
+        if aligned_f is not None:
+            sc = edge_overlap_score(template, aligned_f)
+            candidates.append(("orb", aligned_f, {"score": sc, **finfo}))
+            print(
+                f"[照片][{profile['label']}] ORB 特征对齐 "
+                f"边缘重合={sc:.3f} 内点={finfo.get('inliers')}"
+            )
 
     if not candidates:
         sys.exit(
-            "错误：无法对齐照片（四边形与 ORB 均失败）。\n"
-            "请保证纸张四角完整入镜、背景对比明显，或使用 --src-points 手动指定四角。"
+            f"错误：[{profile['label']}] 无法对齐照片（四边形与 ORB 均失败）。\n"
+            "请保证纸张四角完整入镜、背景对比明显，或使用 --src-points 手动指定四角；"
+            "并确认 --ticket-type 与模板（dq=带气 / dh=动火）一致。"
         )
 
-    # 选边缘重合最高者；四点质量过差时优先 ORB
+    # 选边缘重合最高者；票型独立的四点/ORB 加权
+    quad_min_q = float(profile.get("quad_min_qscore", 0.5))
+    quad_pen = float(profile.get("quad_penalty", 0.15))
+    orb_bonus = float(profile.get("orb_score_bonus", 0.02))
+
     def rank(item):
         name, img, meta = item
         s = float(meta.get("score") or 0)
-        if name == "quad" and float(meta.get("qscore") or 0) < 0.5:
-            s -= 0.15  # 劣质四点降权
+        if name == "quad" and float(meta.get("qscore") or 0) < quad_min_q:
+            s -= quad_pen
         if name == "orb":
-            s += 0.02  # 同分略偏好特征（更贴模板）
+            s += orb_bonus
         return s
 
     best_name, aligned, best_meta = max(candidates, key=rank)
-    print(f"[选定] 使用 {best_name} 对齐（边缘重合={best_meta.get('score', 0):.3f}）")
+    print(
+        f"[选定][{profile['label']}] 使用 {best_name} 对齐"
+        f"（边缘重合={best_meta.get('score', 0):.3f}）| 票型={ticket_type}"
+    )
 
     if args.debug:
         debug_dst = args.output + "_debug_dst.png"
@@ -469,7 +624,7 @@ def main():
             print(f"[调试] 模板角点图: {debug_dst}")
 
     _imwrite(args.output, aligned)
-    print(f"完成：{args.output} （{tw}x{th}）")
+    print(f"完成：[{profile['label']}] {args.output} （{tw}x{th}）")
 
     if args.overlay:
         template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)

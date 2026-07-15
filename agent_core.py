@@ -264,11 +264,39 @@ def parse_llm_json_object(text: str) -> dict:
 TICKET_TYPE_GAS = "带气作业票"
 TICKET_TYPE_FIRE = "动火作业票"
 SUPPORTED_TICKET_TYPES = (TICKET_TYPE_GAS, TICKET_TYPE_FIRE)
-# 模板文件名 → 规范对齐尺寸（与历史硬编码坐标兼容）
+# 模板文件名 → 规范对齐尺寸 + 签字裁剪 ROI（带气 / 动火完全分离，禁止交叉）
+# size: 对齐后业务画布（与 template 原图像素一致时可跳过二次缩放）
+# sign_crop: (x, y, w, h) 仅用于该票型「发起人/批准人」区域裁剪 OCR
 TICKET_TEMPLATE_SPEC = {
-    TICKET_TYPE_GAS: {"file": "dq.png", "size": (1052, 1487), "label": "带气"},
-    TICKET_TYPE_FIRE: {"file": "dh.png", "size": (1000, 1414), "label": "动火"},
+    TICKET_TYPE_GAS: {
+        "file": "dq.png",
+        "size": (1052, 1487),
+        "label": "带气",
+        # 带气 1052×1487 画布上的发起人签字区
+        "sign_crop": (670, 230, 280, 170),
+    },
+    TICKET_TYPE_FIRE: {
+        "file": "dh.png",
+        "size": (1000, 1414),
+        "label": "动火",
+        # 动火 1000×1414 画布上的批准人/签字区（勿套用带气 670,230）
+        "sign_crop": (640, 220, 270, 160),
+    },
 }
+
+
+def get_ticket_sign_crop(ticket_type: str | None) -> tuple:
+    """返回票型独立的签字裁剪 ROI (x,y,w,h)。"""
+    tt = (ticket_type or "").strip()
+    if "动火" in tt:
+        tt = TICKET_TYPE_FIRE
+    elif "带气" in tt or tt not in TICKET_TEMPLATE_SPEC:
+        tt = TICKET_TYPE_GAS if tt not in TICKET_TEMPLATE_SPEC else tt
+    if tt not in TICKET_TEMPLATE_SPEC:
+        tt = TICKET_TYPE_GAS
+    spec = TICKET_TEMPLATE_SPEC[tt]
+    crop = spec.get("sign_crop") or (670, 230, 280, 170)
+    return tuple(int(v) for v in crop)
 
 # HSE 标准（按票型分离）
 TICKET_STANDARDS = {
@@ -1402,14 +1430,12 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             completion = ""
         raw_dict["completion_time"] = str(completion).strip() or None
 
-        # 发起人/批准人签字：裁剪 OCR；失败置空
+        # 发起人/批准人签字：裁剪 OCR（票型独立 ROI，禁止带气/动火交叉）
         approver = None
         try:
-            # 带气 1052 宽坐标；动火 1000 宽近似同一区域比例
-            if ticket_type == TICKET_TYPE_FIRE:
-                approver = AgentTools.extract_filler_name(640, 220, 270, 160)
-            else:
-                approver = AgentTools.extract_filler_name(670, 230, 280, 170)
+            sx, sy, sw, sh = get_ticket_sign_crop(ticket_type)
+            safe_print(f"[Sanitize][{ticket_type}] 签字裁剪 ROI=({sx},{sy},{sw},{sh})")
+            approver = AgentTools.extract_filler_name(sx, sy, sw, sh)
         except Exception as e:
             safe_print(f"[Sanitize] 提取签字人失败（禁止 LLM 兜底）: {e}")
         if not approver or str(approver).lower() in ["null", "none", "未知", ""]:
@@ -1744,11 +1770,16 @@ class AgentTools:
         # 尝试进行模板对齐 (无论是 PaddleOCR 还是视觉大模型，优先对齐能确保裁剪坐标一致且读图质量更佳)
         # 票型由用户选择锁定：只匹配对应模板，禁止带气/动火交叉试配
         locked_type = normalize_ticket_type(ticket_type, default=TICKET_TYPE_GAS)
+        AgentTools._last_ticket_type = locked_type  # 供归档签字裁剪等分路使用
         spec = TICKET_TEMPLATE_SPEC[locked_type]
         want_file = spec["file"]
         target_size = spec["size"]
         type_label = spec["label"]
-        safe_print(f"[OCR] 票型锁定={locked_type} → 仅匹配模板 {want_file}（{target_size[0]}x{target_size[1]}）")
+        safe_print(
+            f"[OCR] 票型锁定={locked_type} → 仅匹配模板 {want_file}"
+            f"（规范画布 {target_size[0]}x{target_size[1]}；"
+            f"签字ROI={spec.get('sign_crop')}）"
+        )
 
         template_dir = os.path.join(os.path.dirname(__file__), "template")
         templates = []
@@ -1776,13 +1807,14 @@ class AgentTools:
                 os.makedirs(aligned_dir, exist_ok=True)
                 aligned_path = os.path.join(aligned_dir, "aligned_" + os.path.basename(image_path))
                 
-                # 使用 subprocess 调用 align_to_template.py 脚本进行对齐
+                # 使用 subprocess 调用 align_to_template.py；显式传票型，带气/动火取点参数分离
                 cmd = [
                     sys.executable,
                     os.path.join(os.path.dirname(__file__), "align_to_template.py"),
+                    "--ticket-type", locked_type,
                     "--template", t_path,
                     "--input", image_path,
-                    "--output", aligned_path
+                    "--output", aligned_path,
                 ]
                 
                 try:
@@ -3543,27 +3575,35 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                 except Exception as e:
                     safe_print(f"[Agent Archive] ⚠️ 去表格化图复制失败: {e}")
 
-            # 4. 在第二阶段（归档处理中）使用 cropimage.py 裁剪提取出“发起人签字确认”区域并保存
+            # 4. 签字区裁剪：按当前票型 ROI（带气≠动火），禁止写死带气坐标
             sig_dest = os.path.join(archive_dir, f"{prefix}_签字.png")
             import subprocess
             import sys
+            _tt_arch = getattr(AgentTools, "_last_ticket_type", None) or getattr(
+                self, "_ticket_type", TICKET_TYPE_GAS
+            )
+            sx, sy, sw, sh = get_ticket_sign_crop(_tt_arch)
             crop_cmd = [
                 sys.executable,
                 os.path.join(os.path.dirname(__file__), "cropimage.py"),
                 "--input", aligned_source,
                 "--output", sig_dest,
-                "-x", "670",
-                "-y", "230",
-                "--width", "280",
-                "--height", "170"
+                "-x", str(sx),
+                "-y", str(sy),
+                "--width", str(sw),
+                "--height", str(sh),
             ]
             try:
-                safe_print(f"[Agent Archive] 正在调用 cropimage.py 裁剪签字区域: {' '.join(crop_cmd)}")
+                safe_print(
+                    f"[Agent Archive][{_tt_arch}] cropimage 签字 ROI=({sx},{sy},{sw},{sh})"
+                )
                 subprocess.run(crop_cmd, capture_output=True, text=True, check=True)
                 safe_print(f"[Agent Archive] 成功提取并保存签字区域到: {sig_dest}")
                 
                 # 运行 OCR 识别裁剪出的签名图片并保存提取到类变量缓存中，把所有 ocr 都移到第二阶段完成！
-                crop_text = AgentTools._ocr_crop_region(aligned_source, 670, 230, 280, 170, save_crop_path=None)
+                crop_text = AgentTools._ocr_crop_region(
+                    aligned_source, sx, sy, sw, sh, save_crop_path=None
+                )
                 approver_name = ""
                 if crop_text:
                     _LABEL_KW = ("责任", "填表", "编号", "票号", "日期", "场站", "部位", "作业",
