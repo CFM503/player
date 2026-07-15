@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# 【规范】AI模型禁止使用硬改逻辑与兜底逻辑：不得用字符串替换/规则捏造/默认值填充掩盖识别失败；须以模型或算法真实输出为准，识别不到应为空或漏填，禁止编造。
 """
 数字化安全监督员 - 管理 / 测试页
 由 frontend.py 路由加载（url_path=admin），勿单独 st.set_page_config。
@@ -183,6 +184,54 @@ with st.sidebar:  # 进入侧边栏渲染上下文本环境
 
     st.markdown("**🔤 PaddleOCR 四模型参数**")
     st.caption("本地引擎生效；保存后写入 config.json，下次启动自动加载。")
+
+    # ---- ocr9 纠错记忆（入库即生效，无需导出）----
+    from ocr import ocr9_memory_status_detail
+    from datetime import datetime as _dt
+
+    _mem_info = ocr9_memory_status_detail()  # 每次侧栏渲染读盘，不缓存
+    _ocr9_n = int(_mem_info.get("n_hash") or 0)
+    _ocr9_mem_path = str(_mem_info.get("path") or "")
+    _ocr9_ns = int(_mem_info.get("n_sample") or 0)
+    _ocr9_latest = (_mem_info.get("latest_updated_at") or "").strip()
+    try:
+        _ocr9_mtime = (
+            _dt.fromtimestamp(float(_mem_info.get("mtime") or 0)).strftime("%m-%d %H:%M:%S")
+            if _mem_info.get("mtime")
+            else "-"
+        )
+    except Exception:
+        _ocr9_mtime = "-"
+    # 条数放在 caption，避免 checkbox 固定 key 时标题看起来「不刷新」
+    _use_ocr9_mem = st.checkbox(
+        "使用 ocr9 纠错记忆",
+        value=bool(_ocr9_n),
+        disabled=not bool(_ocr9_n),
+        key="_use_ocr9_memory",
+        help="在「OCR文字训练」改真值并入库后，按裁剪图图像哈希命中时替换。"
+             "同一框重复入库只更新真值、哈希条数不增加。"
+             "禁止 t:文本硬改 / 字符串替换兜底。",
+    )
+    if _ocr9_n:
+        if _use_ocr9_mem:
+            os.environ.pop("OCR9_MEMORY_OFF", None)
+            st.caption(
+                f"已启用 · **{_ocr9_n}** 个哈希"
+                + (f"（约 {_ocr9_ns} 次入库样本）" if _ocr9_ns else "")
+                + f" · 文件 `{os.path.basename(_ocr9_mem_path)}` mtime {_ocr9_mtime}"
+                + (f" · 最新 {_ocr9_latest}" if _ocr9_latest else "")
+            )
+            st.caption(
+                "说明：数字=不同图像哈希数，不是入库点击次数；"
+                "同一检测框重复入库会覆盖，条数不变。切页/刷新后更新。"
+            )
+        else:
+            os.environ["OCR9_MEMORY_OFF"] = "1"
+            st.caption(f"已关闭纠错记忆（本次会话）· 磁盘仍有 {_ocr9_n} 个哈希")
+    else:
+        os.environ.pop("OCR9_MEMORY_OFF", None)
+        st.caption("暂无哈希记忆：到 OCR文字训练 入库即可。")
+
     with st.expander("展开设置 det / rec / 行方向 / 页方向", expanded=False):
         # ② 文本检测
         st.markdown("`PP-OCRv6_*_det` 文本检测")
@@ -431,7 +480,7 @@ with tab1:  # 进入第一个 Tab 面板的渲染环境
             options=["带气作业票", "动火作业票"],
             horizontal=True,
             key="selected_ticket_type",
-            help="带气→dq.png + ocr5 25×5；动火→dh.png + 21 条单列勾选，互不混用。",
+            help="带气→dq.png + ocr5 25×5；动火→dh.png + ocr5 21×5 确认格，互不混用。",
         )
         # 动态传入后缀 key 强制在点击“重新上传”后复位组件
         uploader_key = f"fu_main_{st.session_state.uploader_key_suffix}"

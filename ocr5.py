@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
+# 【规范】AI模型禁止使用硬改逻辑与兜底逻辑：不得用字符串替换/规则捏造/默认值填充掩盖识别失败；须以模型或算法真实输出为准，识别不到应为空或漏填，禁止编造。
 """
 作业票安全措施勾选格识别（OpenCV + skimage）
 
 【票型永远分离】
   - 带气作业票：25 项 × 5 列（作业人/施工方/监理/监护人/带气现场负责人）
-  - 动火作业票：21 项 × 1 列（确认）
+  - 动火作业票：21 项 × 5 列（动火人/施工方/监理员/项目公司监护人/动火现场负责人）
   共用四分类 classify_mark（√ / × / \\ / 空白），网格几何与条款表各自独立。
 
 合法填写符号（票面图例）：
@@ -352,7 +353,8 @@ GAS_N_ROWS = 25
 GAS_N_HLINES = 26  # = N_ROWS + 1
 
 # 动火：标准对齐图 dh / align 输出 1000×1414（与当前 template/dh.png 一致）
-# 22 条水平线 → 21 行；单列「确认」在票面右侧（dh.png 投影标定）
+# 22 条水平线 → 21 行；右侧 5 列确认格（dh.png 竖线投影标定）
+# 列：动火人 | 施工方现场负责人 | 监理员 | 项目公司监护人 | 动火现场负责人
 FIRE_REF_W, FIRE_REF_H = 1000, 1414
 FIRE_REF_Y_LINES = [
     404, 426, 448, 470, 492, 514,
@@ -360,8 +362,15 @@ FIRE_REF_Y_LINES = [
     721, 751, 777, 804, 830, 858,
     902, 940, 964, 988,
 ]
-FIRE_REF_X_BOUNDS = [872, 954]  # 单列确认格
-FIRE_ROLES = ["确认"]
+# 6 条竖线 → 5 列（1000 宽画布绝对 x）
+FIRE_REF_X_BOUNDS = [634, 676, 750, 792, 871, 953]
+FIRE_ROLES = [
+    "动火人",
+    "施工方现场负责人",
+    "监理员",
+    "项目公司监护人",
+    "动火现场负责人",
+]
 FIRE_N_ROWS = 21
 FIRE_N_HLINES = 22
 
@@ -404,8 +413,8 @@ def get_ticket_profile(ticket_type: str) -> dict:
             "ref_x_bounds": FIRE_REF_X_BOUNDS,
             "n_rows": FIRE_N_ROWS,
             "n_hlines": FIRE_N_HLINES,
-            "detect_x0_ref": 860,
-            "detect_x1_ref": 980,
+            "detect_x0_ref": 620,
+            "detect_x1_ref": 970,
             "detect_y0_ref": 360,
             "detect_y1_ref": 1050,
         }
@@ -648,7 +657,7 @@ def get_y_lines(img_g, profile: dict | None = None):
 def run_mark_grid(img_bgr, profile: dict, image_path: str = "") -> str:
     """
     按票型 profile 检测网格并四分类输出。
-    带气：25×5；动火：21×1。classify_mark 共用，几何/条款分离。
+    带气：25×5；动火：21×5。classify_mark 共用，几何/条款分离。
     """
     label = profile.get("label", "")
     measures = profile["measures"]
@@ -735,7 +744,7 @@ def main():
     parser = argparse.ArgumentParser(
         description=(
             "作业票安全措施勾选识别 (OpenCV + skimage)\n"
-            "带气 25×5 / 动火 21×1 完全分离；四分类：✓ / x / \\ / -"
+            "带气 25×5 / 动火 21×5 完全分离；四分类：✓ / x / \\ / -"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

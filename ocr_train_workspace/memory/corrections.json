@@ -1,1 +1,29 @@
-{}
+{
+  "26a6edc88ed36913e1798f28a86342de": {
+    "text": "张国辉",
+    "updated_at": "2026-07-15 23:34:16",
+    "sample_id": "bb75bd7b48f3",
+    "source": "D:\\SOFT\\ai\\github\\player\\archives\\2026-07-15\\MD_20260715_231203_对齐图.jpg"
+  },
+  "53d5ab0a660a4c46400dd13d71641c73": {
+    "text": "张国辉",
+    "updated_at": "2026-07-15 23:34:16",
+    "sample_id": "bb75bd7b48f3",
+    "source": "D:\\SOFT\\ai\\github\\player\\archives\\2026-07-15\\MD_20260715_231203_对齐图.jpg",
+    "kind": "crop"
+  },
+  "fcd36676d2a178cd801b407ceb6decfb": {
+    "text": "张国辉",
+    "updated_at": "2026-07-16 00:06:47",
+    "sample_id": "aac0ae75d0c3",
+    "source": "D:\\SOFT\\ai\\github\\player\\archives\\2026-07-16\\MD_20260716_000219_对齐图.jpg",
+    "kind": "phash"
+  },
+  "295ae488679da389e47bc17c1e84bc9c": {
+    "text": "张国辉",
+    "updated_at": "2026-07-16 00:06:47",
+    "sample_id": "aac0ae75d0c3",
+    "source": "D:\\SOFT\\ai\\github\\player\\archives\\2026-07-16\\MD_20260716_000219_对齐图.jpg",
+    "kind": "crop_phash"
+  }
+}

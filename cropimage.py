@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# 【规范】AI模型禁止使用硬改逻辑与兜底逻辑：不得用字符串替换/规则捏造/默认值填充掩盖识别失败；须以模型或算法真实输出为准，识别不到应为空或漏填，禁止编造。
 """
 图片裁剪工具 (cropimage.py)
 支持命令行运行：python cropimage.py -i <input> -o <output> -x <x> -y <y> -w <width> --height <height>

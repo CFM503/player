@@ -1,3 +1,4 @@
+# 【规范】AI模型禁止使用硬改逻辑与兜底逻辑：不得用字符串替换/规则捏造/默认值填充掩盖识别失败；须以模型或算法真实输出为准，识别不到应为空或漏填，禁止编造。
 """
 中燃"安全数字监督员"智能体核心架构 (agent_core.py)
 面向场景：巡检工人手机拍照上传 -> 自动去阴影矫正 -> 线上API语义结构化 -> 自动化闭环。
@@ -312,7 +313,7 @@ TICKET_STANDARDS = {
     },
 }
 
-# 法定安全措施（按票型分离：动火 21 条单列勾选；带气 25 条×5 列网格）
+# 法定安全措施（按票型分离：动火 21 条×5 列勾选；带气 25 条×5 列网格）
 STANDARD_MEASURES = {
     TICKET_TYPE_FIRE: [
         (1, "动火人已接受作业安全教育。"),
@@ -375,6 +376,14 @@ FIRE_WORK_GRADE_RANK = {"一级": 1, "二级": 2, "特级": 3}  # 数值越大�
 
 # 带气作业票安全措施确认列（每项固定 5 格，图例：落实√ 未落实× 不适用\）
 GAS_MEASURE_ROLES = ("作业人", "施工方现场负责人", "监理", "监护人", "带气现场负责人")
+# 动火措施确认 5 列（与 ocr5 FIRE_ROLES / dh.png 表头一致，禁止套用带气列名）
+FIRE_MEASURE_ROLES = (
+    "动火人",
+    "施工方现场负责人",
+    "监理员",
+    "项目公司监护人",
+    "动火现场负责人",
+)
 GAS_MEASURE_COUNT = 25
 GAS_MARK_FILLED = frozenset({"check", "cross", "slash"})  # 合法已填：对号/叉号/斜杠
 GAS_MARK_EMPTY = frozenset({"blank", "", "-"})
@@ -582,18 +591,21 @@ def parse_gas_measure_grid(ocr_text: str) -> Dict[int, List[str]]:
 
 def parse_fire_measure_grid(ocr_text: str) -> Dict[int, List[str]]:
     """
-    从 ocr5 动火块解析 21 项 × 1 列「确认」标记。
-    返回 {measure_id: [mark]}，mark ∈ check|cross|slash|blank
-    行格式：第1条: … | 确认(✓)
-    与带气 parse_gas_measure_grid 完全分离，禁止混用。
+    从 ocr5 动火块解析 21 项 × 5 列确认标记。
+    返回 {measure_id: [m1..m5]}，mark ∈ check|cross|slash|blank
+    行格式：第1条: … | 动火人(✓) | 施工方现场负责人(x) | 监理员(✓) | 项目公司监护人(\\) | 动火现场负责人(-)
+    与带气 parse_gas_measure_grid 分离（角色名不同）；兼容旧版单列「确认(✓)」。
     """
     result: Dict[int, List[str]] = {}
     if not ocr_text:
         return result
     block = _ocr5_result_block(ocr_text)
-    # 若块内声明了带气，仍允许按「确认」列解析（仅认动火角色名）
     row_pat = re.compile(r"第\s*(\d{1,2})\s*条\s*[:：]?\s*(.*)$", re.M)
-    cell_pat = re.compile(r"(确认)\s*[\(（]\s*([^\)）]*)\s*[\)）]")
+    # 五列角色 + 旧单列「确认」兼容
+    cell_pat = re.compile(
+        r"(动火人|施工方现场负责人|监理员|项目公司监护人|动火现场负责人|确认|监理)\s*"
+        r"[\(（]\s*([^\)）]*)\s*[\)）]"
+    )
     for m in row_pat.finditer(block):
         try:
             mid = int(m.group(1))
@@ -604,13 +616,22 @@ def parse_fire_measure_grid(ocr_text: str) -> Dict[int, List[str]]:
         rest = m.group(2)
         cells = cell_pat.findall(rest)
         if not cells:
-            # 兼容无角色名：| (✓) 或行末 (✓)
-            m2 = re.search(r"[\(（]\s*([✓√x×\\/\-—–]+)\s*[\)）]\s*$", rest)
-            if m2:
-                result[mid] = [_normalize_gas_cell_mark(m2.group(1))]
             continue
-        raw_mark = cells[0][1]
-        result[mid] = [_normalize_gas_cell_mark(raw_mark)]
+        by_role = {}
+        for role, raw_mark in cells:
+            # 旧单列「确认」→ 五列同记；「监理」别名 → 监理员
+            if role == "确认":
+                mk = _normalize_gas_cell_mark(raw_mark)
+                result[mid] = [mk] * 5
+                by_role = None
+                break
+            rname = "监理员" if role == "监理" else role
+            if rname not in by_role:
+                by_role[rname] = _normalize_gas_cell_mark(raw_mark)
+        if by_role is None:
+            continue
+        marks = [by_role.get(role, "blank") for role in FIRE_MEASURE_ROLES]
+        result[mid] = marks
     return result
 
 
@@ -752,7 +773,7 @@ class HandWrittenIssue(BaseModel):  # 定义表示 HSE 作业票中具体手写�
 
 
 class SafetyMeasureItem(BaseModel):  # 定义安全防范措施条款单条执行状态的模型类
-    """安全措施逐项落实状态（带气=五列网格；动火=单列勾选）"""
+    """安全措施逐项落实状态（带气=五列网格；动火=五列确认格，角色名不同）"""
     measure_id: int = Field(..., description="措施序号")  # 法定安全措施条款对应的数字序号
     description: str = Field(..., description="措施内容原文")  # 安全防范条款的具体文字内容描述说明
     implemented: bool = Field(..., description="True=已落实, False=未落实")  # 是否成功落实并在票上打勾落实的布尔标记
@@ -1398,31 +1419,30 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
             if blank_measure_ids:
                 safe_print(f"[Sanitize][带气] 五列空白漏项: {blank_measure_ids}")
         else:
-            # ---- 动火：ocr5 21×1「确认」格（√/×/\ /空白）；与带气 25×5 完全分离 ----
+            # ---- 动火：ocr5 21×5 确认格（√/×/\ /空白）；角色名与带气不同 ----
             fire_grid = parse_fire_measure_grid(ocr_text)
             safe_print(
-                f"[Sanitize][动火] ocr5 确认格解析: {len(fire_grid)}/{FIRE_MEASURE_COUNT} 行"
+                f"[Sanitize][动火] ocr5 五列确认格解析: {len(fire_grid)}/{FIRE_MEASURE_COUNT} 行"
             )
             for mid, desc in std_measures:
-                if mid in fire_grid and fire_grid[mid]:
-                    mark = fire_grid[mid][0]
-                    if mark not in ("check", "cross", "slash", "blank"):
-                        mark = _normalize_gas_cell_mark(mark)
+                if mid not in fire_grid:
+                    marks = ["blank"] * 5
+                    safe_print(
+                        f"[Sanitize][动火] 第{mid}项五列网格缺失，记为漏项（禁止默认落实）"
+                    )
                 else:
-                    # ocr5 未给出该行时，回退行内启发式（仍禁止默认落实）
-                    h_status = check_measure_status_in_ocr(ocr_text, desc, ticket_type)
-                    if h_status is True:
-                        mark = "check"
-                    elif h_status is False:
-                        mark = "cross"
-                    else:
-                        mark = "blank"
-                        safe_print(
-                            f"[Sanitize][动火] 第{mid}项确认格缺失，记为漏项（禁止默认落实）"
-                        )
-                has_blank = mark in GAS_MARK_EMPTY or mark == "blank"
-                has_cross = mark == "cross"
-                # slash=不适用视为已填；cross/blank 视为未完整落实
+                    marks = list(fire_grid[mid])
+                    if len(marks) < 5:
+                        marks = marks + ["blank"] * (5 - len(marks))
+                    # 兼容旧单列扩成五列后的数据
+                    marks = [
+                        mk if mk in ("check", "cross", "slash", "blank")
+                        else _normalize_gas_cell_mark(mk)
+                        for mk in marks[:5]
+                    ]
+                column_marks = marks[:5]
+                has_blank = any(mk in GAS_MARK_EMPTY or mk == "blank" for mk in column_marks)
+                has_cross = any(mk == "cross" for mk in column_marks)
                 impl = (not has_cross) and (not has_blank)
                 if has_blank:
                     blank_measure_ids.append(mid)
@@ -1430,13 +1450,13 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
                     "measure_id": mid,
                     "description": desc,
                     "implemented": impl,
-                    "column_marks": [mark],  # 动火单列，勿当带气五列
+                    "column_marks": column_marks,
                 })
                 if not impl:
                     has_abnormal = True
                     unimplemented_ids.append(mid)
             if blank_measure_ids:
-                safe_print(f"[Sanitize][动火] 空白漏项措施: {blank_measure_ids}")
+                safe_print(f"[Sanitize][动火] 五列空白漏项: {blank_measure_ids}")
 
         raw_dict["safety_measures"] = sanitized_measures
 
@@ -1571,6 +1591,7 @@ class LLMBrain:  # 定义大模型大脑处理类，负责远程 API 对话及�
                 f"采样={raw_dict.get('sampling_result') or '-'}"
             )
 
+        # 禁止：对 LLM/字段做 t:文本硬改、字符串替换兜底（AI 不得硬改/兜底）
         return raw_dict  # 返回整理后的新字典数据
 
     def _is_deepseek_backend(self) -> bool:
@@ -2033,7 +2054,7 @@ class AgentTools:
             )
             safe_print(f"[OCR 检测] 流水线票型【{pipeline_type}】文字/模板一致【{detected}】{coords_str}")
 
-        # ---- ocr5：带气 25×5 / 动火 21×1，票型参数分离，禁止混跑 ----
+        # ---- ocr5：带气 25×5 / 动火 21×5，票型参数分离，禁止混跑 ----
         if "aligned_" in os.path.basename(image_path) and pipeline_type in (
             TICKET_TYPE_GAS,
             TICKET_TYPE_FIRE,
@@ -2044,7 +2065,7 @@ class AgentTools:
                 )
             else:
                 safe_print(
-                    "[OpenCV][动火] 启用 ocr5.py 21×1 确认格识别（√/×/\\ /空白；与带气 25×5 分离）..."
+                    "[OpenCV][动火] 启用 ocr5.py 21×5 确认格识别（√/×/\\ /空白；与带气列名分离）..."
                 )
             cmd = [
                 sys.executable,
@@ -2977,24 +2998,33 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                     f"3) 表头作业等级须为一级或二级（一级危险最高）。请重新解析。"
                 )
             else:
-                # ========== 动火专用：21 条单列勾选 + 核心字段（与带气五列/ocr5 完全分离）==========
+                # ========== 动火专用：21×5 列勾选 + 核心字段 ==========
                 expected_count = FIRE_MEASURE_COUNT
                 std_list = STANDARD_MEASURES.get(TICKET_TYPE_FIRE, [])
                 std_ids = {mid for mid, _ in std_list} if std_list else set(range(1, expected_count + 1))
                 measures = data.safety_measures or []
                 present_ids = {m.measure_id for m in measures if m.measure_id is not None}
                 missing_ids = sorted(std_ids - present_ids)
+                role_count = len(FIRE_MEASURE_ROLES)
 
                 blank_items = []
+                incomplete_cols = []
                 for m in measures:
                     marks = list(getattr(m, "column_marks", None) or [])
+                    if len(marks) < role_count:
+                        marks = marks + ["blank"] * (role_count - len(marks))
+                    marks = marks[:role_count]
                     if not marks:
                         blank_items.append(m.measure_id)
                         continue
-                    mk = marks[0]
-                    mk_norm = mk if mk in ("check", "cross", "slash", "blank") else _normalize_gas_cell_mark(mk)
-                    # 动火：√ 或 × 算已填；blank 算漏项（slash 在动火单列也视作已标注）
-                    if mk_norm == "blank":
+                    any_blank = False
+                    for i, mk in enumerate(marks):
+                        mk_norm = mk if mk in ("check", "cross", "slash", "blank") else _normalize_gas_cell_mark(mk)
+                        if mk_norm == "blank":
+                            any_blank = True
+                            role_name = FIRE_MEASURE_ROLES[i] if i < role_count else f"列{i+1}"
+                            incomplete_cols.append(f"{m.measure_id}-{role_name}")
+                    if any_blank:
                         blank_items.append(m.measure_id)
 
                 measures_ok = (
@@ -3005,15 +3035,17 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
                 if measures_ok:
                     checks.append((
                         "安全措施", True,
-                        f"{expected_count}条单列全部勾选(√/×)、无漏项 OK",
+                        f"{expected_count}条×5列全部勾选(√/×/\\)、无漏项 OK",
                     ))
                 else:
                     detail_parts = []
                     if missing_ids:
                         detail_parts.append(f"缺项{missing_ids}")
-                    if blank_items:
-                        uniq = sorted(set(blank_items))
-                        detail_parts.append(f"空白未勾选{uniq[:10]}{'…' if len(uniq) > 10 else ''}")
+                    if incomplete_cols:
+                        uniq = incomplete_cols[:12]
+                        detail_parts.append(
+                            f"空白格{uniq}{'…' if len(incomplete_cols) > 12 else ''}"
+                        )
                     if len(present_ids) < expected_count:
                         detail_parts.append(f"仅{len(present_ids)}/{expected_count}项")
                     checks.append(("安全措施", False, "；".join(detail_parts) if detail_parts else "未填写完整"))
@@ -3163,22 +3195,27 @@ class SecurityAgent:  # 定义安全智能体核心编排类，实现完整的 R
             if not normalize_gas_work_grade(data.risk_level):
                 missing.append("作业等级未识别（表头一级/二级）")
         else:
-            # 动火：21 条单列；√/× 已填，blank 漏填
+            # 动火：21×5 列；blank 漏填（slash=不适用视为已填）
             expected_count = FIRE_MEASURE_COUNT
             std_list = STANDARD_MEASURES.get(TICKET_TYPE_FIRE, [])
             std_ids = {mid for mid, _ in std_list} if std_list else set(range(1, expected_count + 1))
             present_ids = {m.measure_id for m in measures if m.measure_id is not None}
+            role_count = len(FIRE_MEASURE_ROLES)
             for mid in sorted(std_ids - present_ids):
                 missing.append(f"动火安全措施第{mid}项缺失")
             for m in measures:
                 marks = list(getattr(m, "column_marks", None) or [])
+                if len(marks) < role_count:
+                    marks = marks + ["blank"] * (role_count - len(marks))
+                marks = marks[:role_count]
                 if not marks:
                     missing.append(f"动火安全措施第{m.measure_id}项未勾选")
                     continue
-                mk = marks[0]
-                mk_norm = mk if mk in ("check", "cross", "slash", "blank") else _normalize_gas_cell_mark(mk)
-                if mk_norm == "blank":
-                    missing.append(f"动火安全措施第{m.measure_id}项空白")
+                for i, mk in enumerate(marks):
+                    mk_norm = mk if mk in ("check", "cross", "slash", "blank") else _normalize_gas_cell_mark(mk)
+                    if mk_norm == "blank":
+                        role_name = FIRE_MEASURE_ROLES[i] if i < role_count else f"列{i+1}"
+                        missing.append(f"动火安全措施第{m.measure_id}项-{role_name}空白")
 
             field_specs = [
                 ("作业票编号", data.ticket_id, ["编号", "NO", "No"], 3),

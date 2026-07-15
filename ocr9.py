@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# 【规范】AI模型禁止使用硬改逻辑与兜底逻辑：不得用字符串替换/规则捏造/默认值填充掩盖识别失败；须以模型或算法真实输出为准，识别不到应为空或漏填，禁止编造。
 """
 ocr9.py — 带气作业票 / 通用 OCR 交互式标注与微调工作台
 
@@ -110,13 +111,13 @@ def ensure_workspace() -> None:
 
 
 def default_ws_config() -> Dict[str, Any]:
-    return {
+    """工作台默认配置；OCR 引擎项与 ocr.DEFAULT_OCR_PARAMS 保持一致。"""
+    from ocr import DEFAULT_OCR_PARAMS
+
+    # 生产 ocr.py 默认参数（单源）；device 与 admin 一致默认 gpu
+    cfg: Dict[str, Any] = {
         "device": "gpu",
-        "text_det_box_thresh": 0.2,
-        "text_det_thresh": 0.3,
-        "text_rec_score_thresh": 0.1,
-        "text_recognition_model_name": "PP-OCRv6_medium_rec",
-        "text_detection_model_name": "PP-OCRv6_medium_det",
+        **dict(DEFAULT_OCR_PARAMS),
         "custom_rec_model_dir": "",
         "custom_det_model_dir": "",
         "val_ratio": 0.1,
@@ -128,14 +129,14 @@ def default_ws_config() -> Dict[str, Any]:
         "hard_score_thresh": 0.75,
         "auto_memory_apply": True,
         "crop_pad_px": 2,
-        "use_textline_orientation": True,
     }
+    return cfg
 
 
 def load_ws_config() -> Dict[str, Any]:
     ensure_workspace()
     try:
-        cfg = json.loads(WS_CONFIG_PATH.read_text(encoding="utf-8"))
+        cfg = json.loads(read_text_loose(WS_CONFIG_PATH) or "{}")
     except Exception:
         cfg = {}
     base = default_ws_config()
@@ -174,9 +175,11 @@ def _seed_ocr9_widget_defaults(ug: int, d: Dict[str, Any] | None = None) -> None
     st.session_state[sk("device")] = d.get("device") or "gpu"
     st.session_state[sk("box_thresh")] = float(d.get("text_det_box_thresh", 0.2))
     st.session_state[sk("det_thresh")] = float(d.get("text_det_thresh", 0.3))
+    st.session_state[sk("unclip")] = float(d.get("text_det_unclip_ratio", 1.5))
     st.session_state[sk("rec_score")] = float(d.get("text_rec_score_thresh", 0.1))
     st.session_state[sk("hard_score")] = float(d.get("hard_score_thresh", 0.75))
     st.session_state[sk("auto_memory")] = bool(d.get("auto_memory_apply", True))
+    st.session_state[sk("doc_ori")] = bool(d.get("use_doc_orientation_classify", True))
     st.session_state[sk("textline_ori")] = bool(d.get("use_textline_orientation", True))
     st.session_state[sk("min_train")] = int(d.get("min_samples_for_train", 8))
     st.session_state[sk("epochs")] = int(d.get("default_epochs", 5))
@@ -203,10 +206,12 @@ def _on_reset_ocr9_defaults() -> None:
     except Exception:
         pass
     st.session_state["ocr9_reset_flash"] = (
-        "已恢复默认参数："
+        "已恢复默认参数（与 ocr.py DEFAULT_OCR_PARAMS 一致）："
         f"box_thresh={d['text_det_box_thresh']}, "
         f"det_thresh={d['text_det_thresh']}, "
-        f"rec_score={d['text_rec_score_thresh']}"
+        f"unclip={d.get('text_det_unclip_ratio', 1.5)}, "
+        f"rec_score={d['text_rec_score_thresh']}, "
+        f"doc_ori={d.get('use_doc_orientation_classify', True)}"
     )
 
 
@@ -218,7 +223,7 @@ def _on_reset_ocr9_defaults() -> None:
 class OcrBox:
     """单条检测结果。"""
     box_id: str
-    text: str
+    text: str  # 始终保留引擎原始 OCR，入库文本映射依赖此字段
     score: float
     # 四点或 xyxy
     xs: List[int]
@@ -227,7 +232,8 @@ class OcrBox:
     y: int = 0
     w: int = 0
     h: int = 0
-    corrected: str = ""
+    corrected: str = ""  # 纠错后展示/入库真值
+    text_raw: str = ""  # 原始 OCR 备份（与 text 同步，防被改写）
     in_dataset: bool = False
     sample_id: str = ""
 
@@ -237,6 +243,8 @@ class OcrBox:
             self.y = int(min(self.ys))
             self.w = max(1, int(max(self.xs) - self.x))
             self.h = max(1, int(max(self.ys) - self.y))
+        if not self.text_raw:
+            self.text_raw = self.text
         if not self.corrected:
             self.corrected = self.text
 
@@ -275,6 +283,26 @@ def safe_name(name: str) -> str:
 
 def phash_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()[:24]
+
+
+def read_text_loose(path: Path, max_chars: int | None = None) -> str:
+    """读文本：兼容 utf-8 / gbk，永不因编码抛错（训练日志/配置在 Windows 上常非 utf-8）。"""
+    try:
+        raw = Path(path).read_bytes()
+    except Exception:
+        return ""
+    text = None
+    for enc in ("utf-8", "utf-8-sig", "gbk", "cp936", "latin-1"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        text = raw.decode("utf-8", errors="replace")
+    if max_chars is not None and max_chars >= 0:
+        return text[:max_chars]
+    return text
 
 
 def crop_phash(img_bgr, x: int, y: int, w: int, h: int) -> str:
@@ -356,7 +384,7 @@ def load_all_labels() -> List[LabelRecord]:
     rows: List[LabelRecord] = []
     if not LABELS_PATH.exists():
         return rows
-    for line in LABELS_PATH.read_text(encoding="utf-8").splitlines():
+    for line in read_text_loose(LABELS_PATH).splitlines():
         line = line.strip()
         if not line:
             continue
@@ -428,7 +456,9 @@ def collect_charset(rows: Optional[List[LabelRecord]] = None) -> str:
 def load_memory() -> Dict[str, Any]:
     ensure_workspace()
     try:
-        return json.loads(MEMORY_PATH.read_text(encoding="utf-8"))
+        if not MEMORY_PATH.exists():
+            return {}
+        return json.loads(read_text_loose(MEMORY_PATH) or "{}")
     except Exception:
         return {}
 
@@ -466,11 +496,14 @@ def _ocr_cache_key(cfg: Dict[str, Any]) -> tuple:
         cfg.get("device"),
         float(cfg.get("text_det_box_thresh", 0.2)),
         float(cfg.get("text_det_thresh", 0.3)),
+        float(cfg.get("text_det_unclip_ratio", 1.5)),
         float(cfg.get("text_rec_score_thresh", 0.1)),
         cfg.get("text_recognition_model_name") or "",
         cfg.get("text_detection_model_name") or "",
         (cfg.get("custom_rec_model_dir") or "").strip(),
         (cfg.get("custom_det_model_dir") or "").strip(),
+        bool(cfg.get("use_doc_orientation_classify", True)),
+        bool(cfg.get("use_doc_unwarping", False)),
         bool(cfg.get("use_textline_orientation", True)),
     )
 
@@ -506,8 +539,10 @@ def _set_cached_engine(key: tuple, engine) -> None:
 
 
 def get_ocr_engine(cfg: Dict[str, Any], force_reload: bool = False):
-    """构建/缓存 PaddleOCR 实例，支持自定义 rec/det 目录。"""
+    """构建/缓存 PaddleOCR 实例；参数默认值与 ocr.DEFAULT_OCR_PARAMS 一致。"""
     import warnings
+
+    from ocr import DEFAULT_OCR_PARAMS, merge_ocr_params
 
     key = _ocr_cache_key(cfg)
     if force_reload:
@@ -526,33 +561,32 @@ def get_ocr_engine(cfg: Dict[str, Any], force_reload: bool = False):
 
     from paddleocr import PaddleOCR
 
-    # 显式 det/rec 模型时不要传 lang/ocr_version（否则 3.x 告警并忽略）
-    kwargs: Dict[str, Any] = {
-        "device": cfg.get("device") or "gpu",
-        "use_doc_orientation_classify": False,
-        "use_doc_unwarping": False,
-        "use_textline_orientation": bool(cfg.get("use_textline_orientation", True)),
-        "text_det_box_thresh": float(cfg.get("text_det_box_thresh", 0.2)),
-        "text_det_thresh": float(cfg.get("text_det_thresh", 0.3)),
-        "text_rec_score_thresh": float(cfg.get("text_rec_score_thresh", 0.1)),
-    }
+    # 与生产 ocr.py 同一套 merge：先 DEFAULT_OCR_PARAMS，再工作台覆盖
+    overrides: Dict[str, Any] = {}
+    for k in DEFAULT_OCR_PARAMS:
+        if k in cfg and cfg[k] is not None:
+            overrides[k] = cfg[k]
     det_name = (cfg.get("text_detection_model_name") or "").strip()
     rec_name = (cfg.get("text_recognition_model_name") or "").strip()
     det_dir = (cfg.get("custom_det_model_dir") or "").strip()
     rec_dir = (cfg.get("custom_rec_model_dir") or "").strip()
     if det_name:
-        kwargs["text_detection_model_name"] = det_name
+        overrides["text_detection_model_name"] = det_name
     if rec_name:
-        kwargs["text_recognition_model_name"] = rec_name
+        overrides["text_recognition_model_name"] = rec_name
     if det_dir:
-        kwargs["text_detection_model_dir"] = det_dir
+        overrides["text_detection_model_dir"] = det_dir
     if rec_dir:
-        kwargs["text_recognition_model_dir"] = rec_dir
+        overrides["text_recognition_model_dir"] = rec_dir
 
+    params = merge_ocr_params(overrides)
+    # 显式 det/rec 时不传 lang/ocr_version（与 ocr._normalize_paddle_kwargs 一致）
     has_explicit_det_rec = bool(det_name or rec_name or det_dir or rec_dir)
+    kwargs: Dict[str, Any] = dict(params)
+    kwargs["device"] = cfg.get("device") or "gpu"
     if not has_explicit_det_rec:
-        kwargs["lang"] = "ch"
-        kwargs["ocr_version"] = "PP-OCRv6"
+        kwargs.setdefault("lang", "ch")
+        kwargs.setdefault("ocr_version", "PP-OCRv6")
 
     # 压制 Paddle/PaddleX 无害噪声（ccache、lang 忽略等）；模型仍正常加载
     with warnings.catch_warnings():
@@ -610,13 +644,13 @@ def run_ocr_on_image(img_bgr, cfg: Dict[str, Any], apply_memory: bool = True) ->
                     except Exception:
                         pass
                 bid = short_id()
-                ob = OcrBox(box_id=bid, text=str(text or ""), score=score, xs=xs, ys=ys)
+                raw = str(text or "")
+                ob = OcrBox(box_id=bid, text=raw, score=score, xs=xs, ys=ys, text_raw=raw)
                 if apply_memory and cfg.get("auto_memory_apply", True):
                     h = crop_phash(img_bgr, ob.x, ob.y, ob.w, ob.h)
                     mt = memory_get(h)
                     if mt:
-                        ob.corrected = mt
-                        ob.text = mt  # 预览用已纠正
+                        ob.corrected = mt  # 仅哈希命中；禁止 t: 文本硬改
                 boxes.append(ob)
             continue
 
@@ -628,16 +662,16 @@ def run_ocr_on_image(img_bgr, cfg: Dict[str, Any], apply_memory: bool = True) ->
                     arr = np.array(box).reshape(-1, 2)
                     xs = [int(v) for v in arr[:, 0]]
                     ys = [int(v) for v in arr[:, 1]]
+                    raw = str(text or "")
                     ob = OcrBox(
-                        box_id=short_id(), text=str(text), score=float(score),
-                        xs=xs, ys=ys,
+                        box_id=short_id(), text=raw, score=float(score),
+                        xs=xs, ys=ys, text_raw=raw,
                     )
                     if apply_memory and cfg.get("auto_memory_apply", True):
                         h = crop_phash(img_bgr, ob.x, ob.y, ob.w, ob.h)
                         mt = memory_get(h)
                         if mt:
                             ob.corrected = mt
-                            ob.text = mt
                     boxes.append(ob)
                 except Exception:
                     continue
@@ -681,9 +715,19 @@ def save_sample_from_box(
     rel = f"crops/{split}/{fname}"
     save_bgr(WS / rel, crop)
 
-    # 纠错记忆：立刻影响后续同区域预览
+    # 纠错记忆：仅图像哈希→真值（禁止 t: 文本硬改 / 字符串替换）
+    truth = (text or "").strip()
     h = crop_phash(img_bgr, box.x, box.y, box.w, box.h)
-    memory_put(h, text, {"sample_id": sid, "source": source_image})
+    memory_put(h, truth, {"sample_id": sid, "source": source_image, "kind": "phash"})
+    try:
+        h2 = crop_phash(crop, 0, 0, crop.shape[1], crop.shape[0])
+        if h2 and h2 != h:
+            memory_put(
+                h2, truth,
+                {"sample_id": sid, "source": source_image, "kind": "crop_phash"},
+            )
+    except Exception:
+        pass
 
     rec = LabelRecord(
         sample_id=sid,
@@ -766,10 +810,10 @@ def try_run_paddlex_or_script_train(
     rebuild_rec_lists()
     run_dir = write_train_job_snapshot(cfg, epochs, note="finetune")
     train_txt = DIR_REC / "train.txt"
-    if not train_txt.exists() or not train_txt.read_text(encoding="utf-8").strip():
+    if not train_txt.exists() or not read_text_loose(train_txt).strip():
         return False, "训练集为空：请先逐项校对并「加入训练集」。", None
 
-    n_train = sum(1 for _ in train_txt.read_text(encoding="utf-8").splitlines() if _.strip())
+    n_train = sum(1 for _ in read_text_loose(train_txt).splitlines() if _.strip())
     min_n = int(cfg.get("min_samples_for_train", 8))
     if n_train < min_n:
         return (
@@ -1021,8 +1065,14 @@ def render_app() -> None:
         cfg["text_det_thresh"] = st.slider(
             "检测 thresh", 0.05, 0.9,
             float(cfg.get("text_det_thresh", _defaults["text_det_thresh"])), 0.05,
-            help=f"默认 {_defaults['text_det_thresh']}",
+            help=f"默认 {_defaults['text_det_thresh']}（与 ocr.py 一致）",
             key=_k("det_thresh"),
+        )
+        cfg["text_det_unclip_ratio"] = st.slider(
+            "框扩张 unclip", 0.5, 3.0,
+            float(cfg.get("text_det_unclip_ratio", _defaults.get("text_det_unclip_ratio", 1.5))), 0.1,
+            help=f"默认 {_defaults.get('text_det_unclip_ratio', 1.5)}（ocr.py text_det_unclip_ratio）",
+            key=_k("unclip"),
         )
         cfg["text_rec_score_thresh"] = st.slider(
             "识别 score_thresh", 0.0, 0.9,
@@ -1040,6 +1090,12 @@ def render_app() -> None:
             "预览应用纠错记忆（即时学会）",
             value=bool(cfg.get("auto_memory_apply", True)),
             key=_k("auto_memory"),
+        )
+        cfg["use_doc_orientation_classify"] = st.checkbox(
+            "文档整页方向分类（ocr.py 默认开）",
+            value=bool(cfg.get("use_doc_orientation_classify", _defaults.get("use_doc_orientation_classify", True))),
+            key=_k("doc_ori"),
+            help="与 ocr.DEFAULT_OCR_PARAMS.use_doc_orientation_classify 一致；关可少加载一个模型",
         )
         cfg["use_textline_orientation"] = st.checkbox(
             "文本行方向模型（关闭可少加载一个模型、稍快）",
@@ -1272,17 +1328,21 @@ def render_app() -> None:
                             try:
                                 img = load_bgr(path_now)
                                 split = None if split_force == "auto" else split_force
+                                # 确保 text_raw 仍是原始 OCR（session 重建时可能丢失）
+                                if not (getattr(b, "text_raw", None) or "").strip():
+                                    b.text_raw = (b.text or "").strip()
                                 rec = save_sample_from_box(
                                     img, b, new_txt, path_now, cfg, split=split, tags=["interactive"],
                                 )
-                                # 同步 session 显示
+                                # 同步 session：只改 corrected，保留 text/text_raw 为引擎原文
                                 for bd in st.session_state["ocr9_boxes"]:
                                     if bd["box_id"] == b.box_id:
+                                        if not bd.get("text_raw"):
+                                            bd["text_raw"] = bd.get("text") or ""
                                         bd["corrected"] = new_txt
-                                        bd["text"] = new_txt
                                         bd["in_dataset"] = True
                                         bd["sample_id"] = rec.sample_id
-                                st.success(f"已入库 {rec.sample_id} → {rec.split}")
+                                st.success(f"已入库 {rec.sample_id} → {rec.split}（图像哈希记忆，无文本硬改）")
                             except Exception as e:
                                 st.error(str(e))
                         if st.button("⚡ 入库并微调", key=f"ft_{b.box_id}"):
@@ -1370,12 +1430,27 @@ def render_app() -> None:
                 st.success("已删除")
                 st.rerun()
 
-        st.markdown("#### 纠错记忆（即时学会，无需 GPU）")
+        st.markdown("#### 纠错记忆（仅图像哈希，禁止文本硬改）")
+        st.caption(
+            "入库写入 crop 图像哈希→真值；admin 仅在哈希命中时替换。"
+            "禁止 t:错字→对字 字符串硬改 / 默认值兜底。"
+        )
         mem = load_memory()
-        st.json({k: v.get("text") if isinstance(v, dict) else v for k, v in list(mem.items())[:50]})
+        # 过滤展示：不展示历史 t: 硬改键
+        show = {
+            k: (v.get("text") if isinstance(v, dict) else v)
+            for k, v in list(mem.items())[:80]
+            if not str(k).startswith("t:")
+        }
+        st.json(show)
         if st.button("清空纠错记忆"):
             save_memory({})
             st.warning("已清空")
+        if st.button("清除历史文本硬改键 t:*"):
+            mem2 = {k: v for k, v in load_memory().items() if not str(k).startswith("t:")}
+            save_memory(mem2)
+            st.success("已清除 t:* 硬改项")
+            st.rerun()
 
     # ==================== Tab3 训练 ====================
     with tab_train:
@@ -1393,15 +1468,25 @@ def render_app() -> None:
                 st.code(str(mdir))
 
         st.markdown("#### 历史 runs/")
-        runs = sorted(DIR_RUNS.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)[:20]
+        try:
+            runs = sorted(DIR_RUNS.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)[:20]
+        except Exception:
+            runs = []
         for rd in runs:
-            job = rd / "job.json"
-            with st.expander(rd.name):
-                if job.exists():
-                    st.json(json.loads(job.read_text(encoding="utf-8")))
-                logp = rd / "train_log.txt"
-                if logp.exists():
-                    st.text(logp.read_text(encoding="utf-8")[:3000])
+            try:
+                job = rd / "job.json"
+                with st.expander(rd.name):
+                    if job.exists():
+                        try:
+                            st.json(json.loads(read_text_loose(job) or "{}"))
+                        except Exception as e:
+                            st.warning(f"job.json 无法解析: {e}")
+                            st.text(read_text_loose(job, 2000))
+                    logp = rd / "train_log.txt"
+                    if logp.exists():
+                        st.text(read_text_loose(logp, 3000))
+            except Exception as e:
+                st.caption(f"{rd.name}: 读取失败 ({e})")
 
         st.markdown("#### 测试集评测（当前引擎）")
         if st.button("评测 test split"):

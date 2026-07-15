@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# 【规范】AI模型禁止使用硬改逻辑与兜底逻辑：不得用字符串替换/规则捏造/默认值填充掩盖识别失败；须以模型或算法真实输出为准，识别不到应为空或漏填，禁止编造。
 """
 中燃"安全数字监督员" OCR 处理器模块 (ocr.py)
 面向场景：支持全图扫描/指定坐标区域裁剪扫描，保存裁剪子图及 Markdown 文本结果，
@@ -18,10 +19,198 @@ CLI 可配置 PP-OCRv6 流水线中的四个核心模型参数：
 """
 
 import os
+import json
+import hashlib
 import cv2
 import argparse
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
+
+
+# ---------------------------------------------------------------------------
+# ocr9 纠错记忆（入库后自动给 admin / user 用，无需额外导出）
+# ---------------------------------------------------------------------------
+
+def _ocr9_memory_paths() -> List[str]:
+    root = os.path.dirname(os.path.abspath(__file__))
+    return [
+        os.path.join(root, "ocr_train_workspace", "memory", "corrections.json"),
+        os.path.join(root, "ocr9_corrections.json"),  # 兼容若存在根目录副本
+    ]
+
+
+def imread_unicode(path: str):
+    """支持中文路径的 imread（cv2.imread 在 Windows 中文路径下常失败）。"""
+    data = np.fromfile(path, dtype=np.uint8)
+    if data.size == 0:
+        return None
+    return cv2.imdecode(data, cv2.IMREAD_COLOR)
+
+
+def _crop_region_phash(img_bgr, x: int, y: int, w: int, h: int) -> str:
+    """与 ocr9.crop_phash 一致。"""
+    if img_bgr is None or w <= 0 or h <= 0:
+        return ""
+    H, W = img_bgr.shape[:2]
+    x1, y1 = max(0, int(x)), max(0, int(y))
+    x2, y2 = min(W, int(x + w)), min(H, int(y + h))
+    if x2 <= x1 or y2 <= y1:
+        return ""
+    crop = img_bgr[y1:y2, x1:x2]
+    if crop.size == 0:
+        return ""
+    small = cv2.resize(crop, (32, 16), interpolation=cv2.INTER_AREA)
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY) if len(small.shape) == 3 else small
+    return hashlib.md5(gray.tobytes()).hexdigest()
+
+
+def ocr9_memory_status() -> Tuple[int, str]:
+    """返回 (哈希条数, 路径)；无文件则 (0, 首选路径)。"""
+    info = ocr9_memory_status_detail()
+    return int(info.get("n_hash") or 0), str(info.get("path") or _ocr9_memory_paths()[0])
+
+
+def ocr9_memory_status_detail() -> Dict[str, Any]:
+    """
+    纠错记忆状态（每次读盘，不缓存）。
+    n_hash: 图像哈希键数量（同一区域重复入库会覆盖，条数不增）
+    n_sample: 记忆里出现过的 distinct sample_id（仅供展示）
+    """
+    empty_path = _ocr9_memory_paths()[0]
+    for path in _ocr9_memory_paths():
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict) and isinstance(raw.get("items"), dict):
+                raw = raw["items"]
+            if not isinstance(raw, dict):
+                continue
+            n_hash = 0
+            sample_ids: set = set()
+            latest = ""
+            for k, v in raw.items():
+                if not k or str(k).startswith("_") or str(k).startswith("t:"):
+                    continue
+                if isinstance(v, dict):
+                    t = (v.get("text") or "").strip()
+                    if not t:
+                        continue
+                    n_hash += 1
+                    sid = (v.get("sample_id") or "").strip()
+                    if sid:
+                        sample_ids.add(sid)
+                    ua = (v.get("updated_at") or "").strip()
+                    if ua > latest:
+                        latest = ua
+                elif str(v or "").strip():
+                    n_hash += 1
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                mtime = 0.0
+            return {
+                "n_hash": n_hash,
+                "n_sample": len(sample_ids),
+                "path": path,
+                "mtime": mtime,
+                "latest_updated_at": latest,
+            }
+        except Exception:
+            continue
+    return {
+        "n_hash": 0,
+        "n_sample": 0,
+        "path": empty_path,
+        "mtime": 0.0,
+        "latest_updated_at": "",
+    }
+
+
+def load_ocr9_corrections() -> Dict[str, str]:
+    """
+    仅图像哈希 -> 真值（禁止 t: 文本硬改 / 字符串替换）。
+    规范：AI 不得用错字硬改、默认值兜底掩盖识别失败。
+    """
+    if os.environ.get("OCR9_MEMORY_DISABLE", "").strip().lower() in ("1", "true", "yes"):
+        return {}
+    if os.environ.get("OCR9_MEMORY_OFF", "").strip() in ("1", "true", "yes"):
+        return {}
+    for path in _ocr9_memory_paths():
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except Exception:
+            continue
+        if isinstance(raw, dict) and isinstance(raw.get("items"), dict):
+            raw = raw["items"]
+        if not isinstance(raw, dict):
+            continue
+        out: Dict[str, str] = {}
+        for k, v in raw.items():
+            if not k or str(k).startswith("_") or str(k).startswith("t:"):
+                # 跳过文本硬改键 t:错字
+                continue
+            t = (v.get("text") if isinstance(v, dict) else str(v or "")).strip()
+            if t:
+                out[str(k)] = t
+        if out:
+            return out
+    return {}
+
+
+def apply_ocr9_corrections(
+    img_bgr,
+    entries: List[Dict[str, Any]],
+    x_offset: int = 0,
+    y_offset: int = 0,
+) -> Tuple[List[Dict[str, Any]], int]:
+    """
+    仅按裁剪区域图像哈希替换（与 ocr9.crop_phash / 入库一致）。
+
+    ocr9 用检测框轴对齐 AABB：x=min(xs), y=min(ys), w/h=max-min。
+    历史 entries 仅有中心 y 时，用 y_center - h/2 还原左上角。
+    入库还可能写入 crop_pad_px=2 的裁剪图哈希，故同时尝试 pad 变体。
+    禁止：t:文本硬改、子串替换、默认值兜底。
+    """
+    mem = load_ocr9_corrections()
+    if not mem or not entries or img_bgr is None:
+        return entries, 0
+    hit = 0
+    for e in entries:
+        try:
+            w = max(1, int(round(float(e.get("w") or 0))))
+            h = max(1, int(round(float(e.get("h") or 0))))
+            if e.get("y_tl") is not None:
+                x1 = int(round(float(e.get("x_tl", e.get("x") or 0)) + x_offset))
+                y1 = int(round(float(e.get("y_tl") or 0) + y_offset))
+            else:
+                # 兼容旧格式：x 为左、y 为竖直中心
+                x1 = int(round(float(e.get("x") or 0) + x_offset))
+                y_c = float(e.get("y") or 0) + y_offset
+                y1 = int(round(y_c - h / 2.0))
+
+            # 与 ocr9 入库一致：无 pad 框哈希 + pad=2 裁剪哈希（及邻近 pad）
+            keys: List[str] = []
+            for pad in (0, 2, 1, 3):
+                key = _crop_region_phash(
+                    img_bgr, x1 - pad, y1 - pad, w + 2 * pad, h + 2 * pad
+                )
+                if key and key not in keys:
+                    keys.append(key)
+            for key in keys:
+                if key in mem:
+                    e["text"] = mem[key]
+                    hit += 1
+                    break
+        except Exception:
+            continue
+    if hit:
+        print(f"[OCR] ocr9 图像哈希纠错命中 {hit}/{len(entries)} 条（无文本硬改）")
+    return entries, hit
 
 
 # ---------------------------------------------------------------------------
@@ -30,7 +219,9 @@ import numpy as np
 
 def crop_image(image_path: str, x: int, y: int, w: int, h: int, save_crop_path: Optional[str] = None):
     """裁剪图片区域，可选择性保存子图。"""
-    img = cv2.imread(image_path)
+    img = imread_unicode(image_path)
+    if img is None:
+        img = cv2.imread(image_path)
     if img is None:
         raise FileNotFoundError(f"无法读取图片: {image_path}")
     img_h, img_w = img.shape[:2]
@@ -314,7 +505,9 @@ def run_ocr(
         x_offset, y_offset = x, y
     else:
         print(f"[OCR] 默认扫描全图 OCR: {image_path} (使用设备: {device})")
-        img_for_ocr = cv2.imread(image_path)
+        img_for_ocr = imread_unicode(image_path)
+        if img_for_ocr is None:
+            img_for_ocr = cv2.imread(image_path)
         if img_for_ocr is None:
             raise FileNotFoundError(f"无法读取图片: {image_path}")
         x_offset, y_offset = 0, 0
@@ -331,7 +524,8 @@ def run_ocr(
     if result and hasattr(result[0], "json") and result[0].json is not None:
         res = result[0].json.get("res", {}) or {}
         texts = res.get("rec_texts", []) or []
-        polys = res.get("rec_polys", []) or []
+        # 与 ocr9 一致：优先 dt_polys（检测框），再 rec_polys
+        polys = res.get("dt_polys") or res.get("rec_polys") or []
         if texts:
             for i, text in enumerate(texts):
                 box = polys[i] if i < len(polys) else []
@@ -343,15 +537,31 @@ def run_ocr(
                         for pt in box[:3]
                     )
                 ):
-                    y_center = (box[0][1] + box[2][1]) / 2
-                    x_left = box[0][0]
-                    height = abs(box[2][1] - box[0][1])
-                    width = abs(box[1][0] - box[0][0]) if len(box) >= 2 else 0
+                    # 轴对齐 AABB，与 ocr9.OcrBox / crop_phash 入库一致
+                    arr = np.asarray(box, dtype=float).reshape(-1, 2)
+                    x_min = float(arr[:, 0].min())
+                    y_min = float(arr[:, 1].min())
+                    x_max = float(arr[:, 0].max())
+                    y_max = float(arr[:, 1].max())
+                    width = max(1.0, x_max - x_min)
+                    height = max(1.0, y_max - y_min)
+                    y_center = (y_min + y_max) / 2.0
                 else:
-                    y_center, x_left, height, width = 0, 0, 20, 0
+                    x_min, y_min = 0.0, 0.0
+                    width, height = 0.0, 20.0
+                    y_center = 0.0
                 entries.append({
-                    "text": text, "y": y_center, "x": x_left, "h": height, "w": width,
+                    "text": text,
+                    "y": y_center,  # 行聚类仍用竖直中心
+                    "x": x_min,
+                    "h": height,
+                    "w": width,
+                    "x_tl": x_min,
+                    "y_tl": y_min,
                 })
+
+    # ocr9 入库纠错：直接读 ocr_train_workspace/memory/corrections.json（入库即生效）
+    entries, _ = apply_ocr9_corrections(img_for_ocr, entries, 0, 0)
 
     print(f"[OCR] OCR 识别完成，共 {len(entries)} 个文本块")
     if not entries:

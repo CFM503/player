@@ -1,5 +1,15 @@
 # 更新日志 (CHANGELOG)
 
+## [3.15.12] - 2026-07-16
+
+### 修复
+- **ocr9 纠错记忆 admin 不生效**：`ocr.py` 应用哈希时曾用 `box[0]` + 中心 y 裁剪，与 ocr9 入库的轴对齐 AABB（min/max）差 1px 即 MD5 全不命中；改为同一套框坐标，并尝试 crop pad 哈希变体。
+- **admin 记忆条数显示**：侧栏每次读盘展示哈希数 / mtime；说明「条数=不同哈希，同一框重复入库不增加」。
+
+### 改进
+- **ocr9 默认参数与 ocr.py 一致**：`default_ws_config` / 引擎走 `DEFAULT_OCR_PARAMS` + `merge_ocr_params`（含 `use_doc_orientation_classify=True`、`text_det_unclip_ratio=1.5` 等）；侧栏补 unclip / 文档方向。
+- **禁止文本硬改兜底**：纠错记忆仅图像哈希→真值；去掉 `t:` 字符串硬映射；根目录脚本增加 AI 规范头注释。
+
 ## [3.15.11] - 2026-07-15
 
 ### 改进
