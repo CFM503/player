@@ -898,12 +898,16 @@ def render_app() -> None:
     import numpy as np
 
     ensure_workspace()
-    st.set_page_config(
-        page_title="OCR9 训练工作台",
-        page_icon="🔤",
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
+    # 作为主应用多页嵌入时，frontend 已 set_page_config，此处不可再调
+    try:
+        st.set_page_config(
+            page_title="OCR文字训练（ocr.py）",
+            page_icon="🔤",
+            layout="wide",
+            initial_sidebar_state="expanded",
+        )
+    except Exception:
+        pass
 
     st.markdown(
         """
@@ -915,10 +919,10 @@ def render_app() -> None:
         unsafe_allow_html=True,
     )
 
-    st.title("🔤 OCR9 · 交互式标注与微调工作台")
+    st.title("🔤 OCR 文字训练 · ocr.py")
     st.caption(
-        "即时预览 PaddleOCR → 逐项改真值入库 → 纠错记忆立刻生效 → 批量/本条触发 rec 微调任务 · "
-        f"工作区 `{WS.name}/`"
+        "对应生产 **ocr.py** 文字识别 · 即时预览 → 逐项改真值入库 → 纠错记忆 → rec 微调 · "
+        f"工作区 `{WS.name}/`（本页即原 ocr9 工作台）"
     )
 
     cfg = load_ws_config()

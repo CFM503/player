@@ -48,11 +48,24 @@ admin_page = st.Page(
     icon="⚙️",
     url_path="admin",
 )
+# ocr9 → 服务生产 ocr.py 文字识别；ocr10 → 服务生产 ocr5 勾选格
+train_ocr_page = st.Page(
+    "train_ocr_ui.py",
+    title="OCR文字训练",
+    icon="🔤",
+    url_path="train-ocr",
+)
+train_ocr5_page = st.Page(
+    "train_ocr5_ui.py",
+    title="OCR5勾选训练",
+    icon="☑️",
+    url_path="train-ocr5",
+)
 
 pg = st.navigation(
     {
-        "用户": [user_page],
-        "管理": [admin_page],
+        "业务": [user_page, admin_page],
+        "模型训练": [train_ocr_page, train_ocr5_page],
     },
     position="sidebar",
 )

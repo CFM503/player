@@ -787,11 +787,15 @@ def render_app() -> None:
     import cv2
 
     ensure_workspace()
-    st.set_page_config(page_title="OCR10 勾选格训练", page_icon="☑️", layout="wide")
-    st.title("☑️ OCR10 · 勾选格 √ / × / \\ 训练工作台")
+    # 作为主应用多页嵌入时，frontend 已 set_page_config，此处不可再调
+    try:
+        st.set_page_config(page_title="OCR5 勾选训练", page_icon="☑️", layout="wide")
+    except Exception:
+        pass
+    st.title("☑️ OCR5 勾选训练 · ocr5.py")
     st.caption(
-        "专训 ocr5 的 25×5 确认格四分类 · 即时预览 · 逐格入库 · 规则搜索/特征分类 · 导出给 ocr5 加载 · "
-        f"工作区 `{WS.name}/`"
+        "对应生产 **ocr5.py** 的 25×5 确认格 √/×/\\ /空白 · 即时预览 · 逐格入库 · 规则/特征训练 · 导出给 ocr5 · "
+        f"工作区 `{WS.name}/`（本页即原 ocr10 工作台）"
     )
 
     cfg = load_ws_config()

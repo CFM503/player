@@ -125,7 +125,49 @@ async function main() {
     });
   }
 
-  // ───────── 2. Value prop headline + constellation ─────────
+  // ───────── 2. 人工审核痛点（原第 3 页）─────────
+  {
+    const s = pres.addSlide();
+    s.background = { color: C.bg };
+    s.addText("人工审核痛点。", {
+      x: 0.7, y: 0.55, w: 8.5, h: 0.45,
+      fontSize: 28, fontFace: "Arial", bold: true,
+      color: C.ink, margin: 0,
+    });
+
+    const pains = [
+      { t: "10 分钟", d: "单票人工传递" },
+      { t: "易漏检", d: "25 项措施 × 5 列确认" },
+      { t: "人工审核", d: "审批凭人工经验，\n自动化审核更规范" },
+      { t: "数据沉睡", d: "纸质归档，无法统计问题" },
+    ];
+    pains.forEach((p, i) => {
+      const x = 0.7 + i * 2.3;
+      s.addShape(pres.shapes.RECTANGLE, {
+        x, y: 1.5, w: 2.05, h: 2.4,
+        fill: { color: C.white },
+        shadow: makeShadow("soft"),
+        line: { color: C.white, width: 0 },
+      });
+      s.addShape(pres.shapes.RECTANGLE, {
+        x: x + 0.18, y: 1.75, w: 0.12, h: 0.12,
+        fill: { color: i === 0 ? C.blue : C.faint },
+        line: { color: i === 0 ? C.blue : C.faint, width: 0 },
+      });
+      s.addText(p.t, {
+        x: x + 0.18, y: 2.15, w: 1.7, h: 0.5,
+        fontSize: 20, fontFace: "Arial", bold: true,
+        color: C.ink, margin: 0,
+      });
+      s.addText(p.d, {
+        x: x + 0.18, y: 2.75, w: 1.7, h: 0.8,
+        fontSize: 13, fontFace: "Arial",
+        color: C.muted, margin: 0,
+      });
+    });
+  }
+
+  // ───────── 3. Value prop headline + constellation（原第 2 页）─────────
   {
     const s = pres.addSlide();
     s.background = { color: C.bg };
@@ -166,52 +208,10 @@ async function main() {
       fontSize: 28, fontFace: "Arial", bold: true,
       color: C.ink, align: "center", margin: 0,
     });
-    s.addText("15 秒完成识别 · 校验 · 审批建议", {
+    s.addText("60 秒完成识别 · 校验 · 审批建议", {
       x: 0.8, y: 2.85, w: 8.4, h: 0.4,
       fontSize: 22, fontFace: "Arial",
       color: C.ink2, align: "center", margin: 0,
-    });
-  }
-
-  // ───────── 3. Pain → Solution sparse ─────────
-  {
-    const s = pres.addSlide();
-    s.background = { color: C.bg };
-    s.addText("一线痛点。", {
-      x: 0.7, y: 0.55, w: 8.5, h: 0.45,
-      fontSize: 28, fontFace: "Arial", bold: true,
-      color: C.ink, margin: 0,
-    });
-
-    const pains = [
-      { t: "10 分钟", d: "单票人工传递" },
-      { t: "易漏检", d: "25 项措施 × 5 列确认" },
-      { t: "人工审核", d: "审批凭人工经验，\n自动化审核更规范" },
-      { t: "数据沉睡", d: "纸质归档，无法统计问题" },
-    ];
-    pains.forEach((p, i) => {
-      const x = 0.7 + i * 2.3;
-      s.addShape(pres.shapes.RECTANGLE, {
-        x, y: 1.5, w: 2.05, h: 2.4,
-        fill: { color: C.white },
-        shadow: makeShadow("soft"),
-        line: { color: C.white, width: 0 },
-      });
-      s.addShape(pres.shapes.RECTANGLE, {
-        x: x + 0.18, y: 1.75, w: 0.12, h: 0.12,
-        fill: { color: i === 0 ? C.blue : C.faint },
-        line: { color: i === 0 ? C.blue : C.faint, width: 0 },
-      });
-      s.addText(p.t, {
-        x: x + 0.18, y: 2.15, w: 1.7, h: 0.5,
-        fontSize: 20, fontFace: "Arial", bold: true,
-        color: C.ink, margin: 0,
-      });
-      s.addText(p.d, {
-        x: x + 0.18, y: 2.75, w: 1.7, h: 0.8,
-        fontSize: 13, fontFace: "Arial",
-        color: C.muted, margin: 0,
-      });
     });
   }
 
@@ -219,7 +219,7 @@ async function main() {
   {
     const s = pres.addSlide();
     s.background = { color: C.bg };
-    s.addText("一句话，跑通全流程。", {
+    s.addText("自动化跑通全流程。", {
       x: 0.7, y: 1.35, w: 8.6, h: 0.45,
       fontSize: 26, fontFace: "Arial", bold: true,
       color: C.ink, align: "center", margin: 0,
@@ -363,9 +363,9 @@ async function main() {
       fontSize: 32, fontFace: "Arial", bold: true,
       color: C.ink, margin: 0,
     });
-    s.addText("从人工传递、人工审核，到 15 秒闭环。", {
-      x: 0.7, y: 2.0, w: 4.5, h: 0.5,
-      fontSize: 15, fontFace: "Arial", color: C.muted, margin: 0,
+    s.addText("从原人工传递、人工审核，现在自动化线上 60s 完成闭环。", {
+      x: 0.7, y: 2.0, w: 4.5, h: 0.7,
+      fontSize: 14, fontFace: "Arial", color: C.muted, margin: 0,
     });
 
     // descending blue square dots (Grok chart motif) — representing time cost collapsing
@@ -399,8 +399,8 @@ async function main() {
       x: 5.0, y: 1.85, w: 0.9, h: 0.25,
       fontSize: 10, fontFace: "Arial", color: C.blueDeep, margin: 0,
     });
-    s.addText("15 s", {
-      x: 8.7, y: 4.2, w: 0.7, h: 0.25,
+    s.addText("60s", {
+      x: 8.55, y: 4.2, w: 0.9, h: 0.25,
       fontSize: 10, fontFace: "Arial", color: C.muted, margin: 0,
     });
   }
