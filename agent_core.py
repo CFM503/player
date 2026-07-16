@@ -2554,7 +2554,10 @@ class AgentTools:
 
     @staticmethod
     def _select_dingtalk_bases(caches: list, risk_level: str) -> list:
-        """按名称选择写入目标：二级/其它 → 仅 test_demo_base；一级 → test_demo_base + test_demo_base2。"""
+        """按名称选择写入目标。
+        当前：一律只写 test_demo_base。
+        （原逻辑：二级/其它 → 仅 base；一级 → base + test_demo_base2，已临时注释。）
+        """
         base1 = None
         base2 = None
         for c in caches or []:
@@ -2582,21 +2585,26 @@ class AgentTools:
             targets.append(caches[0])
             safe_print("[Tool]   未精确匹配 test_demo_base，使用缓存首个 base")
         grade = (risk_level or "").strip()
-        if grade == "一级":
-            if base2:
-                targets.append(base2)
-                safe_print("[Tool]   作业等级=一级 → 双写 test_demo_base + test_demo_base2")
-            else:
-                safe_print("[Tool]   作业等级=一级，但未发现 test_demo_base2，仅写 base1")
-        else:
-            safe_print(f"[Tool]   作业等级={grade or '空'} → 仅写 test_demo_base")
+        # --- 临时关闭：一级双写 test_demo_base2 ---
+        # if grade == "一级":
+        #     if base2:
+        #         targets.append(base2)
+        #         safe_print("[Tool]   作业等级=一级 → 双写 test_demo_base + test_demo_base2")
+        #     else:
+        #         safe_print("[Tool]   作业等级=一级，但未发现 test_demo_base2，仅写 base1")
+        # else:
+        #     safe_print(f"[Tool]   作业等级={grade or '空'} → 仅写 test_demo_base")
+        safe_print(
+            f"[Tool]   作业等级={grade or '空'} → 仅写 test_demo_base"
+            f"（test_demo_base2 双写已注释关闭）"
+        )
         return targets
 
     @staticmethod
     def write_dingtalk_table(ticket_id: str, image_path: str, description: str, person_name: str, risk_level: str = "") -> bool:
         """写入钉钉 AI 表格。
         ticket_id → 编号, image_path → 图片附件, description → 问题描述, person_name → 责任人, risk_level → 等级
-        二级：仅 test_demo_base；一级：test_demo_base + test_demo_base2。
+        当前仅写 test_demo_base（test_demo_base2 双写已临时注释）。
         """
         cfg = load_config()
         mcp_url = cfg.get("dingtalk_mcp_url", "")

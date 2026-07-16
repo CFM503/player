@@ -306,18 +306,17 @@ def read_text_loose(path: Path, max_chars: int | None = None) -> str:
 
 
 def crop_phash(img_bgr, x: int, y: int, w: int, h: int) -> str:
-    import cv2
-    import numpy as np
+    """精确 MD5 键（与 ocr._crop_region_phash 一致）。"""
+    from ocr import _crop_region_phash
 
-    H, W = img_bgr.shape[:2]
-    x1, y1 = max(0, x), max(0, y)
-    x2, y2 = min(W, x + w), min(H, y + h)
-    crop = img_bgr[y1:y2, x1:x2]
-    if crop.size == 0:
-        return ""
-    small = cv2.resize(crop, (32, 16), interpolation=cv2.INTER_AREA)
-    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY) if len(small.shape) == 3 else small
-    return hashlib.md5(gray.tobytes()).hexdigest()
+    return _crop_region_phash(img_bgr, int(x), int(y), int(w), int(h))
+
+
+def crop_ahash_hex(img_bgr, x: int, y: int, w: int, h: int) -> str:
+    """64-bit 平均哈希十六进制，供模糊增补。"""
+    from ocr import _crop_region_ahash_bits, ahash_bits_to_hex
+
+    return ahash_bits_to_hex(_crop_region_ahash_bits(img_bgr, int(x), int(y), int(w), int(h)))
 
 
 def load_bgr(path: str):
@@ -481,6 +480,21 @@ def memory_get(h: str) -> Optional[str]:
         return None
     item = load_memory().get(h)
     return item.get("text") if isinstance(item, dict) else None
+
+
+def memory_lookup_box(img_bgr, x: int, y: int, w: int, h: int) -> Tuple[Optional[str], str]:
+    """
+    预览用：精确 MD5 + 模糊增补（与生产 ocr.lookup_ocr9_correction 同一套）。
+    返回 (真值, exact|fuzzy|"")；无证据不改写。
+    """
+    try:
+        from ocr import lookup_ocr9_correction
+
+        return lookup_ocr9_correction(img_bgr, int(x), int(y), int(w), int(h))
+    except Exception:
+        h = crop_phash(img_bgr, x, y, w, h)
+        t = memory_get(h)
+        return (t, "exact") if t else (None, "")
 
 
 # ---------------------------------------------------------------------------
@@ -647,10 +661,9 @@ def run_ocr_on_image(img_bgr, cfg: Dict[str, Any], apply_memory: bool = True) ->
                 raw = str(text or "")
                 ob = OcrBox(box_id=bid, text=raw, score=score, xs=xs, ys=ys, text_raw=raw)
                 if apply_memory and cfg.get("auto_memory_apply", True):
-                    h = crop_phash(img_bgr, ob.x, ob.y, ob.w, ob.h)
-                    mt = memory_get(h)
+                    mt, _mode = memory_lookup_box(img_bgr, ob.x, ob.y, ob.w, ob.h)
                     if mt:
-                        ob.corrected = mt  # 仅哈希命中；禁止 t: 文本硬改
+                        ob.corrected = mt  # 精确/模糊增补；禁止 t: 文本硬改
                 boxes.append(ob)
             continue
 
@@ -668,8 +681,7 @@ def run_ocr_on_image(img_bgr, cfg: Dict[str, Any], apply_memory: bool = True) ->
                         xs=xs, ys=ys, text_raw=raw,
                     )
                     if apply_memory and cfg.get("auto_memory_apply", True):
-                        h = crop_phash(img_bgr, ob.x, ob.y, ob.w, ob.h)
-                        mt = memory_get(h)
+                        mt, _mode = memory_lookup_box(img_bgr, ob.x, ob.y, ob.w, ob.h)
                         if mt:
                             ob.corrected = mt
                     boxes.append(ob)
@@ -715,16 +727,29 @@ def save_sample_from_box(
     rel = f"crops/{split}/{fname}"
     save_bgr(WS / rel, crop)
 
-    # 纠错记忆：仅图像哈希→真值（禁止 t: 文本硬改 / 字符串替换）
+    # 纠错记忆增补：精确 MD5 键 + box/ahash 供模糊层（禁止 t: 文本硬改 / 默认值兜底）
     truth = (text or "").strip()
+    box_xywh = [int(box.x), int(box.y), int(box.w), int(box.h)]
+    ah = crop_ahash_hex(img_bgr, box.x, box.y, box.w, box.h)
+    meta_base = {
+        "sample_id": sid,
+        "source": source_image,
+        "box": box_xywh,
+        "ahash": ah,
+        "crop_relpath": rel,
+    }
     h = crop_phash(img_bgr, box.x, box.y, box.w, box.h)
-    memory_put(h, truth, {"sample_id": sid, "source": source_image, "kind": "phash"})
+    memory_put(h, truth, {**meta_base, "kind": "phash"})
     try:
         h2 = crop_phash(crop, 0, 0, crop.shape[1], crop.shape[0])
         if h2 and h2 != h:
             memory_put(
                 h2, truth,
-                {"sample_id": sid, "source": source_image, "kind": "crop_phash"},
+                {
+                    **meta_base,
+                    "kind": "crop_phash",
+                    "ahash": crop_ahash_hex(crop, 0, 0, crop.shape[1], crop.shape[0]) or ah,
+                },
             )
     except Exception:
         pass

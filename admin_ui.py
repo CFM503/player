@@ -204,26 +204,40 @@ with st.sidebar:  # 进入侧边栏渲染上下文本环境
         _ocr9_mtime = "-"
     # 条数放在 caption，避免 checkbox 固定 key 时标题看起来「不刷新」
     _use_ocr9_mem = st.checkbox(
-        "使用 ocr9 纠错记忆",
+        "使用 ocr9 纠错记忆（增补）",
         value=bool(_ocr9_n),
         disabled=not bool(_ocr9_n),
         key="_use_ocr9_memory",
-        help="在「OCR文字训练」改真值并入库后，按裁剪图图像哈希命中时替换。"
-             "同一框重复入库只更新真值、哈希条数不增加。"
-             "禁止 t:文本硬改 / 字符串替换兜底。",
+        help="ocr9 入库真值：精确 MD5 命中，或 IoU+感知哈希模糊增补。"
+             "是增补不是兜底：无图像证据则保留模型输出。"
+             "禁止 t:文本硬改 / 默认值填充。",
+    )
+    _use_ocr9_fuzzy = st.checkbox(
+        "手写模糊增补（IoU + aHash）",
+        value=True,
+        disabled=not bool(_ocr9_n) or not _use_ocr9_mem,
+        key="_use_ocr9_fuzzy",
+        help="同人异次书写时框/笔迹差一点仍可增补（非兜底）。"
+             "须 IoU≥0.72 且外观综合分够低（aHash+L1 互补）；关则仅精确 MD5。"
+             "环境变量 OCR9_FUZZY_IOU / OCR9_FUZZY_APP / OCR9_FUZZY_HAMMING_MAX 可调。",
     )
     if _ocr9_n:
         if _use_ocr9_mem:
             os.environ.pop("OCR9_MEMORY_OFF", None)
+            if _use_ocr9_fuzzy:
+                os.environ["OCR9_MEMORY_FUZZY"] = "1"
+            else:
+                os.environ["OCR9_MEMORY_FUZZY"] = "0"
             st.caption(
-                f"已启用 · **{_ocr9_n}** 个哈希"
+                f"已启用增补 · **{_ocr9_n}** 个哈希"
                 + (f"（约 {_ocr9_ns} 次入库样本）" if _ocr9_ns else "")
-                + f" · 文件 `{os.path.basename(_ocr9_mem_path)}` mtime {_ocr9_mtime}"
+                + f" · 模糊{'开' if _use_ocr9_fuzzy else '关'}"
+                + f" · `{os.path.basename(_ocr9_mem_path)}` mtime {_ocr9_mtime}"
                 + (f" · 最新 {_ocr9_latest}" if _ocr9_latest else "")
             )
             st.caption(
-                "说明：数字=不同图像哈希数，不是入库点击次数；"
-                "同一检测框重复入库会覆盖，条数不变。切页/刷新后更新。"
+                "精确 MD5 → 模糊(位置∧外观)；无证据不改写。"
+                "新入库请带 box/ahash（ocr9 已自动写入）。"
             )
         else:
             os.environ["OCR9_MEMORY_OFF"] = "1"
@@ -811,6 +825,9 @@ with tab2:
                         out.append({
                             "kind": "带气", "table": DB_TABLE_GAS, "id": r["id"],
                             "ticket_id": r["ticket_id"], "unit": r["station_name"],
+                            # 带气无独立地点列，列表「地点」用作业单位（场站/部位）
+                            "location": r["station_name"] or "",
+                            "approver_name": r["approver_name"] or "",
                             "content": r["content"], "work_time": r["work_time"],
                             "worker": r["worker_id"], "check_date": r["check_date"],
                             "has_abnormal": r["has_abnormal"],
@@ -844,7 +861,7 @@ with tab2:
                 try:
                     for r in conn.execute(
                         f"SELECT id,ticket_id,fire_unit,fire_location,content,work_time,"
-                        f"fire_method,worker_id,sampling_result,risk_level,"
+                        f"fire_method,worker_id,sampling_result,risk_level,approver_name,"
                         f"fire_personnel,construction_leader,supervisor,company_monitor,"
                         f"fire_leader_project,fire_leader,check_date,"
                         f"has_abnormal,approval_opinion,approval_status,approval_level,"
@@ -854,6 +871,8 @@ with tab2:
                             "kind": "动火", "table": DB_TABLE_HOT, "id": r["id"],
                             "ticket_id": r["ticket_id"],
                             "unit": r["fire_unit"] or r["fire_location"] or "-",
+                            "location": r["fire_location"] or "",
+                            "approver_name": r["approver_name"] or "",
                             "content": r["content"], "work_time": r["work_time"],
                             "worker": r["worker_id"], "check_date": r["check_date"],
                             "has_abnormal": r["has_abnormal"],
@@ -873,6 +892,7 @@ with tab2:
                                 "项目公司监护人员": r["company_monitor"],
                                 "动火现场负责人(项目公司)": r["fire_leader_project"],
                                 "动火现场负责人": r["fire_leader"],
+                                "发起人签字确认": r["approver_name"],
                             },
                         })
                 except Exception:
@@ -945,7 +965,9 @@ with tab2:
             sf1, sf2 = st.columns([5, 1])
             with sf1:
                 search = st.text_input(
-                    "搜索", placeholder="票号关键字…", label_visibility="collapsed",
+                    "搜索",
+                    placeholder="票号 / 地点 / 发起人…",
+                    label_visibility="collapsed",
                 )
             with sf2:
                 st.form_submit_button("搜索", use_container_width=True)
@@ -956,6 +978,8 @@ with tab2:
             table = row["table"]
             ticket = row.get("ticket_id") or "-"
             station = row.get("unit") or "-"
+            location = row.get("location") or ""
+            approver = row.get("approver_name") or ""
             content = row.get("content") or ""
             work_time = row.get("work_time") or ""
             worker = row.get("worker") or ""
@@ -967,12 +991,31 @@ with tab2:
             created = row.get("created_at") or ""
             img_path = row.get("image_path")
 
-            if search and search.lower() not in (ticket or "").lower():
-                continue
+            # 搜索：票号、地点、单位、发起人签字确认
+            if search:
+                q = search.strip().lower()
+                hay = " ".join(
+                    str(x or "") for x in (ticket, location, station, worker, approver)
+                ).lower()
+                if q not in hay:
+                    continue
 
             icon = "🚨" if abnormal else "✅"
+            # 等级只走着色徽章，避免「特级」明文 + badge 各出现一次
             badge_md = render_record_badge(grade, abnormal)
-            title = f"{icon} [{kind}] {ticket} · {station} · {grade} · {ap_status}{badge_md}"
+            grade_part = badge_md if badge_md else (f" · {grade}" if grade and grade != "-" else "")
+            # 列表：地点 + 发起人签字确认
+            loc_show = (location or "").replace("\n", " ").strip()
+            if len(loc_show) > 28:
+                loc_show = loc_show[:28] + "…"
+            loc_part = f" · 地点:{loc_show}" if loc_show else " · 地点:—"
+            ap_show = (approver or "").replace("\n", " ").strip()
+            if len(ap_show) > 16:
+                ap_show = ap_show[:16] + "…"
+            ap_part = f" · 发起人:{ap_show}" if ap_show else " · 发起人:—"
+            title = (
+                f"{icon} [{kind}] {ticket}{loc_part}{ap_part}{grade_part} · {ap_status}"
+            )
 
             cm, cd = st.columns([9, 1])
             with cm:
@@ -1001,6 +1044,7 @@ with tab2:
                             f"| 项目公司监护人员 | {ex.get('项目公司监护人员') or '-'} |\n"
                             f"| 动火现场负责人(项目公司) | {ex.get('动火现场负责人(项目公司)') or '-'} |\n"
                             f"| 动火现场负责人 | {ex.get('动火现场负责人') or '-'} |\n"
+                            f"| 发起人签字确认 | {ex.get('发起人签字确认') or approver or '-'} |\n"
                             f"| 状态 | {'发现漏填' if abnormal else '正常'} |\n"
                             f"| 审批 | {ap_status} |\n"
                         )

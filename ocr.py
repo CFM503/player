@@ -47,21 +47,128 @@ def imread_unicode(path: str):
     return cv2.imdecode(data, cv2.IMREAD_COLOR)
 
 
-def _crop_region_phash(img_bgr, x: int, y: int, w: int, h: int) -> str:
-    """与 ocr9.crop_phash 一致。"""
+def _clip_crop_bgr(img_bgr, x: int, y: int, w: int, h: int):
+    """裁剪 BGR 子图；无效则 None。"""
     if img_bgr is None or w <= 0 or h <= 0:
-        return ""
+        return None
     H, W = img_bgr.shape[:2]
     x1, y1 = max(0, int(x)), max(0, int(y))
     x2, y2 = min(W, int(x + w)), min(H, int(y + h))
     if x2 <= x1 or y2 <= y1:
-        return ""
+        return None
     crop = img_bgr[y1:y2, x1:x2]
-    if crop.size == 0:
+    return crop if crop is not None and crop.size > 0 else None
+
+
+def _crop_region_phash(img_bgr, x: int, y: int, w: int, h: int) -> str:
+    """与 ocr9.crop_phash 一致：精确 MD5 键（层0）。"""
+    crop = _clip_crop_bgr(img_bgr, x, y, w, h)
+    if crop is None:
         return ""
     small = cv2.resize(crop, (32, 16), interpolation=cv2.INTER_AREA)
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY) if len(small.shape) == 3 else small
     return hashlib.md5(gray.tobytes()).hexdigest()
+
+
+def _crop_region_ahash_bits(img_bgr, x: int, y: int, w: int, h: int) -> Optional[int]:
+    """
+    64-bit 平均哈希（感知哈希简化版）：用于手写「差一点」增补匹配。
+    返回 None 表示裁剪无效。
+    """
+    crop = _clip_crop_bgr(img_bgr, x, y, w, h)
+    if crop is None:
+        return None
+    small = cv2.resize(crop, (8, 8), interpolation=cv2.INTER_AREA)
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY) if len(small.shape) == 3 else small
+    avg = float(np.mean(gray))
+    bits = 0
+    for i, p in enumerate(gray.reshape(-1)):
+        if float(p) >= avg:
+            bits |= 1 << i
+    return int(bits)
+
+
+def ahash_bits_to_hex(bits: Optional[int]) -> str:
+    if bits is None:
+        return ""
+    return f"{int(bits) & ((1 << 64) - 1):016x}"
+
+
+def ahash_hex_to_bits(h: str) -> int:
+    try:
+        return int(str(h).strip(), 16) & ((1 << 64) - 1)
+    except Exception:
+        return 0
+
+
+def hamming64(a: int, b: int) -> int:
+    return int(bin((int(a) ^ int(b)) & ((1 << 64) - 1)).count("1"))
+
+
+def box_iou(ax: float, ay: float, aw: float, ah: float,
+            bx: float, by: float, bw: float, bh: float) -> float:
+    """轴对齐框 IoU。"""
+    if aw <= 0 or ah <= 0 or bw <= 0 or bh <= 0:
+        return 0.0
+    ax2, ay2 = ax + aw, ay + ah
+    bx2, by2 = bx + bw, by + bh
+    ix1, iy1 = max(ax, bx), max(ay, by)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    union = aw * ah + bw * bh - inter
+    return float(inter / union) if union > 0 else 0.0
+
+
+def _crop_l1_distance(crop_a, crop_b) -> float:
+    """两裁剪图归一化 L1 ∈ [0,1]；无效返回 1.0。"""
+    if crop_a is None or crop_b is None:
+        return 1.0
+    try:
+        ga = cv2.cvtColor(crop_a, cv2.COLOR_BGR2GRAY) if len(crop_a.shape) == 3 else crop_a
+        gb = cv2.cvtColor(crop_b, cv2.COLOR_BGR2GRAY) if len(crop_b.shape) == 3 else crop_b
+        ga = cv2.resize(ga, (32, 16), interpolation=cv2.INTER_AREA)
+        gb = cv2.resize(gb, (32, 16), interpolation=cv2.INTER_AREA)
+        d = np.mean(np.abs(ga.astype(np.float32) - gb.astype(np.float32))) / 255.0
+        return float(min(1.0, max(0.0, d)))
+    except Exception:
+        return 1.0
+
+
+# 模糊增补默认阈值（严：宁可不增补，禁止兜底乱改）
+# IoU 门控 + 外观综合分 app = 0.45*(ham/64) + 0.55*L1  （手写平移时 aHash 易跳、L1 更稳）
+# 环境变量：OCR9_FUZZY_IOU / OCR9_FUZZY_APP / OCR9_FUZZY_HAMMING_MAX（硬上限）
+_OCR9_FUZZY_IOU_DEFAULT = 0.72
+_OCR9_FUZZY_APP_DEFAULT = 0.16  # 综合外观上限；越小越严
+_OCR9_FUZZY_HAMMING_MAX_DEFAULT = 20  # aHash 硬上限，防止仅 L1 误配
+
+
+def _ocr9_fuzzy_enabled() -> bool:
+    """模糊增补开关；默认开。OCR9_MEMORY_FUZZY=0/off 关闭。"""
+    v = os.environ.get("OCR9_MEMORY_FUZZY", "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
+def _ocr9_fuzzy_thresholds() -> Tuple[float, float, int]:
+    try:
+        iou = float(os.environ.get("OCR9_FUZZY_IOU", _OCR9_FUZZY_IOU_DEFAULT))
+    except Exception:
+        iou = _OCR9_FUZZY_IOU_DEFAULT
+    try:
+        app = float(os.environ.get("OCR9_FUZZY_APP", _OCR9_FUZZY_APP_DEFAULT))
+    except Exception:
+        app = _OCR9_FUZZY_APP_DEFAULT
+    try:
+        ham_max = int(os.environ.get("OCR9_FUZZY_HAMMING_MAX", _OCR9_FUZZY_HAMMING_MAX_DEFAULT))
+    except Exception:
+        ham_max = _OCR9_FUZZY_HAMMING_MAX_DEFAULT
+    return (
+        max(0.5, min(0.99, iou)),
+        max(0.05, min(0.4, app)),
+        max(4, min(32, ham_max)),
+    )
 
 
 def ocr9_memory_status() -> Tuple[int, str]:
@@ -128,15 +235,30 @@ def ocr9_memory_status_detail() -> Dict[str, Any]:
     }
 
 
+def _ocr9_memory_disabled() -> bool:
+    if os.environ.get("OCR9_MEMORY_DISABLE", "").strip().lower() in ("1", "true", "yes"):
+        return True
+    if os.environ.get("OCR9_MEMORY_OFF", "").strip() in ("1", "true", "yes"):
+        return True
+    return False
+
+
 def load_ocr9_corrections() -> Dict[str, str]:
     """
-    仅图像哈希 -> 真值（禁止 t: 文本硬改 / 字符串替换）。
-    规范：AI 不得用错字硬改、默认值兜底掩盖识别失败。
+    精确层：图像 MD5 哈希 -> 真值。
+    禁止 t: 文本硬改 / 字符串替换 / 默认值兜底。
     """
-    if os.environ.get("OCR9_MEMORY_DISABLE", "").strip().lower() in ("1", "true", "yes"):
-        return {}
-    if os.environ.get("OCR9_MEMORY_OFF", "").strip() in ("1", "true", "yes"):
-        return {}
+    recs = load_ocr9_correction_records()
+    return {r["key"]: r["text"] for r in recs if r.get("key") and r.get("text")}
+
+
+def load_ocr9_correction_records() -> List[Dict[str, Any]]:
+    """
+    完整记忆条目（精确键 + 模糊增补元数据）。
+    每条可含：key, text, box, ahash, sample_id, kind, crop_relpath, source
+    """
+    if _ocr9_memory_disabled():
+        return []
     for path in _ocr9_memory_paths():
         if not os.path.isfile(path):
             continue
@@ -149,17 +271,225 @@ def load_ocr9_corrections() -> Dict[str, str]:
             raw = raw["items"]
         if not isinstance(raw, dict):
             continue
-        out: Dict[str, str] = {}
+        # labels.jsonl 补全旧记忆缺失的 box / crop_relpath（增补元数据，不改真值）
+        label_by_sid: Dict[str, Dict[str, Any]] = {}
+        labels_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "ocr_train_workspace", "labels.jsonl",
+        )
+        if os.path.isfile(labels_path):
+            try:
+                with open(labels_path, "r", encoding="utf-8") as lf:
+                    for ln in lf:
+                        ln = ln.strip()
+                        if not ln:
+                            continue
+                        try:
+                            lo = json.loads(ln)
+                        except Exception:
+                            continue
+                        sid = (lo.get("sample_id") or "").strip()
+                        if sid:
+                            label_by_sid[sid] = lo
+            except Exception:
+                pass
+
+        out: List[Dict[str, Any]] = []
         for k, v in raw.items():
             if not k or str(k).startswith("_") or str(k).startswith("t:"):
-                # 跳过文本硬改键 t:错字
                 continue
-            t = (v.get("text") if isinstance(v, dict) else str(v or "")).strip()
-            if t:
-                out[str(k)] = t
+            if isinstance(v, dict):
+                t = (v.get("text") or "").strip()
+                if not t:
+                    continue
+                box = v.get("box")
+                box_t: Optional[Tuple[float, float, float, float]] = None
+                if isinstance(box, (list, tuple)) and len(box) >= 4:
+                    try:
+                        box_t = (
+                            float(box[0]), float(box[1]),
+                            float(box[2]), float(box[3]),
+                        )
+                    except Exception:
+                        box_t = None
+                sid = (v.get("sample_id") or "").strip()
+                rel = (v.get("crop_relpath") or "").strip()
+                ahash = (v.get("ahash") or "").strip()
+                lab = label_by_sid.get(sid) if sid else None
+                if lab:
+                    if box_t is None:
+                        b = lab.get("box")
+                        if isinstance(b, (list, tuple)) and len(b) >= 4:
+                            try:
+                                box_t = (
+                                    float(b[0]), float(b[1]),
+                                    float(b[2]), float(b[3]),
+                                )
+                            except Exception:
+                                pass
+                    if not rel:
+                        rel = (lab.get("crop_relpath") or "").strip()
+                a_bits = ahash_hex_to_bits(ahash) if ahash else 0
+                # 旧条目无 ahash 时从入库裁剪图补算（一次，供模糊增补）
+                if not a_bits and rel:
+                    crop_path = rel if os.path.isabs(rel) else os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)),
+                        "ocr_train_workspace",
+                        rel.replace("/", os.sep),
+                    )
+                    if os.path.isfile(crop_path):
+                        mc = imread_unicode(crop_path)
+                        if mc is not None:
+                            b = _crop_region_ahash_bits(mc, 0, 0, mc.shape[1], mc.shape[0])
+                            if b is not None:
+                                a_bits = int(b)
+                                if not ahash:
+                                    ahash = ahash_bits_to_hex(a_bits)
+                out.append({
+                    "key": str(k),
+                    "text": t,
+                    "box": box_t,
+                    "ahash": ahash,
+                    "ahash_bits": a_bits,
+                    "sample_id": sid,
+                    "kind": (v.get("kind") or "").strip(),
+                    "crop_relpath": rel,
+                    "source": (v.get("source") or "").strip(),
+                })
+            else:
+                t = str(v or "").strip()
+                if t:
+                    out.append({
+                        "key": str(k), "text": t, "box": None, "ahash": "",
+                        "ahash_bits": 0, "sample_id": "", "kind": "",
+                        "crop_relpath": "", "source": "",
+                    })
         if out:
             return out
-    return {}
+    return []
+
+
+def _entry_box_tl(
+    e: Dict[str, Any], x_offset: int = 0, y_offset: int = 0
+) -> Tuple[int, int, int, int]:
+    """从 OCR entry 取左上角 AABB (x,y,w,h)。"""
+    w = max(1, int(round(float(e.get("w") or 0))))
+    h = max(1, int(round(float(e.get("h") or 0))))
+    if e.get("y_tl") is not None:
+        x1 = int(round(float(e.get("x_tl", e.get("x") or 0)) + x_offset))
+        y1 = int(round(float(e.get("y_tl") or 0) + y_offset))
+    else:
+        x1 = int(round(float(e.get("x") or 0) + x_offset))
+        y_c = float(e.get("y") or 0) + y_offset
+        y1 = int(round(y_c - h / 2.0))
+    return x1, y1, w, h
+
+
+def lookup_ocr9_correction(
+    img_bgr,
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+    records: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[Optional[str], str]:
+    """
+    单框查询纠错真值（ocr9 增补，非兜底）。
+
+    返回 (真值或 None, 模式)：
+      - exact：MD5 精确命中
+      - fuzzy：IoU 门控 + aHash/L1 外观增补
+      - ""：不增补，保留模型输出
+
+    规范：无证据不改写；禁止文本相似硬改、默认值填充。
+    """
+    if img_bgr is None or w <= 0 or h <= 0:
+        return None, ""
+    if _ocr9_memory_disabled():
+        return None, ""
+    recs = records if records is not None else load_ocr9_correction_records()
+    if not recs:
+        return None, ""
+
+    mem_exact = {r["key"]: r["text"] for r in recs}
+    # —— 层0：精确 MD5（含 pad 变体，与入库一致）——
+    for pad in (0, 2, 1, 3):
+        key = _crop_region_phash(img_bgr, x - pad, y - pad, w + 2 * pad, h + 2 * pad)
+        if key and key in mem_exact:
+            return mem_exact[key], "exact"
+
+    # —— 层1+2：模糊增补（位置近 ∧ 外观近）；默认开，可关 ——
+    if not _ocr9_fuzzy_enabled():
+        return None, ""
+
+    tau_iou, tau_app, ham_max = _ocr9_fuzzy_thresholds()
+    q_bits = _crop_region_ahash_bits(img_bgr, x, y, w, h)
+    q_crop = _clip_crop_bgr(img_bgr, x, y, w, h)
+    if q_crop is None:
+        return None, ""
+
+    best: Optional[Tuple[float, float, float, str]] = None
+    # best = (score, iou, app, text)
+    root = os.path.dirname(os.path.abspath(__file__))
+    ws_mem = os.path.join(root, "ocr_train_workspace")
+
+    for r in recs:
+        text = r.get("text") or ""
+        if not text:
+            continue
+        box = r.get("box")
+        # 无框元数据：无法做位置门控 → 不参与模糊（避免全页乱配，非兜底）
+        if not box:
+            continue
+        mx, my, mw, mh = box
+        iou = box_iou(float(x), float(y), float(w), float(h), mx, my, mw, mh)
+        if iou < tau_iou:
+            continue
+
+        a_bits = int(r.get("ahash_bits") or 0)
+        if not a_bits:
+            mb = _crop_region_ahash_bits(img_bgr, int(mx), int(my), int(mw), int(mh))
+            a_bits = int(mb) if mb is not None else 0
+
+        ham = hamming64(int(q_bits), a_bits) if (q_bits is not None and a_bits) else 64
+        if a_bits and ham > ham_max:
+            continue
+
+        l1 = 1.0
+        has_l1 = False
+        rel = (r.get("crop_relpath") or "").strip()
+        if rel:
+            crop_path = rel if os.path.isabs(rel) else os.path.join(
+                ws_mem, rel.replace("/", os.sep)
+            )
+            if os.path.isfile(crop_path):
+                m_crop = imread_unicode(crop_path)
+                l1 = _crop_l1_distance(q_crop, m_crop)
+                has_l1 = True
+
+        # 外观综合：平移时 aHash 易升高，L1 更稳 → 互补（有 L1 时偏重 L1）
+        ham_n = (ham / 64.0) if a_bits else 0.25
+        if has_l1 and a_bits:
+            app = 0.45 * ham_n + 0.55 * float(l1)
+        elif has_l1:
+            app = float(l1)
+        elif a_bits:
+            app = ham_n
+        else:
+            continue  # 无任何外观证据 → 不增补
+
+        if app > tau_app:
+            continue
+
+        # 综合分：位置证据为主，外观惩罚为辅
+        score = float(iou) - 0.5 * float(app)
+        cand = (score, float(iou), float(app), text)
+        if best is None or cand[0] > best[0]:
+            best = cand
+
+    if best is None:
+        return None, ""
+    return best[3], "fuzzy"
 
 
 def apply_ocr9_corrections(
@@ -169,47 +499,38 @@ def apply_ocr9_corrections(
     y_offset: int = 0,
 ) -> Tuple[List[Dict[str, Any]], int]:
     """
-    仅按裁剪区域图像哈希替换（与 ocr9.crop_phash / 入库一致）。
+    ocr9 纠错记忆增补（非兜底）。
 
-    ocr9 用检测框轴对齐 AABB：x=min(xs), y=min(ys), w/h=max-min。
-    历史 entries 仅有中心 y 时，用 y_center - h/2 还原左上角。
-    入库还可能写入 crop_pad_px=2 的裁剪图哈希，故同时尝试 pad 变体。
-    禁止：t:文本硬改、子串替换、默认值兜底。
+    层0 精确 MD5 → 层1 IoU 门控 + 层2 aHash/L1 模糊增补。
+    无足够图像证据则保留模型输出；禁止 t:文本硬改、默认值填充。
+
+    ocr9 入库 AABB：x=min(xs), y=min(ys)；历史 entry 的 y 可能是中心。
     """
-    mem = load_ocr9_corrections()
-    if not mem or not entries or img_bgr is None:
+    recs = load_ocr9_correction_records()
+    if not recs or not entries or img_bgr is None:
         return entries, 0
     hit = 0
+    n_exact = 0
+    n_fuzzy = 0
     for e in entries:
         try:
-            w = max(1, int(round(float(e.get("w") or 0))))
-            h = max(1, int(round(float(e.get("h") or 0))))
-            if e.get("y_tl") is not None:
-                x1 = int(round(float(e.get("x_tl", e.get("x") or 0)) + x_offset))
-                y1 = int(round(float(e.get("y_tl") or 0) + y_offset))
-            else:
-                # 兼容旧格式：x 为左、y 为竖直中心
-                x1 = int(round(float(e.get("x") or 0) + x_offset))
-                y_c = float(e.get("y") or 0) + y_offset
-                y1 = int(round(y_c - h / 2.0))
-
-            # 与 ocr9 入库一致：无 pad 框哈希 + pad=2 裁剪哈希（及邻近 pad）
-            keys: List[str] = []
-            for pad in (0, 2, 1, 3):
-                key = _crop_region_phash(
-                    img_bgr, x1 - pad, y1 - pad, w + 2 * pad, h + 2 * pad
-                )
-                if key and key not in keys:
-                    keys.append(key)
-            for key in keys:
-                if key in mem:
-                    e["text"] = mem[key]
-                    hit += 1
-                    break
+            x1, y1, w, h = _entry_box_tl(e, x_offset, y_offset)
+            text, mode = lookup_ocr9_correction(img_bgr, x1, y1, w, h, records=recs)
+            if text and mode:
+                e["text"] = text
+                e["ocr9_mem"] = mode
+                hit += 1
+                if mode == "exact":
+                    n_exact += 1
+                else:
+                    n_fuzzy += 1
         except Exception:
             continue
     if hit:
-        print(f"[OCR] ocr9 图像哈希纠错命中 {hit}/{len(entries)} 条（无文本硬改）")
+        print(
+            f"[OCR] ocr9 纠错增补命中 {hit}/{len(entries)} "
+            f"(精确 {n_exact} + 模糊 {n_fuzzy}；非兜底/无文本硬改)"
+        )
     return entries, hit
 
 
